@@ -126,6 +126,9 @@ async function selectJob(name) {
     emptyState.classList.add('hidden');
     jobEditor.classList.remove('hidden');
 
+    // Load available GPUs
+    await loadGPUs();
+    
     // Load job data
     const data = await api(`/api/jobs/${name}`);
     populateConfig(data.config);
@@ -143,9 +146,6 @@ async function selectJob(name) {
 
     // Reset console
     consoleOutput.textContent = 'Waiting for training to start...';
-
-    // Load available GPUs
-    await loadGPUs();
 
     // Reset save button
     $('btn-save').classList.add('hidden');
@@ -1888,8 +1888,6 @@ async function loadGPUs() {
             container.appendChild(card);
         });
 
-        // Start status polling
-        setInterval(updateGPUActivity, 3000);
         updateGPUActivity();
     } catch (err) {
         console.error("Failed to load GPUs:", err);
@@ -2212,6 +2210,9 @@ async function init() {
     connectWS();
     await loadJobs();
 
+     // Start status polling
+        setInterval(updateGPUActivity, 3000);
+    
     // Restore Job
     const lastJob = localStorage.getItem('lastJob');
     if (lastJob) {
@@ -2248,3 +2249,4 @@ async function init() {
 }
 
 init();
+
