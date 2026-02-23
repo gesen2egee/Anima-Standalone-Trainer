@@ -627,13 +627,51 @@ def _sample_image_inference(
             else:
                 neg_crossattn_emb = neg_pe
 
-    # Generate sample
-    clean_memory_on_device(accelerator.device)
-    latents = do_sample(
-        height, width, seed, dit, crossattn_emb,
-        sample_steps, dit.t_embedding_norm.weight.dtype,
-        accelerator.device, scale, neg_crossattn_emb,
-    )
+    original_blocks_to_swap = getattr(dit, "blocks_to_swap", 0)
+
+    try:
+        if original_blocks_to_swap and original_blocks_to_swap > 0:
+            logger.info("Temporarily disabling block swap for faster sampling")
+            from library.custom_offloading_utils import weighs_to_device
+            for block in dit.blocks:
+                weighs_to_device(block, accelerator.device)
+            torch.cuda.synchronize()
+            dit.blocks_to_swap = 0
+
+        # Generate sample
+        clean_memory_on_device(accelerator.device)
+        latents = do_sample(
+            height, width, seed, dit, crossattn_emb,
+            sample_steps, dit.t_embedding_norm.weight.dtype,
+            accelerator.device, scale, neg_crossattn_emb,
+        )
+
+    except torch.cuda.OutOfMemoryError as e:
+        if original_blocks_to_swap and original_blocks_to_swap > 0:
+            logger.warning("OOM. Falling back to block swapping mode")
+            clean_memory_on_device(accelerator.device)
+            
+            # Restore block swap early
+            dit.blocks_to_swap = original_blocks_to_swap
+            dit.prepare_block_swap_before_forward()  # Move blocks back to CPU
+            clean_memory_on_device(accelerator.device)
+            
+            # Retry sample generation
+            latents = do_sample(
+                height, width, seed, dit, crossattn_emb,
+                sample_steps, dit.t_embedding_norm.weight.dtype,
+                accelerator.device, scale, neg_crossattn_emb,
+            )
+        else:
+            raise e
+
+    finally:
+        if original_blocks_to_swap and original_blocks_to_swap > 0 and getattr(dit, "blocks_to_swap", 0) == 0:
+            logger.info("Restoring block swap after sampling...")
+            dit.blocks_to_swap = original_blocks_to_swap
+            dit.prepare_block_swap_before_forward()  # Move blocks back to CPU as needed
+            clean_memory_on_device(accelerator.device)
+
 
     # Decode latents
     clean_memory_on_device(accelerator.device)
@@ -672,3 +710,4 @@ def _sample_image_inference(
         wandb_tracker = accelerator.get_tracker("wandb")
         import wandb
         wandb_tracker.log({f"sample_{i}": wandb.Image(image, caption=prompt)}, commit=False)
+
