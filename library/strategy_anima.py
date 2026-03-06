@@ -161,6 +161,7 @@ class AnimaTextEncodingStrategy(TextEncodingStrategy):
             nd_input_ids = None
             nd_attn_mask = None
 
+        nd_encoded_text = None
         if nd_input_ids is not None:
             outputs = qwen3_text_encoder(input_ids=nd_input_ids, attention_mask=nd_attn_mask)
             nd_encoded_text = outputs.last_hidden_state
@@ -468,3 +469,4 @@ class AnimaLatentsCachingStrategy(LatentsCachingStrategy):
 
         if not train_util.HIGH_VRAM:
             train_util.clean_memory_on_device(vae_device)
+
