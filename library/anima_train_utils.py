@@ -13,6 +13,8 @@ from safetensors.torch import save_file
 from accelerate import Accelerator, PartialState
 from tqdm import tqdm
 from PIL import Image
+# Disable PIL image size limit
+Image.MAX_IMAGE_PIXELS = None
 from PIL.PngImagePlugin import PngInfo
 
 from library.device_utils import init_ipex, clean_memory_on_device

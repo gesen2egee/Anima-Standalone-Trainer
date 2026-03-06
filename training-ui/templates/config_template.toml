@@ -17,6 +17,7 @@ mixed_precision = "bf16"
 gradient_checkpointing = true
 gradient_accumulation_steps = 1
 flash_attn = false
+torch_compile = false
 max_data_loader_n_workers = 4
 persistent_data_loader_workers = true
 seed = 42

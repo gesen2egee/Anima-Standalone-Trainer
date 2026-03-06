@@ -1191,6 +1191,11 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             }
         }
 
+        // torch.compile support
+        if (mergedConfig.training_arguments?.torch_compile) {
+            accelerateFlags += ' --dynamo_backend inductor';
+        }
+
         // Spawn training process
         const trainEnvVars = [
             buildEnvVar('PYTHONIOENCODING', 'utf-8'),

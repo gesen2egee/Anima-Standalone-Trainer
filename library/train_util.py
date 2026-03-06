@@ -65,6 +65,8 @@ from library.original_unet import UNet2DConditionModel
 from huggingface_hub import hf_hub_download
 import numpy as np
 from PIL import Image
+# Disable PIL image size limit
+Image.MAX_IMAGE_PIXELS = None
 import imagesize
 import cv2
 import safetensors.torch

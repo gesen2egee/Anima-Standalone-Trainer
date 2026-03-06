@@ -469,4 +469,3 @@ class AnimaLatentsCachingStrategy(LatentsCachingStrategy):
 
         if not train_util.HIGH_VRAM:
             train_util.clean_memory_on_device(vae_device)
-

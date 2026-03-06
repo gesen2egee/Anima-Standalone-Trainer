@@ -191,6 +191,11 @@ def train(args):
             train_dataset_group.is_text_encoder_output_cacheable()
         ), "when caching text encoder output, shuffle_caption, token_warmup_step or caption_tag_dropout_rate cannot be used"
 
+    if getattr(args, 'blockwise_fused_optimizers', False):
+        assert (
+            args.gradient_accumulation_steps == 1
+        ), "blockwise_fused_optimizers does not work with gradient_accumulation_steps > 1"
+
     # prepare accelerator
     logger.info("prepare accelerator")
     accelerator = train_util.prepare_accelerator(args)

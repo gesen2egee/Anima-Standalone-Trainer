@@ -14,6 +14,10 @@ import cv2
 from PIL import Image
 import numpy as np
 
+# Disable PIL image size limit and ignore the decompression bomb warning
+Image.MAX_IMAGE_PIXELS = None
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
+
 
 def fire_in_thread(f, *args, **kwargs):
     threading.Thread(target=f, args=args, kwargs=kwargs).start()

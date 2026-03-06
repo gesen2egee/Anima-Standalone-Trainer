@@ -239,6 +239,10 @@
                             <label><input type="checkbox" id="cfg-flash-attn"> Flash Attention</label>
                             <small>Requires flash-attn package.</small>
                         </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="cfg-torch-compile"> Torch Compile</label>
+                            <small>Uses dynamo inductor backend. Slower first step, faster training after.</small>
+                        </div>
                         <div class="form-row">
                             <div class="form-group" style="flex: 1;">
                                 <label><input type="checkbox" id="cfg-lowram"> Low RAM Optimization</label>
