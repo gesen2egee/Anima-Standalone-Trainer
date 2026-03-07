@@ -45,6 +45,8 @@ from library.custom_train_functions import (
     apply_debiased_estimation,
     apply_masked_loss,
 )
+from accelerate.utils.other import clean_state_dict_for_safetensors
+from safetensors.torch import save_file as safetensors_save_file, load_file as safetensors_load_file
 from library.utils import setup_logging, add_logging_arguments
 
 setup_logging()
@@ -928,19 +930,20 @@ class NetworkTrainer:
 
         # before resuming make hook for saving/loading to save/load the network weights only
         def save_model_hook(models, weights, output_dir):
-            # pop weights of other models than network to save only network weights
-            # only main process or deepspeed https://github.com/huggingface/diffusers/issues/2606
-            if accelerator.is_main_process or args.deepspeed:
-                remove_indices = []
-                for i, model in enumerate(models):
-                    if not isinstance(model, type(accelerator.unwrap_model(network))):
-                        remove_indices.append(i)
-                for i in reversed(remove_indices):
-                    if len(weights) > i:
-                        weights.pop(i)
-                # print(f"save model hook: {len(weights)} weights will be saved")
+            # manually save to avoid _orig_mod. key prefix issues with torch.compile
+            network_type = type(accelerator.unwrap_model(network))
+            for i in reversed(range(len(models))):
+                base_model = accelerator.unwrap_model(models[i], keep_torch_compile=False)
+                if isinstance(base_model, network_type) and (accelerator.is_main_process or args.deepspeed):
+                    model_name = "model" if i == 0 else f"model_{i}"
+                    safetensors_path = os.path.join(output_dir, f"{model_name}.safetensors")
+                    state_dict = clean_state_dict_for_safetensors(base_model.state_dict())
+                    safetensors_save_file(state_dict, safetensors_path, metadata={"format": "pt"})
+                    logger.info(f"Saved {model_name}.safetensors to {output_dir}")
+                models.pop(i)
+                weights.pop(i)
 
-            # save current ecpoch and step
+            # save current epoch and step
             train_state_file = os.path.join(output_dir, "train_state.json")
             # +1 is needed because the state is saved before current_step is set from global_step
             logger.info(f"save train state to {train_state_file} at epoch {current_epoch.value} step {current_step.value+1}")
@@ -950,16 +953,20 @@ class NetworkTrainer:
         steps_from_state = None
 
         def load_model_hook(models, input_dir):
-            # remove models except network
-            remove_indices = []
-            for i, model in enumerate(models):
-                if not isinstance(model, type(accelerator.unwrap_model(network))):
-                    remove_indices.append(i)
-            for i in reversed(remove_indices):
+            # Manually load network weights and pop all models to prevent accelerate's default load.
+            network_type = type(accelerator.unwrap_model(network))
+            for i in reversed(range(len(models))):
+                base_model = accelerator.unwrap_model(models[i], keep_torch_compile=False)
+                if isinstance(base_model, network_type):
+                    model_name = "model" if i == 0 else f"model_{i}"
+                    safetensors_path = os.path.join(input_dir, f"{model_name}.safetensors")
+                    if os.path.exists(safetensors_path):
+                        state_dict = safetensors_load_file(safetensors_path, device="cpu")
+                        base_model.load_state_dict(state_dict)
+                        logger.info(f"Loaded {model_name}.safetensors from {input_dir}")
                 models.pop(i)
-            # print(f"load model hook: {len(models)} models will be loaded")
 
-            # load current epoch and step to
+            # load current epoch and step
             nonlocal steps_from_state
             train_state_file = os.path.join(input_dir, "train_state.json")
             if os.path.exists(train_state_file):
