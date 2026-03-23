@@ -60,6 +60,20 @@ To start the training server and open the web interface:
 ```
 Once launched, open your browser to: `http://localhost:3000`
 
+## First Time Setup
+
+After launching the UI for the first time, you'll need to configure your model paths:
+
+1. Click the ** Global Settings** (gear icon) in the bottom-left corner
+2. Set the following paths:
+   - **DiT Model Path** — Path to your Anima DiT safetensors file (e.g. `C:\model\anima.safetensors`)
+   - **VAE Path** — Path to the VAE model (e.g. `C:\model\qwen_image_vae.safetensors`)  
+   - **TE Path** — Path to the CLIP text encoder (e.g. `C:\model\text_encoders\qwen_3_06b_base.safetensors`)
+   - **Venv Path** - Path to your local venv, venv can be reused if you redownload the repo
+3. Click **Save**
+
+These paths are saved globally and shared across all training jobs.
+
 ## Release
 
 **v2.0.0. Linux support, Multi-GPU inference**
