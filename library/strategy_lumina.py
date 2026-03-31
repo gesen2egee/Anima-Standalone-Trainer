@@ -12,6 +12,8 @@ from library.strategy_base import (
     TextEncoderOutputsCachingStrategy,
 )
 import numpy as np
+from safetensors import safe_open
+from safetensors.torch import save_file as safetensors_save
 from library.utils import setup_logging
 
 setup_logging()
@@ -151,6 +153,7 @@ class LuminaTextEncodingStrategy(TextEncodingStrategy):
 
 class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
     LUMINA_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX = "_lumina_te.npz"
+    LUMINA_TEXT_ENCODER_OUTPUTS_SAFETENSORS_SUFFIX = "_lumina_te.safetensors"
 
     def __init__(
         self,
@@ -167,28 +170,68 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
         )
 
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
-        return (
-            os.path.splitext(image_abs_path)[0]
-            + LuminaTextEncoderOutputsCachingStrategy.LUMINA_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+        image_dir = os.path.dirname(image_abs_path)
+        basename = os.path.splitext(os.path.basename(image_abs_path))[0]
+        cache_dir = os.path.join(image_dir, "cache_text_encoder")
+
+        if self.cache_to_disk and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+
+        return os.path.join(
+            cache_dir,
+            basename + LuminaTextEncoderOutputsCachingStrategy.LUMINA_TEXT_ENCODER_OUTPUTS_SAFETENSORS_SUFFIX
         )
 
     def is_disk_cached_outputs_expected(self, npz_path: str) -> bool:
         """
         Args:
-            npz_path (str): Path to the npz file.
+            npz_path (str): Path to the safetensors file.
 
         Returns:
-            bool: True if the npz file is expected to be cached.
+            bool: True if the file is expected to be cached.
         """
         if not self.cache_to_disk:
             return False
-        if not os.path.exists(npz_path):
+
+        safetensors_path = os.path.splitext(npz_path)[0] + ".safetensors"
+        local_npz_path = os.path.splitext(npz_path)[0] + ".npz"
+        
+        # Determine path for older flat format (without cache_text_encoder subdir)
+        basename_no_ext = os.path.splitext(os.path.basename(npz_path))[0]
+        if "cache_text_encoder" in npz_path:
+            parent_dir = os.path.dirname(os.path.dirname(npz_path))
+            old_npz_path = os.path.join(parent_dir, basename_no_ext + ".npz")
+        else:
+            old_npz_path = os.path.splitext(npz_path)[0] + ".npz"
+
+        # Check safetensors first
+        if os.path.exists(safetensors_path):
+            if self.skip_disk_cache_validity_check:
+                return True
+            try:
+                with safe_open(safetensors_path, framework="pt") as f:
+                    keys = set(f.keys())
+                    if "hidden_state" not in keys:
+                        return False
+                    if "attention_mask" not in keys:
+                        return False
+                    if "input_ids" not in keys:
+                        return False
+            except Exception as e:
+                logger.error(f"Error loading file: {safetensors_path}")
+                raise e
+            return True
+
+        if not os.path.exists(local_npz_path) and not os.path.exists(old_npz_path):
             return False
+
+        check_path = local_npz_path if os.path.exists(local_npz_path) else old_npz_path
+
         if self.skip_disk_cache_validity_check:
             return True
 
         try:
-            npz = np.load(npz_path)
+            npz = np.load(check_path)
             if "hidden_state" not in npz:
                 return False
             if "attention_mask" not in npz:
@@ -196,19 +239,38 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
             if "input_ids" not in npz:
                 return False
         except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
+            logger.error(f"Error loading file: {check_path}")
             raise e
 
         return True
 
     def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
         """
-        Load outputs from a npz file
+        Load outputs from a safetensors or npz file
 
         Returns:
             List[np.ndarray]: hidden_state, input_ids, attention_mask
         """
-        data = np.load(npz_path)
+        safetensors_path = os.path.splitext(npz_path)[0] + ".safetensors"
+        local_npz_path = os.path.splitext(npz_path)[0] + ".npz"
+        
+        # Determine path for older flat format (without cache_text_encoder subdir)
+        basename_no_ext = os.path.splitext(os.path.basename(npz_path))[0]
+        if "cache_text_encoder" in npz_path:
+            parent_dir = os.path.dirname(os.path.dirname(npz_path))
+            old_npz_path = os.path.join(parent_dir, basename_no_ext + ".npz")
+        else:
+            old_npz_path = os.path.splitext(npz_path)[0] + ".npz"
+
+        if os.path.exists(safetensors_path):
+            with safe_open(safetensors_path, framework="pt") as f:
+                hidden_state = f.get_tensor("hidden_state").float().numpy()
+                attention_mask = f.get_tensor("attention_mask").int().numpy()
+                input_ids = f.get_tensor("input_ids").int().numpy()
+            return [hidden_state, input_ids, attention_mask]
+
+        check_path = local_npz_path if os.path.exists(local_npz_path) else old_npz_path
+        data = np.load(check_path)
         hidden_state = data["hidden_state"]
         attention_mask = data["attention_mask"]
         input_ids = data["input_ids"]
@@ -258,11 +320,12 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
             )
 
         if hidden_state.dtype != torch.float32:
-            hidden_state = hidden_state.float()
+            hidden_state = hidden_state.to(torch.bfloat16)
 
-        hidden_state = hidden_state.cpu().numpy()
-        attention_mask = attention_masks.cpu().numpy() # (B, S)
-        input_ids = input_ids.cpu().numpy() # (B, S) 
+        # Use CPU tensors explicitly for saving efficiently to safetensors
+        hidden_state = hidden_state.cpu()
+        attention_mask = attention_masks.to(torch.int32).cpu() # (B, S)
+        input_ids = input_ids.to(torch.int32).cpu() # (B, S) 
 
 
         for i, info in enumerate(batch):
@@ -272,17 +335,20 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
 
             if self.cache_to_disk:
                 assert info.text_encoder_outputs_npz is not None, f"Text encoder cache outputs to disk not found for image {info.image_key}"
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    hidden_state=hidden_state_i,
-                    attention_mask=attention_mask_i,
-                    input_ids=input_ids_i,
+                safetensors_path = os.path.splitext(info.text_encoder_outputs_npz)[0] + ".safetensors"
+                safetensors_save(
+                    {
+                        "hidden_state": hidden_state_i.contiguous(),
+                        "attention_mask": attention_mask_i.contiguous(),
+                        "input_ids": input_ids_i.contiguous(),
+                    },
+                    safetensors_path,
                 )
             else:
                 info.text_encoder_outputs = [
-                    hidden_state_i,
-                    input_ids_i,
-                    attention_mask_i,
+                    hidden_state_i.float().numpy(),
+                    input_ids_i.numpy(),
+                    attention_mask_i.numpy(),
                 ]
 
 
