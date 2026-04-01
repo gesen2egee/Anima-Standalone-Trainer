@@ -4022,6 +4022,12 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         help="enable static_graph for DDP / DDPでstatic_graphを有効にする",
     )
     parser.add_argument(
+        "--use_cuda_direct",
+        action="store_true",
+        help="(Windows multi-GPU only) use cuda_direct backend for GPU-to-GPU transfers instead of Gloo."
+             " Requires cuda_direct_backend to be installed. Ignored on Linux.",
+    )
+    parser.add_argument(
         "--clip_skip",
         type=int,
         default=None,
@@ -5447,7 +5453,16 @@ def prepare_accelerator(args: argparse.Namespace):
             os.environ["USE_LIBUV"] = "0"
             rank = int(os.environ.get("RANK", "0"))
             world_size = int(os.environ.get("WORLD_SIZE", "1"))
-            dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+            _win_backend = "gloo"
+            if getattr(args, "use_cuda_direct", False):
+                try:
+                    from cuda_direct_backend.auto import activate
+                    activate()
+                    _win_backend = "cuda_direct"
+                    print("cuda_direct backend activated for Windows multi-GPU training.")
+                except ImportError:
+                    print("WARNING: --use_cuda_direct specified but cuda_direct_backend is not installed. Falling back to Gloo.")
+            dist.init_process_group(backend=_win_backend, rank=rank, world_size=world_size)
 
 
     if args.logging_dir is None:
@@ -5484,12 +5499,26 @@ def prepare_accelerator(args: argparse.Namespace):
     if args.torch_compile:
         dynamo_backend = args.dynamo_backend
 
+    _use_cuda_direct = getattr(args, "use_cuda_direct", False) and os.name == "nt"
+    if _use_cuda_direct:
+        try:
+            from cuda_direct_backend.auto import activate
+            activate()
+        except ImportError:
+            print("WARNING: --use_cuda_direct specified but cuda_direct_backend is not installed. Falling back to Gloo.")
+            _use_cuda_direct = False
+
+    def _win_backend():
+        if _use_cuda_direct:
+            return "cuda_direct"
+        return "gloo"
+
     kwargs_handlers = [
         (
             InitProcessGroupKwargs(
-                backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
+                backend=_win_backend() if os.name == "nt" or not torch.cuda.is_available() else "nccl",
                 init_method=(
-                    "env://?use_libuv=False" if os.name == "nt" and Version(torch.__version__) >= Version("2.4.0") else None
+                    "env://?use_libuv=False" if os.name == "nt" and not _use_cuda_direct and Version(torch.__version__) >= Version("2.4.0") else None
                 ),
                 timeout=datetime.timedelta(minutes=args.ddp_timeout) if args.ddp_timeout else None,
             )
