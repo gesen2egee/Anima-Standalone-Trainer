@@ -123,10 +123,10 @@ if not exist venv (
     echo Venv already exists.
 )
 
-call venv\Scripts\activate.bat
-if not exist venv\Scripts\pip.exe (
+set "VENV_PYTHON=venv\Scripts\python.exe"
+if not exist "%VENV_PYTHON%" (
     echo.
-    echo [ERROR] Failed to activate virtual environment (pip not found).
+    echo [ERROR] Virtual environment Python not found at %VENV_PYTHON%
     echo Try deleting the venv folder and running this script again.
     echo.
     pause
@@ -134,9 +134,14 @@ if not exist venv\Scripts\pip.exe (
 )
 
 echo ----------------------------------------------------------------------
-echo Installing requirements from requirements.txt...
+echo Upgrading pip and installing requirements...
 echo ----------------------------------------------------------------------
-pip install -r requirements.txt
+"%VENV_PYTHON%" -m pip install --upgrade pip
+if %errorlevel% neq 0 (
+    echo [WARNING] Failed to upgrade pip. Continuing with requirements...
+)
+
+"%VENV_PYTHON%" -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] pip install failed.
