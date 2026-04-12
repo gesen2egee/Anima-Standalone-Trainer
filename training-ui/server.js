@@ -1,5 +1,5 @@
 const express = require('express');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const TOML = require('@iarna/toml');
@@ -7,6 +7,24 @@ const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 const os = require('os');
+
+// Auto-install cuda_direct_backend (editable, no-deps to avoid touching user's environment)
+(function ensureCudaDirectBackend() {
+    try {
+        execSync('python -c "import cuda_direct_backend"', { stdio: 'ignore' });
+    } catch {
+        const pkgPath = path.join(__dirname, '..', 'cuda_direct_backend');
+        if (fs.existsSync(pkgPath)) {
+            console.log('[setup] Installing cuda_direct_backend...');
+            try {
+                execSync(`pip install --no-deps -e "${pkgPath}"`, { stdio: 'inherit' });
+                console.log('[setup] cuda_direct_backend installed.\n');
+            } catch {
+                console.warn('[setup] Could not install cuda_direct_backend. Multi-GPU cuda_direct will be unavailable.\n');
+            }
+        }
+    }
+})();
 
 const app = express();
 const server = http.createServer(app);
