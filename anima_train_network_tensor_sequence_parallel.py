@@ -241,18 +241,11 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
         real_rank = dist.get_rank() if dist.is_initialized() else 0
         accelerator.state.distributed_type = DistributedType.NO
         # process_index is already set to 0 on all ranks by the __main__
-        # monkeypatch of prepare_accelerator (see bottom of this file).
-        # Set local_process_index to real_rank so progress bars, logging, etc.
-        # only appear on rank 0 (is_local_main_process checks this).
         accelerator.state.local_process_index = real_rank
         accelerator.state.num_processes = 1  # each rank acts as single-GPU for Accelerator
         logger.info(f"TP active — disabled Accelerator DDP (rank={real_rank}, TP handles distribution)")
 
         # Monkeypatch clip_grad_norm_ to compute global norm across TP ranks.
-        # With DistributedType.NO, accelerator.clip_grad_norm_ falls back to
-        # torch.nn.utils.clip_grad_norm_ which only sees local (sharded) grads.
-        # Each rank would compute a different total norm and clip by a different
-        # factor, corrupting the optimizer state across TP ranks.
         tp_group = self.tp_groups.tp
 
         def _tp_clip_grad_norm_(

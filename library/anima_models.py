@@ -1381,6 +1381,18 @@ class MiniTrainDIT(nn.Module):
             "extra_per_block_pos_emb": extra_pos_emb,
         }
 
+        # SP: scatter x along H dim so each TP rank processes S/tp tokens per block.
+        # _tp_sp_group is set externally by the TP trainer after sharding.
+        # Not set in regular training → this block is completely skipped.
+        _sp_group = getattr(self, '_tp_sp_group', None)
+        if _sp_group is not None:
+            from wd_parallel.collectives import _split_along_dim
+            x_B_T_H_W_D = _split_along_dim(x_B_T_H_W_D, _sp_group, seq_dim=2)
+            if block_kwargs["extra_per_block_pos_emb"] is not None:
+                block_kwargs["extra_per_block_pos_emb"] = _split_along_dim(
+                    block_kwargs["extra_per_block_pos_emb"], _sp_group, seq_dim=2
+                )
+
         for block_idx, block in enumerate(self.blocks):
             if self.blocks_to_swap:
                 self.offloader.wait_for_block(block_idx)
@@ -1408,6 +1420,11 @@ class MiniTrainDIT(nn.Module):
 
             if self.blocks_to_swap:
                 self.offloader.submit_move_blocks(self.blocks, block_idx)
+
+        # SP: gather H dim back to full sequence before final_layer (which is replicated).
+        if _sp_group is not None:
+            from wd_parallel.collectives import gather_from_sp_region
+            x_B_T_H_W_D = gather_from_sp_region(x_B_T_H_W_D, _sp_group, seq_dim=2)
 
         # Move to final layer device if needed (multi-GPU sharding only)
         if self._is_multi_gpu_sharded:

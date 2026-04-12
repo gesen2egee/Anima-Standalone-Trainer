@@ -11,11 +11,13 @@ import time
 import json
 from multiprocessing import Value
 import numpy as np
+from library.profiler import StepProfiler
 
 from tqdm import tqdm
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.types import Number
 from library.device_utils import init_ipex, clean_memory_on_device
 
@@ -25,7 +27,7 @@ from accelerate.utils import set_seed
 from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from library import deepspeed_utils, model_util, sai_model_spec, strategy_base, strategy_sd
+from library import deepspeed_utils, model_util, sai_model_spec, save_utils, strategy_base, strategy_sd
 
 import library.train_util as train_util
 from library.train_util import DreamBoothDataset
@@ -45,8 +47,6 @@ from library.custom_train_functions import (
     apply_debiased_estimation,
     apply_masked_loss,
 )
-from accelerate.utils.other import clean_state_dict_for_safetensors
-from safetensors.torch import save_file as safetensors_save_file, load_file as safetensors_load_file
 from library.utils import setup_logging, add_logging_arguments
 
 setup_logging()
@@ -232,9 +232,41 @@ class NetworkTrainer:
         return noise_pred
 
     def all_reduce_network(self, accelerator, network):
+        # Skip if not in distributed mode (single-GPU training)
+        if not dist.is_initialized() or accelerator.num_processes <= 1:
+            return
+
+        # Batched all-reduce: flatten all grads into a single buffer, reduce once, scatter back.
+        # The original per-parameter approach caused hundreds of round-trips through the
+        # communication backend (~50s/step). This brings it down to a single call (~0.5s).
+        grads = []
+        shapes = []
         for param in network.parameters():
             if param.grad is not None:
-                param.grad = accelerator.reduce(param.grad, reduction="mean")
+                grads.append(param.grad.data.view(-1))
+                shapes.append(param.grad.shape)
+            else:
+                grads.append(None)
+                shapes.append(None)
+
+        # Collect only non-None grads for the flat buffer
+        valid_grads = [g for g in grads if g is not None]
+        if not valid_grads:
+            return
+
+        flat = torch.cat(valid_grads)
+        dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+        flat.div_(accelerator.num_processes)
+
+        # Scatter back
+        offset = 0
+        vi = 0  # index into valid_grads order
+        for param, shape in zip(network.parameters(), shapes):
+            if shape is not None:
+                numel = valid_grads[vi].numel()
+                param.grad.data.copy_(flat[offset:offset + numel].view(shape))
+                offset += numel
+                vi += 1
 
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizers, text_encoder, unet):
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizers[0], text_encoder, unet)
@@ -772,7 +804,7 @@ class NetworkTrainer:
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset_group,
             batch_size=1,
-            shuffle=True,
+            shuffle=not getattr(args, 'disable_bucket_shuffle', False),
             collate_fn=collator,
             num_workers=n_workers,
             persistent_workers=args.persistent_data_loader_workers,
@@ -867,12 +899,22 @@ class NetworkTrainer:
             )
             training_model = ds_model
         else:
+            from accelerate.utils import DistributedType
+            is_fsdp = accelerator.distributed_type == DistributedType.FSDP
+
             if train_unet:
                 # default implementation is:  unet = accelerator.prepare(unet)
                 unet = self.prepare_unet_with_accelerator(args, accelerator, unet)  # accelerator does some magic here
+            elif is_fsdp:
+                # FSDP: wrap the frozen UNet so its parameters are SHARDED across GPUs.
+                # Without this, each GPU holds a full copy (same as DDP) and FSDP saves no VRAM.
+                if self.cast_unet(args):
+                    unet.to(dtype=unet_weight_dtype)
+                unet = self.prepare_unet_with_accelerator(args, accelerator, unet)
             else:
-                # move to device because unet is not prepared by accelerator
+                # Standard DDP: move to device because unet is not prepared by accelerator
                 unet.to(accelerator.device, dtype=unet_weight_dtype if self.cast_unet(args) else None)
+
             if train_text_encoder:
                 text_encoders = [
                     (accelerator.prepare(t_enc) if flag else t_enc)
@@ -882,12 +924,35 @@ class NetworkTrainer:
                     text_encoder = text_encoders
                 else:
                     text_encoder = text_encoders[0]
+            elif is_fsdp:
+                # FSDP: wrap frozen text encoders so they are sharded too.
+                # Guard: skip encoders already on CPU (e.g. after output caching).
+                # sync_module_states causes FSDP to reconstruct any wrapped model on GPU,
+                # which would undo deliberate CPU offloading of the text encoder.
+                text_encoders = [
+                    accelerator.prepare(t_enc) if t_enc.device.type != "cpu" else t_enc
+                    for t_enc in text_encoders
+                ]
+                if len(text_encoders) > 1:
+                    text_encoder = text_encoders
+                else:
+                    text_encoder = text_encoders[0]
             else:
                 pass  # if text_encoder is not trained, no need to prepare. and device and dtype are already set
 
-            network, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
-                network, optimizer, train_dataloader, val_dataloader, lr_scheduler
-            )
+            # When FSDP is active, the LoRA network must NOT be wrapped by FSDP.
+            # It is injected as hooks inside the base model and uses manual gradient
+            # sync via all_reduce_network(). FSDP would shard its tiny weights and
+            # cause shape mismatches with the unsplit activations from the base model.
+            if is_fsdp:
+                network.to(accelerator.device)
+                optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+                    optimizer, train_dataloader, val_dataloader, lr_scheduler
+                )
+            else:
+                network, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+                    network, optimizer, train_dataloader, val_dataloader, lr_scheduler
+                )
             training_model = network
 
         if args.gradient_checkpointing:
@@ -918,54 +983,22 @@ class NetworkTrainer:
         if args.full_fp16:
             train_util.patch_accelerator_for_fp16_training(accelerator)
 
-        def save_model_hook(models, weights, output_dir):
-            # only save network weights (not unet/text_encoder) with own naming counter
-            network_type = type(accelerator.unwrap_model(network, keep_torch_compile=False))
-            save_idx = 0
-            for i in range(len(models)):
-                base_model = accelerator.unwrap_model(models[i], keep_torch_compile=False)
-                if isinstance(base_model, network_type) and (accelerator.is_main_process or args.deepspeed):
-                    model_name = "model" if save_idx == 0 else f"model_{save_idx}"
-                    safetensors_path = os.path.join(output_dir, f"{model_name}.safetensors")
-                    state_dict = clean_state_dict_for_safetensors(base_model.state_dict())
-                    safetensors_save_file(state_dict, safetensors_path, metadata={"format": "pt"})
-                    logger.info(f"Saved {model_name}.safetensors to {output_dir}")
-                    save_idx += 1
-            weights.clear()
-
-            # save current epoch and step
-            train_state_file = os.path.join(output_dir, "train_state.json")
-            # +1 is needed because the state is saved before current_step is set from global_step
-            logger.info(f"save train state to {train_state_file} at epoch {current_epoch.value} step {current_step.value+1}")
-            with open(train_state_file, "w", encoding="utf-8") as f:
-                json.dump({"current_epoch": current_epoch.value, "current_step": current_step.value + 1}, f)
-
-        steps_from_state = None
-
-        def load_model_hook(models, input_dir):
-            # only load network weights with own naming counter (models is a local copy, safe to pop)
-            network_type = type(accelerator.unwrap_model(network, keep_torch_compile=False))
-            load_idx = 0
-            for i in range(len(models)):
-                base_model = accelerator.unwrap_model(models[i], keep_torch_compile=False)
-                if isinstance(base_model, network_type):
-                    model_name = "model" if load_idx == 0 else f"model_{load_idx}"
-                    safetensors_path = os.path.join(input_dir, f"{model_name}.safetensors")
-                    if os.path.exists(safetensors_path):
-                        state_dict = safetensors_load_file(safetensors_path, device="cpu")
-                        base_model.load_state_dict(state_dict)
-                        logger.info(f"Loaded {model_name}.safetensors from {input_dir}")
-                    load_idx += 1
-            models.clear()
-
-            # load current epoch and step
-            nonlocal steps_from_state
-            train_state_file = os.path.join(input_dir, "train_state.json")
-            if os.path.exists(train_state_file):
-                with open(train_state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                steps_from_state = data["current_step"]
-                logger.info(f"load train state from {train_state_file}: {data}")
+        save_model_hook, load_model_hook, state_tracker = save_utils.create_safetensors_state_hooks(
+            accelerator,
+            [
+                save_utils.StateDictModelSpec(
+                    model=network,
+                    filename="model",
+                    save_intent=save_utils.SAVE_INTENT_LORA_STATE,
+                    unwrap_model=True,
+                    keep_torch_compile=False,
+                )
+            ],
+            get_current_epoch=lambda: current_epoch.value,
+            get_current_step=lambda: current_step.value + 1,
+            allow_non_main_process_save=args.deepspeed,
+            use_accelerate_native_fsdp=False,
+        )
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
@@ -1230,7 +1263,7 @@ class NetworkTrainer:
         initial_step = 0
         if args.initial_epoch is not None or args.initial_step is not None:
             # if initial_epoch or initial_step is specified, steps_from_state is ignored even when resuming
-            if steps_from_state is not None:
+            if state_tracker["current_step"] is not None:
                 logger.warning(
                     "steps from the state is ignored because initial_step is specified / initial_stepが指定されているため、stateからのステップ数は無視されます"
                 )
@@ -1243,9 +1276,8 @@ class NetworkTrainer:
                 )
         else:
             # if initial_epoch and initial_step are not specified, steps_from_state is used when resuming
-            if steps_from_state is not None:
-                initial_step = steps_from_state
-                steps_from_state = None
+            if state_tracker["current_step"] is not None:
+                initial_step = state_tracker["current_step"]
 
         if initial_step > 0:
             assert (
@@ -1408,8 +1440,9 @@ class NetworkTrainer:
             current_epoch.value = epoch + 1
 
             metadata["ss_epoch"] = str(epoch + 1)
-
             accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here
+
+            profiler = StepProfiler(accelerator, args.step_profile)
 
             # TRAINING
             skipped_dataloader = None
@@ -1424,10 +1457,12 @@ class NetworkTrainer:
                     continue
 
                 with accelerator.accumulate(training_model):
+                    profiler.on_batch_start()
                     on_step_start_for_network(text_encoder, unet)
 
                     # preprocess batch for each model
                     self.on_step_start(args, accelerator, network, text_encoders, unet, batch, weight_dtype, is_train=True)
+
 
                     loss = self.process_batch(
                         batch,
@@ -1447,9 +1482,16 @@ class NetworkTrainer:
                         train_unet=train_unet,
                     )
 
+                    profiler.on_fwd_done()
+
                     accelerator.backward(loss)
+
+                    profiler.on_bwd_done()
+
                     if accelerator.sync_gradients:
                         self.all_reduce_network(accelerator, network)  # sync DDP grad manually
+                        profiler.on_comm_done()
+
                         if args.max_grad_norm != 0.0:
                             params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
@@ -1458,10 +1500,11 @@ class NetworkTrainer:
                             network.update_grad_norms()
                         if hasattr(network, "update_norms"):
                             network.update_norms()
-
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
+
+                    profiler.on_step_done(global_step)
 
                 if args.scale_weight_norms:
                     keys_scaled, mean_norm, maximum_norm = accelerator.unwrap_model(network).apply_max_norm_regularization(

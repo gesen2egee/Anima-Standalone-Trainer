@@ -28,7 +28,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from library import anima_models, anima_utils, strategy_base, train_util
+from library import anima_models, anima_utils, save_utils, strategy_base, train_util
 
 from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler, get_sigmas
 
@@ -324,18 +324,24 @@ def get_anima_param_groups(
 # Save functions
 def save_anima_model_on_train_end(
     args: argparse.Namespace,
+    accelerator: Accelerator,
     save_dtype: torch.dtype,
     epoch: int,
     global_step: int,
-    dit: anima_models.MiniTrainDIT,
+    dit,
 ):
     """Save Anima model at the end of training."""
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(
             None, args, False, False, False, is_stable_diffusion_ckpt=True
         )
-        dit_sd = dit.state_dict()
-        # Save with 'net.' prefix for ComfyUI compatibility
+        dit_sd = save_utils.get_model_state_dict_for_save(
+            accelerator,
+            dit,
+            save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model_for_non_fsdp=True,
+            keep_torch_compile=False,
+        )
         anima_utils.save_anima_model(ckpt_file, dit_sd, save_dtype)
 
     train_util.save_sd_model_on_train_end_common(args, True, True, epoch, global_step, sd_saver, None)
@@ -349,14 +355,20 @@ def save_anima_model_on_epoch_end_or_stepwise(
     epoch: int,
     num_train_epochs: int,
     global_step: int,
-    dit: anima_models.MiniTrainDIT,
+    dit,
 ):
     """Save Anima model at epoch end or specific steps."""
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(
             None, args, False, False, False, is_stable_diffusion_ckpt=True
         )
-        dit_sd = dit.state_dict()
+        dit_sd = save_utils.get_model_state_dict_for_save(
+            accelerator,
+            dit,
+            save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model_for_non_fsdp=True,
+            keep_torch_compile=False,
+        )
         anima_utils.save_anima_model(ckpt_file, dit_sd, save_dtype)
 
     train_util.save_sd_model_on_epoch_end_or_stepwise_common(
@@ -648,8 +660,13 @@ def _sample_image_inference(
     save_dir, prompt_dict, epoch, steps,
     sample_prompts_te_outputs, prompt_replacement,
     dit_secondary=None,
+    save_image=True,
 ):
-    """Generate a single sample image."""
+    """Generate a single sample image.
+
+    Args:
+        save_image
+    """
     prompt = prompt_dict.get("prompt", "")
     negative_prompt = prompt_dict.get("negative_prompt", "")
     sample_steps = prompt_dict.get("sample_steps", 30)
@@ -821,25 +838,26 @@ def _sample_image_inference(
     image = Image.fromarray(decoded_np)
     
     # Prepare metadata
-    png_info = PngInfo()
-    params_str = prompt
-    if negative_prompt:
-        params_str += f"\nNegative prompt: {negative_prompt}"
-    params_str += f"\nSteps: {sample_steps}, Sampler: Euler, CFG scale: {scale}, Seed: {seed if seed is not None else -1}, Size: {width}x{height}"
-    png_info.add_text("parameters", params_str)
+    if save_image:
+        png_info = PngInfo()
+        params_str = prompt
+        if negative_prompt:
+            params_str += f"\nNegative prompt: {negative_prompt}"
+        params_str += f"\nSteps: {sample_steps}, Sampler: Euler, CFG scale: {scale}, Seed: {seed if seed is not None else -1}, Size: {width}x{height}"
+        png_info.add_text("parameters", params_str)
 
-    ts_str = time.strftime("%Y%m%d%H%M%S", time.localtime())
-    num_suffix = f"e{epoch:06d}" if epoch is not None else f"{steps:06d}"
-    seed_suffix = "" if seed is None else f"_{seed}"
-    rank = accelerator.process_index
-    rank_suffix = f"_gpu{rank}" if accelerator.num_processes > 1 else ""
-    i = prompt_dict.get("enum", 0)
-    img_filename = f"{'' if args.output_name is None else args.output_name + '_'}{num_suffix}_{i:02d}_{ts_str}{seed_suffix}{rank_suffix}.png"
-    image.save(os.path.join(save_dir, img_filename), pnginfo=png_info)
+        ts_str = time.strftime("%Y%m%d%H%M%S", time.localtime())
+        num_suffix = f"e{epoch:06d}" if epoch is not None else f"{steps:06d}"
+        seed_suffix = "" if seed is None else f"_{seed}"
+        rank = accelerator.process_index
+        rank_suffix = f"_gpu{rank}" if accelerator.num_processes > 1 else ""
+        i = prompt_dict.get("enum", 0)
+        img_filename = f"{'' if args.output_name is None else args.output_name + '_'}{num_suffix}_{i:02d}_{ts_str}{seed_suffix}{rank_suffix}.png"
+        image.save(os.path.join(save_dir, img_filename), pnginfo=png_info)
 
-    # Log to wandb if enabled (main process only to avoid duplicate logging)
-    if accelerator.is_main_process and "wandb" in [tracker.name for tracker in accelerator.trackers]:
-        wandb_tracker = accelerator.get_tracker("wandb")
-        import wandb
-        wandb_tracker.log({f"sample_{i}": wandb.Image(image, caption=prompt)}, commit=False)
+        # Log to wandb if enabled (main process only to avoid duplicate logging)
+        if accelerator.is_main_process and "wandb" in [tracker.name for tracker in accelerator.trackers]:
+            wandb_tracker = accelerator.get_tracker("wandb")
+            import wandb
+            wandb_tracker.log({f"sample_{i}": wandb.Image(image, caption=prompt)}, commit=False)
 

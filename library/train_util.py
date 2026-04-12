@@ -76,6 +76,7 @@ import library.model_util as model_util
 import library.huggingface_util as huggingface_util
 import library.sai_model_spec as sai_model_spec
 import library.deepspeed_utils as deepspeed_utils
+import library.save_utils as save_utils
 from library.utils import setup_logging, resize_image, validate_interpolation_fn
 
 setup_logging()
@@ -3849,6 +3850,11 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         help="precision in saving / 保存時に精度を変更して保存する",
     )
     parser.add_argument(
+        "--step_profile",
+        action="store_true",
+        help="enable per-step profiling (wall, fwd, bwd, comm, opt times)",
+    )
+    parser.add_argument(
         "--save_every_n_epochs",
         type=int,
         default=None,
@@ -4622,6 +4628,14 @@ def add_dataset_arguments(
         "--bucket_no_upscale",
         action="store_true",
         help="make bucket for each image without upscaling / 画像を拡大せずbucketを作成します",
+    )
+    parser.add_argument(
+        "--disable_bucket_shuffle",
+        action="store_true",
+        help="disable DataLoader shuffle so batches stay within the same resolution bucket. "
+             "Reduces DDP rank imbalance (one rank getting a heavier batch than the other) "
+             "at the cost of less randomness in bucket ordering within an epoch. "
+             "The bucket manager still shuffles within each bucket every epoch.",
     )
     parser.add_argument(
         "--resize_interpolation",
@@ -5871,17 +5885,46 @@ def save_sd_model_on_epoch_end_or_stepwise(
     text_encoder,
     unet,
     vae,
+    text_encoder_for_save=None,
+    unet_for_save=None,
+    vae_for_save=None,
 ):
-    def sd_saver(ckpt_file, epoch_no, global_step):
-        sai_metadata = get_sai_model_spec(None, args, False, False, False, is_stable_diffusion_ckpt=True)
-        model_util.save_stable_diffusion_checkpoint(
-            args.v2, ckpt_file, text_encoder, unet, src_path, epoch_no, global_step, sai_metadata, save_dtype, vae
+    export_specs = [
+        save_utils.StateDictModelSpec(
+            model=text_encoder if text_encoder_for_save is None else text_encoder_for_save,
+            target_model=text_encoder,
+            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model=text_encoder_for_save is None,
+        ),
+        save_utils.StateDictModelSpec(
+            model=unet if unet_for_save is None else unet_for_save,
+            target_model=unet,
+            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model=unet_for_save is None,
+        ),
+    ]
+    if vae is not None:
+        export_specs.append(
+            save_utils.StateDictModelSpec(
+                model=vae if vae_for_save is None else vae_for_save,
+                target_model=vae,
+                save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+                unwrap_model=vae_for_save is None,
+            )
         )
 
+    def sd_saver(ckpt_file, epoch_no, global_step):
+        sai_metadata = get_sai_model_spec(None, args, False, False, False, is_stable_diffusion_ckpt=True)
+        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
+            model_util.save_stable_diffusion_checkpoint(
+                args.v2, ckpt_file, text_encoder, unet, src_path, epoch_no, global_step, sai_metadata, save_dtype, vae
+            )
+
     def diffusers_saver(out_dir):
-        model_util.save_diffusers_checkpoint(
-            args.v2, out_dir, text_encoder, unet, src_path, vae=vae, use_safetensors=use_safetensors
-        )
+        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
+            model_util.save_diffusers_checkpoint(
+                args.v2, out_dir, text_encoder, unet, src_path, vae=vae, use_safetensors=use_safetensors
+            )
 
     save_sd_model_on_epoch_end_or_stepwise_common(
         args,
@@ -6049,6 +6092,7 @@ def save_state_on_train_end(args: argparse.Namespace, accelerator):
 
 def save_sd_model_on_train_end(
     args: argparse.Namespace,
+    accelerator,
     src_path: str,
     save_stable_diffusion_format: bool,
     use_safetensors: bool,
@@ -6058,17 +6102,46 @@ def save_sd_model_on_train_end(
     text_encoder,
     unet,
     vae,
+    text_encoder_for_save=None,
+    unet_for_save=None,
+    vae_for_save=None,
 ):
-    def sd_saver(ckpt_file, epoch_no, global_step):
-        sai_metadata = get_sai_model_spec(None, args, False, False, False, is_stable_diffusion_ckpt=True)
-        model_util.save_stable_diffusion_checkpoint(
-            args.v2, ckpt_file, text_encoder, unet, src_path, epoch_no, global_step, sai_metadata, save_dtype, vae
+    export_specs = [
+        save_utils.StateDictModelSpec(
+            model=text_encoder if text_encoder_for_save is None else text_encoder_for_save,
+            target_model=text_encoder,
+            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model=text_encoder_for_save is None,
+        ),
+        save_utils.StateDictModelSpec(
+            model=unet if unet_for_save is None else unet_for_save,
+            target_model=unet,
+            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+            unwrap_model=unet_for_save is None,
+        ),
+    ]
+    if vae is not None:
+        export_specs.append(
+            save_utils.StateDictModelSpec(
+                model=vae if vae_for_save is None else vae_for_save,
+                target_model=vae,
+                save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
+                unwrap_model=vae_for_save is None,
+            )
         )
 
+    def sd_saver(ckpt_file, epoch_no, global_step):
+        sai_metadata = get_sai_model_spec(None, args, False, False, False, is_stable_diffusion_ckpt=True)
+        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
+            model_util.save_stable_diffusion_checkpoint(
+                args.v2, ckpt_file, text_encoder, unet, src_path, epoch_no, global_step, sai_metadata, save_dtype, vae
+            )
+
     def diffusers_saver(out_dir):
-        model_util.save_diffusers_checkpoint(
-            args.v2, out_dir, text_encoder, unet, src_path, vae=vae, use_safetensors=use_safetensors
-        )
+        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
+            model_util.save_diffusers_checkpoint(
+                args.v2, out_dir, text_encoder, unet, src_path, vae=vae, use_safetensors=use_safetensors
+            )
 
     save_sd_model_on_train_end_common(
         args, save_stable_diffusion_format, use_safetensors, epoch, global_step, sd_saver, diffusers_saver

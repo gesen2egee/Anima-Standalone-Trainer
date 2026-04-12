@@ -14,6 +14,157 @@ logger = logging.getLogger(__name__)
 from networks.lora_flux import LoRAModule, LoRAInfModule
 
 
+# ---------------------------------------------------------------------------
+#  TP-aware LoRA modules
+#  These subclasses handle the extra communication that Tensor Parallel and
+#  Sequence Parallel layers inject into the forward path.  The base LoRAModule
+#  only sees the *post-communication* output from org_forward, but the LoRA
+#  path (lora_down → lora_up) operates on the *pre-communication* input `x`.
+#  Without correction the shapes or semantics would mismatch.
+# ---------------------------------------------------------------------------
+
+# Lazy-import flag — set True once wd_parallel is confirmed importable.
+_WDP_AVAILABLE: Optional[bool] = None
+
+
+def _try_import_wdp():
+    global _WDP_AVAILABLE
+    if _WDP_AVAILABLE is not None:
+        return _WDP_AVAILABLE
+    try:
+        import wd_parallel  # noqa: F401
+        _WDP_AVAILABLE = True
+    except ImportError:
+        _WDP_AVAILABLE = False
+    return _WDP_AVAILABLE
+
+
+def _is_tp_linear(module: torch.nn.Module) -> bool:
+    """Return True if *module* is a wd_parallel Column/RowParallelLinear."""
+    name = module.__class__.__name__
+    return name in ("ColumnParallelLinear", "RowParallelLinear")
+
+
+class ColumnParallelLoRAModule(LoRAModule):
+    """LoRA adapter for ColumnParallelLinear.
+
+    Column-parallel forward:
+      TP-only:  copy-to-TP (identity fwd) → F.linear
+      SP:       all-gather along seq_dim   → F.linear
+
+    The LoRA path must apply the same input transform so that lora_down
+    sees the same tensor shape that the base weight sees.
+    For TP-only the input is already replicated — nothing to do.
+    For SP the input is (…, S/tp, …) and we must all-gather before lora_down.
+    """
+
+    def __init__(self, *args, tp_group=None, seq_dim=1, use_sp=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tp_group = tp_group
+        self._seq_dim = seq_dim
+        self._use_sp = use_sp
+
+    def forward(self, x):
+        org_forwarded = self.org_forward(x)
+
+        if self.module_dropout is not None and self.training:
+            if torch.rand(1) < self.module_dropout:
+                return org_forwarded
+
+        # For SP: all-gather x so LoRA path sees the same full-sequence input
+        lora_x = x
+        if self._use_sp and self._tp_group is not None:
+            from wd_parallel import gather_from_sp_region
+            lora_x = gather_from_sp_region(x, self._tp_group, self._seq_dim)
+
+        lx = self.lora_down(lora_x)
+
+        if self.dropout is not None and self.training:
+            lx = torch.nn.functional.dropout(lx, p=self.dropout)
+
+        if self.rank_dropout is not None and self.training:
+            mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
+            if len(lx.size()) == 3:
+                mask = mask.unsqueeze(1)
+            lx = lx * mask
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+
+        lx = self.lora_up(lx)
+        return org_forwarded + lx * self.multiplier * scale
+
+
+class RowParallelLoRAModule(LoRAModule):
+    """LoRA adapter for RowParallelLinear.
+
+    Row-parallel forward:
+      TP-only:  F.linear → all-reduce
+      SP:       F.linear → reduce-scatter along seq_dim
+
+    The LoRA path operates on the same sharded input and must apply the
+    same output reduction so its contribution matches org_forwarded.
+    """
+
+    def __init__(self, *args, tp_group=None, seq_dim=1, use_sp=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tp_group = tp_group
+        self._seq_dim = seq_dim
+        self._use_sp = use_sp
+
+    def forward(self, x):
+        org_forwarded = self.org_forward(x)
+
+        if self.module_dropout is not None and self.training:
+            if torch.rand(1) < self.module_dropout:
+                return org_forwarded
+
+        lx = self.lora_down(x)
+
+        if self.dropout is not None and self.training:
+            lx = torch.nn.functional.dropout(lx, p=self.dropout)
+
+        if self.rank_dropout is not None and self.training:
+            mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
+            if len(lx.size()) == 3:
+                mask = mask.unsqueeze(1)
+            lx = lx * mask
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+
+        lx = self.lora_up(lx)
+
+        # Match the reduction that org_forward applied
+        if self._tp_group is not None:
+            if self._use_sp:
+                from wd_parallel import reduce_scatter_to_sp_region
+                lx = reduce_scatter_to_sp_region(lx, self._tp_group, self._seq_dim)
+            else:
+                import torch.distributed as dist
+                lx = lx.contiguous()
+                dist.all_reduce(lx, group=self._tp_group)
+
+        return org_forwarded + lx * self.multiplier * scale
+
+
+def _select_lora_class(child_module, tp_group=None, use_sp=False, seq_dim=1):
+    """Pick the right LoRAModule class based on the target layer type.
+
+    Returns (module_class, extra_kwargs) where extra_kwargs are passed
+    to the LoRAModule constructor in addition to the standard args.
+    """
+    cls_name = child_module.__class__.__name__
+    if cls_name == "ColumnParallelLinear":
+        return ColumnParallelLoRAModule, dict(tp_group=tp_group, seq_dim=seq_dim,
+                                               use_sp=getattr(child_module, 'sequence_parallel', use_sp))
+    elif cls_name == "RowParallelLinear":
+        return RowParallelLoRAModule, dict(tp_group=tp_group, seq_dim=seq_dim,
+                                            use_sp=getattr(child_module, 'sequence_parallel', use_sp))
+    else:
+        return None, {}  # use the default module_class
+
+
 def create_network(
     multiplier: float,
     network_dim: Optional[int],
@@ -250,8 +401,9 @@ class LoRANetwork(torch.nn.Module):
                         module = root_module
 
                     for child_name, child_module in module.named_modules():
-                        is_linear = child_module.__class__.__name__ == "Linear"
-                        is_conv2d = child_module.__class__.__name__ == "Conv2d"
+                        _cls_name = child_module.__class__.__name__
+                        is_linear = _cls_name in ("Linear", "ColumnParallelLinear", "RowParallelLinear")
+                        is_conv2d = _cls_name == "Conv2d"
                         is_conv2d_1x1 = is_conv2d and child_module.kernel_size == (1, 1)
 
                         if is_linear or is_conv2d:
@@ -315,7 +467,16 @@ class LoRANetwork(torch.nn.Module):
                                     skipped.append(lora_name)
                                 continue
 
-                            lora = module_class(
+                            # Check if this is a TP parallel layer — use TP-aware LoRA class
+                            tp_cls, tp_kwargs = _select_lora_class(
+                                child_module,
+                                tp_group=getattr(root_module, '_wdp_groups', None) and getattr(root_module, '_wdp_groups').tp,
+                                use_sp=False,  # read from child_module attribute
+                                seq_dim=1,     # Anima uses batch-first (B, S, D)
+                            )
+                            actual_class = tp_cls if tp_cls is not None else module_class
+
+                            lora = actual_class(
                                 lora_name,
                                 child_module,
                                 self.multiplier,
@@ -324,6 +485,7 @@ class LoRANetwork(torch.nn.Module):
                                 dropout=dropout,
                                 rank_dropout=rank_dropout,
                                 module_dropout=module_dropout,
+                                **tp_kwargs,
                             )
                             loras.append(lora)
 
@@ -530,6 +692,53 @@ class LoRANetwork(torch.nn.Module):
 
     def get_trainable_params(self):
         return self.parameters()
+
+    def gather_tp_lora_weights(self) -> None:
+        """Gather sharded LoRA weights from all TP ranks so rank 0 holds the full LoRA.
+
+        Column-parallel LoRA: lora_up is sharded on dim 0 (out_features/tp) → gather dim 0
+        Row-parallel LoRA:    lora_down is sharded on dim 1 (in_features/tp) → gather dim 1
+                              (lora_down.weight shape is (rank, in_features/tp))
+        """
+        import torch.distributed as dist
+
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if isinstance(lora, ColumnParallelLoRAModule) and lora._tp_group is not None:
+                # lora_up.weight: (out_features/tp, lora_dim) → gather dim 0
+                w = lora.lora_up.weight.data
+                gathered = [torch.zeros_like(w) for _ in range(lora._tp_group.size())]
+                dist.all_gather(gathered, w.contiguous(), group=lora._tp_group)
+                lora.lora_up.weight.data = torch.cat(gathered, dim=0)
+
+            elif isinstance(lora, RowParallelLoRAModule) and lora._tp_group is not None:
+                # lora_down.weight: (lora_dim, in_features/tp) → gather dim 1
+                w = lora.lora_down.weight.data
+                gathered = [torch.zeros_like(w) for _ in range(lora._tp_group.size())]
+                dist.all_gather(gathered, w.contiguous(), group=lora._tp_group)
+                lora.lora_down.weight.data = torch.cat(gathered, dim=1)
+
+    def scatter_tp_lora_weights(self) -> None:
+        """Re-shard LoRA weights back to per-rank slices after gather_tp_lora_weights().
+
+        Column-parallel LoRA: lora_up.weight (D_out, lora_dim) → slice dim 0 → (D_out/tp, lora_dim)
+        Row-parallel LoRA:    lora_down.weight (lora_dim, D_in) → slice dim 1 → (lora_dim, D_in/tp)
+        """
+        import torch.distributed as dist
+
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if isinstance(lora, ColumnParallelLoRAModule) and lora._tp_group is not None:
+                tp = lora._tp_group.size()
+                rank = dist.get_rank(group=lora._tp_group)
+                w = lora.lora_up.weight.data          # (D_out, lora_dim) after gather
+                chunk = w.shape[0] // tp
+                lora.lora_up.weight.data = w[rank * chunk:(rank + 1) * chunk].contiguous()
+
+            elif isinstance(lora, RowParallelLoRAModule) and lora._tp_group is not None:
+                tp = lora._tp_group.size()
+                rank = dist.get_rank(group=lora._tp_group)
+                w = lora.lora_down.weight.data        # (lora_dim, D_in) after gather
+                chunk = w.shape[1] // tp
+                lora.lora_down.weight.data = w[:, rank * chunk:(rank + 1) * chunk].contiguous()
 
     def save_weights(self, file, dtype, metadata):
         if metadata is not None and len(metadata) == 0:
