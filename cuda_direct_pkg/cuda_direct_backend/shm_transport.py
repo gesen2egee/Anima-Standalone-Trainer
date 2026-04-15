@@ -27,7 +27,9 @@ cudaHostRegister requirements:
 import atexit
 import ctypes
 import logging
+import struct
 import sys
+import threading
 import numpy as np
 from multiprocessing import shared_memory
 
@@ -66,8 +68,15 @@ logger = logging.getLogger("cuda_direct.shm_transport")
 _EMPTY_HANDLE = b'\x00' * 64  # placeholder: SHM peers need no IPC handle
 
 
-def _data_shm_name(session_id: str, rank: int) -> str:
-    return f"cuda_direct_{session_id}_shm_{rank}"
+def _data_shm_name(session_id: str, rank: int, version: int = 0) -> str:
+    """Return the OS name for rank's data SHM region.
+
+    version=0 uses the base name (backwards-compatible with old sessions).
+    Growth increments the version so the new region gets a fresh name and
+    never conflicts with the old one that peers may still have cached.
+    """
+    base = f"cuda_direct_{session_id}_shm_{rank}"
+    return base if version == 0 else f"{base}_v{version}"
 
 
 def _shm_host_ptr(shm: shared_memory.SharedMemory) -> int:
@@ -142,6 +151,20 @@ class ShmTransport:
 
         # Pending peer H2D streams awaiting sync
         self._pending_peers: set[int] = set()
+
+        # SHM version — incremented each time our own SHM grows.
+        # Peers detect the version change from sync metadata and re-open.
+        # Old SHM regions are kept alive in _old_shms until _cleanup.
+        self._my_shm_version: int = 0
+        self._old_shms: list = []           # retired SHM objects awaiting peer close
+
+        # Per-peer version last seen in sync metadata.
+        # If the peer's published version differs, we invalidate and re-open.
+        self._peer_shm_version: dict[int, int] = {}
+
+        # Lock protecting _ensure_my_shm against concurrent calls from the
+        # allgather pool and comm pool workers (both can call publish_tensor).
+        self._shm_lock = threading.Lock()
 
         # Set by process_group after SharedMemorySync is created
         self._session_id: str | None = None
@@ -218,7 +241,11 @@ class ShmTransport:
             _store_fence()
             logger.debug("publish_tensor DB  rank=%d  nbytes=%d", self.rank, nbytes)
 
-        sync.write_tensor_meta(tensor.numel(), 0, self.device, _EMPTY_HANDLE)
+        # Encode SHM version in the ipc_handle field (unused for SHM path).
+        # Peers read this after the post-publish barrier to know which versioned
+        # SHM name to open without having to call invalidate_cache().
+        version_handle = struct.pack('<Q', self._my_shm_version) + b'\x00' * 56
+        sync.write_tensor_meta(tensor.numel(), 0, self.device, version_handle)
 
     def fetch_chunk(self, peer_rank: int, dst_tensor: torch.Tensor,
                     src_offset_bytes: int, size_bytes: int, sync) -> None:
@@ -229,9 +256,28 @@ class ShmTransport:
         Fallback path:  CPU memcpy from SHM → pinned buf → H2D DMA.
 
         Async — call wait_for_peer(peer_rank) to synchronize.
+
+        Peer SHM is cached across calls: cudaHostRegister is only called once
+        per peer (on first access) and again only if the peer's region grows.
+        This avoids the per-collective page-table walk that otherwise dominates
+        allgather latency at large tensor sizes.
         """
-        if peer_rank not in self._peer_shm:
-            self._open_peer_shm(peer_rank)
+        # Detect peer SHM version from sync metadata. The peer encodes its
+        # current version in the ipc_handle bytes written by publish_tensor.
+        # If the version changed (peer grew its SHM), invalidate cached handle
+        # and re-open the new versioned region.
+        try:
+            _numel, _dc, _dev, ipc_bytes = sync.read_tensor_meta(peer_rank)
+            peer_version = struct.unpack_from('<Q', ipc_bytes)[0]
+        except Exception:
+            peer_version = self._peer_shm_version.get(peer_rank, 0)
+
+        if (peer_rank not in self._peer_shm
+                or self._peer_shm_version.get(peer_rank) != peer_version):
+            if peer_rank in self._peer_shm:
+                self._invalidate_peer(peer_rank)
+            self._open_peer_shm(peer_rank, version=peer_version)
+            self._peer_shm_version[peer_rank] = peer_version
 
         h2d_stream = self._h2d_streams[peer_rank]
         dev_ptr = self._peer_shm_dev_ptr.get(peer_rank)
@@ -285,24 +331,33 @@ class ShmTransport:
 
     def invalidate_cache(self) -> None:
         """
-        Close cached peer SHM regions and unregister their device pointers.
-        Called by ProcessGroupCudaDirect before each FSDP collective.
+        No-op: peer SHM registrations are cached across collectives.
+
+        Previously this unregistered and closed all peer SHM regions before
+        every collective, forcing cudaHostRegister + page-table walk on every
+        fetch_chunk call.  For 35 MB slabs that overhead was ~80-97 ms per
+        allgather — dominating the 100 ms we measured vs gloo's 59 ms.
+
+        Peer SHMs are now opened and registered lazily in fetch_chunk and
+        kept alive until the region must grow or the transport is destroyed.
+        Call _invalidate_peer(rank) explicitly if you know a peer's SHM has
+        been recreated (e.g. after a tensor size change).
         """
-        # Unregister and close peer SHMs
-        for peer_rank, shm in self._peer_shm.items():
-            host_ptr = self._peer_shm_host_ptr.pop(peer_rank, 0)
-            if host_ptr:
-                cuda_ipc.host_unregister(host_ptr)
+        cuda_ipc.invalidate_ipc_handle_cache()
+
+    def _invalidate_peer(self, peer_rank: int) -> None:
+        """Unregister and close one peer's SHM. Called when the peer's region grows."""
+        shm = self._peer_shm.pop(peer_rank, None)
+        host_ptr = self._peer_shm_host_ptr.pop(peer_rank, 0)
+        if host_ptr:
+            cuda_ipc.host_unregister(host_ptr)
+        self._peer_shm_dev_ptr.pop(peer_rank, None)
+        if shm is not None:
             try:
                 shm.close()
             except Exception:
                 pass
-        n = len(self._peer_shm)
-        self._peer_shm.clear()
-        self._peer_shm_dev_ptr.clear()
-        cuda_ipc.invalidate_ipc_handle_cache()
-        if n:
-            logger.debug("ShmTransport cache invalidated  rank=%d  closed=%d", self.rank, n)
+        logger.debug("ShmTransport peer invalidated  rank=%d  peer=%d", self.rank, peer_rank)
 
     def sync_peer_stream(self, peer_rank: int) -> None:
         pass  # no-op: ShmTransport has no separate per-peer sync streams
@@ -319,25 +374,36 @@ class ShmTransport:
 
     def _ensure_my_shm(self, nbytes: int) -> None:
         """Create or grow this rank's SHM region and register it for zero-copy."""
+        with self._shm_lock:
+            self._ensure_my_shm_locked(nbytes)
+
+    def _ensure_my_shm_locked(self, nbytes: int) -> None:
+        """Must be called with self._shm_lock held."""
         if self._my_shm is not None and self._my_shm_nbytes >= nbytes:
             return
 
-        name = _data_shm_name(self._session_id, self.rank)
-
-        # Unregister old region before destroying it
         if self._my_shm is not None:
+            # Growing: retire the old SHM under a new version name instead of
+            # unlink+recreate. On Windows, unlink() is a no-op while any peer
+            # holds the handle open — trying to recreate with the same name
+            # gives FileExistsError. Using a new versioned name sidesteps this:
+            # the old region stays alive until peers detect the version change
+            # via sync metadata and call _invalidate_peer themselves.
             if self._my_shm_host_ptr:
                 cuda_ipc.host_unregister(self._my_shm_host_ptr)
                 self._my_shm_host_ptr = 0
                 self._my_shm_dev_ptr  = None
-            try:
-                self._my_shm.close()
-                self._my_shm.unlink()
-            except Exception:
-                pass
+            self._old_shms.append(self._my_shm)  # keep alive until peers close
             self._my_shm = None
+            self._my_shm_version += 1
+            logger.debug("ShmTransport growing  rank=%d  new_version=%d  nbytes=%d",
+                         self.rank, self._my_shm_version, nbytes)
 
-        # Remove any stale region from a previous crashed run
+        name = _data_shm_name(self._session_id, self.rank, self._my_shm_version)
+
+        # Clean up any stale region from a crashed previous session.
+        # Different sessions use different UUIDs so collisions are rare; this
+        # handles the edge case where a previous process died without cleanup.
         try:
             stale = shared_memory.SharedMemory(name=name, create=False)
             stale.close()
@@ -380,12 +446,13 @@ class ShmTransport:
             logger.warning("cudaHostRegister failed — "
                            "falling back to double-bounce  rank=%d", self.rank)
 
-    def _open_peer_shm(self, peer_rank: int) -> None:
+    def _open_peer_shm(self, peer_rank: int, version: int = 0) -> None:
         """
         Open peer's SHM and register it for zero-copy.
         Must be called after a barrier that follows the peer's publish_tensor.
+        version matches what the peer encoded in its sync metadata.
         """
-        name = _data_shm_name(self._session_id, peer_rank)
+        name = _data_shm_name(self._session_id, peer_rank, version)
         try:
             shm = shared_memory.SharedMemory(name=name, create=False)
         except FileNotFoundError:
@@ -436,17 +503,31 @@ class ShmTransport:
 
     def _cleanup(self) -> None:
         """Unregister all SHM regions and close them. Called at atexit."""
-        # Unregister and close peer SHMs
-        for peer_rank, shm in self._peer_shm.items():
-            host_ptr = self._peer_shm_host_ptr.pop(peer_rank, 0)
-            if host_ptr:
-                cuda_ipc.host_unregister(host_ptr)
+        for peer_rank in list(self._peer_shm.keys()):
+            self._invalidate_peer(peer_rank)
+
+        # Unregister and destroy own SHM
+        if self._my_shm_host_ptr:
+            cuda_ipc.host_unregister(self._my_shm_host_ptr)
+            self._my_shm_host_ptr = 0
+        if self._my_shm is not None:
             try:
-                shm.close()
+                self._my_shm.close()
+                self._my_shm.unlink()
             except Exception:
                 pass
-        self._peer_shm.clear()
-        self._peer_shm_dev_ptr.clear()
+            self._my_shm = None
+
+        # Close retired SHM versions from growth events
+        for old in self._old_shms:
+            try:
+                old.close()
+            except Exception:
+                pass
+        self._old_shms.clear()
+
+        logger.debug("ShmTransport cleanup done  rank=%d  zero_copy=%s",
+                     self.rank, self._zero_copy)
 
         # Unregister and destroy own SHM
         if self._my_shm_host_ptr:

@@ -17,6 +17,7 @@ Quick start:
 
 from .process_group import register_backend, ProcessGroupCudaDirect
 from .diagnostics import diagnose
+from .comm_timer import CommTimer, CommEvent, dtype_str
 
 # Only auto-register on Windows with 2+ CUDA GPUs.
 # On Linux (where NCCL works), or single-GPU, do nothing.
