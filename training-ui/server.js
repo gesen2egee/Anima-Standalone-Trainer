@@ -1,5 +1,5 @@
 const express = require('express');
-const { spawn, exec, execSync } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const TOML = require('@iarna/toml');
@@ -8,8 +8,9 @@ const http = require('http');
 const WebSocket = require('ws');
 const os = require('os');
 
-// Auto-install cuda_direct_backend (editable, no-deps to avoid touching user's environment)
+// Auto-install cuda_direct_backend Windows only
 (function ensureCudaDirectBackend() {
+    if (process.platform !== 'win32') return;
     try {
         execSync('python -c "import cuda_direct_backend"', { stdio: 'ignore' });
     } catch {
@@ -17,7 +18,7 @@ const os = require('os');
         if (fs.existsSync(pkgPath)) {
             console.log('[setup] Installing cuda_direct_backend...');
             try {
-                execSync(`pip install --no-deps -e "${pkgPath}"`, { stdio: 'inherit' });
+                execSync(`pip install --no-deps -e "${pkgPath}"`, { stdio: 'pipe' });
                 console.log('[setup] cuda_direct_backend installed.\n');
             } catch {
                 console.warn('[setup] Could not install cuda_direct_backend. Multi-GPU cuda_direct will be unavailable.\n');
@@ -208,7 +209,7 @@ async function getDetectedGPUs() {
             // 2. Fallback to Python (torch)
             console.warn("nvidia-smi failed, trying python fallback...");
             const globalConfig = getGlobalConfig();
-            const venvPath = globalConfig.venv_path || path.join(ROOT_DIR, 'venv');
+            const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
             let pythonPath = 'python'; // Default
             if (process.platform === 'win32') {
                 pythonPath = path.join(venvPath, 'Scripts', 'python.exe');
@@ -334,6 +335,28 @@ function broadcastStatus(jobName, status) {
     }
 }
 
+// Find the most recently modified state folder in a job's output directory
+function findLastStateDir(jobPath) {
+    const outputDir = path.join(jobPath, 'output');
+    if (!fs.existsSync(outputDir)) return null;
+    try {
+        const entries = fs.readdirSync(outputDir)
+            .filter(f => f.endsWith('-state'))
+            .map(f => {
+                const full = path.join(outputDir, f);
+                try {
+                    const st = fs.statSync(full);
+                    return st.isDirectory() ? { path: full, mtime: st.mtimeMs } : null;
+                } catch { return null; }
+            })
+            .filter(Boolean)
+            .sort((a, b) => b.mtime - a.mtime);
+        return entries.length > 0 ? entries[0].path : null;
+    } catch (err) {
+        return null;
+    }
+}
+
 // Build the full TOML config file for training, merging global model paths + job paths
 function buildTrainingConfig(jobName, jobPath) {
     const globalConfig = getGlobalConfig();
@@ -379,6 +402,17 @@ function buildTrainingConfig(jobName, jobPath) {
         merged.training_arguments.resume = jobConfig.network_arguments.resume.replace(/^['"]+|['"]+$/g, '');
     }
 
+    // Auto-resume: detect last state if checkbox enabled and no explicit resume set
+    if (jobConfig.network_arguments?.auto_resume_last_state && !merged.training_arguments.resume) {
+        const lastState = findLastStateDir(jobPath);
+        if (lastState) {
+            merged.training_arguments.resume = lastState;
+            console.log(`[auto-resume] Detected last state: ${lastState}`);
+        } else {
+            console.log(`[auto-resume] No saved state found in ${outputDir}, starting fresh.`);
+        }
+    }
+
     // Add sample prompts if file exists and has content
     if (fs.existsSync(samplePromptsPath)) {
         const prompts = fs.readFileSync(samplePromptsPath, 'utf8').trim();
@@ -408,6 +442,7 @@ function buildTrainingConfig(jobName, jobPath) {
         merged.network_arguments.network_weights = merged.network_arguments.network_weights.replace(/^['"]+|['"]+$/g, '');
     }
     delete merged.network_arguments.resume;
+    delete merged.network_arguments.auto_resume_last_state;
 
     // Anima arguments
     if (jobConfig.anima_arguments) {
@@ -839,6 +874,50 @@ function killProcess(pid, gracefulMs = 8000) {
 // --- Cross-platform venv/spawn helpers ---
 
 const isWindows = process.platform === 'win32';
+// WSL2: platform is 'linux' but explorer.exe is available via Windows interop
+const isWSL = process.platform === 'linux' && !!process.env.WSL_DISTRO_NAME;
+
+// Open a file path or URL in the system file manager / browser
+function openNative(target, isUrl = false) {
+    if (isWindows) {
+        spawn('explorer', [target]);
+    } else if (isWSL) {
+        let winTarget;
+        if (isUrl) {
+            winTarget = target;
+        } else if (/^[A-Za-z]:[\\\/]/.test(target)) {
+            // Already a Windows-style path (e.g. C:\foo), pass directly to explorer
+            winTarget = target;
+        } else {
+            // Linux path — convert to Windows UNC path via wslpath
+            winTarget = require('child_process').execSync(`wslpath -w "${target}"`).toString().trim();
+        }
+        spawn('explorer.exe', [winTarget]);
+    } else if (process.platform === 'darwin') {
+        spawn('open', [target]);
+    } else {
+        spawn('xdg-open', [target]);
+    }
+}
+
+// Convert a Windows-style path to a WSL /mnt/... path when running under WSL
+function toNativePath(p) {
+    if (!isWSL || typeof p !== 'string' || p.trim() === '') return p;
+    return p.replace(/^([A-Za-z]):[\\\/]/, (_, d) => `/mnt/${d.toLowerCase()}/`)
+             .replace(/\\/g, '/');
+}
+
+// Recursively convert all string values in an object/array
+function convertPathsInObject(obj) {
+    if (typeof obj === 'string') return toNativePath(obj);
+    if (Array.isArray(obj)) return obj.map(convertPathsInObject);
+    if (obj && typeof obj === 'object') {
+        const out = {};
+        for (const k of Object.keys(obj)) out[k] = convertPathsInObject(obj[k]);
+        return out;
+    }
+    return obj;
+}
 
 function getVenvPaths(venvPath) {
     if (isWindows) {
@@ -1005,7 +1084,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         }
 
         const globalConfig = getGlobalConfig();
-        const venvPath = globalConfig.venv_path || path.join(ROOT_DIR, 'venv');
+        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
         const venv = getVenvPaths(venvPath);
 
         // Resolve architecture from job config
@@ -1283,6 +1362,24 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             delete mergedConfig.training_arguments.save_state;
         }
 
+        // Convert Windows paths to WSL paths when running under WSL
+        if (isWSL) {
+            // Convert all paths in merged config (model paths, output dirs, etc.)
+            const converted = convertPathsInObject(mergedConfig);
+            // Also convert image_dir entries inside dataset.toml → write a WSL version
+            const datasetPath = path.join(jobPath, 'dataset.toml');
+            if (fs.existsSync(datasetPath)) {
+                const datasetRaw = TOML.parse(fs.readFileSync(datasetPath, 'utf8'));
+                const datasetConverted = convertPathsInObject(datasetRaw);
+                const mergedDatasetPath = path.join(jobPath, '_merged_dataset.toml');
+                fs.writeFileSync(mergedDatasetPath, TOML.stringify(datasetConverted), 'utf8');
+                if (converted.dataset_arguments) {
+                    converted.dataset_arguments.dataset_config = mergedDatasetPath;
+                }
+            }
+            Object.assign(mergedConfig, converted);
+        }
+
         const mergedConfigPath = path.join(jobPath, '_merged_config.toml');
         fs.writeFileSync(mergedConfigPath, TOML.stringify(mergedConfig), 'utf8');
 
@@ -1294,7 +1391,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         // Get venv path from global config
         const globalConfig = getGlobalConfig();
-        const venvPath = globalConfig.venv_path || path.join(ROOT_DIR, 'venv');
+        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
         const venv = getVenvPaths(venvPath);
 
         // Read config to check for GPU IDs
@@ -1568,7 +1665,7 @@ app.post('/api/jobs/:name/tensorboard', (req, res) => {
 
         // Get venv path
         const globalConfig = getGlobalConfig();
-        const venvPath = globalConfig.venv_path || path.join(ROOT_DIR, 'venv');
+        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
         const venv = getVenvPaths(venvPath);
 
         const port = nextTbPort++;
@@ -1596,28 +1693,6 @@ app.post('/api/jobs/:name/tensorboard', (req, res) => {
     }
 });
 
-app.post('/api/jobs/:name/tensorboard/stop', (req, res) => {
-    try {
-        const jobName = sanitizeName(req.params.name);
-        const tb = tbProcesses.get(jobName);
-
-        if (!tb) {
-            return res.json({ success: true, message: 'Not running' });
-        }
-
-        if (tb.pid) {
-            exec(`taskkill /PID ${tb.pid} /F /T`, (err) => {
-                if (err) console.error(`TensorBoard taskkill failed: ${err}`);
-            });
-        }
-
-        tbProcesses.delete(jobName);
-        res.json({ success: true });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 
 app.get('/api/jobs/:name/tensorboard/status', (req, res) => {
     try {
@@ -1761,15 +1836,7 @@ app.delete('/api/jobs/:name/samples/*', (req, res) => {
 app.post('/api/jobs/:name/open-folder', (req, res) => {
     try {
         const jobPath = getJobPath(req.params.name);
-        if (fs.existsSync(jobPath)) {
-            if (process.platform === 'win32') {
-                spawn('explorer', [jobPath]);
-            } else {
-                // Linux/Mac fallback (xdg-open or open)
-                const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-                spawn(cmd, [jobPath]);
-            }
-        }
+        if (fs.existsSync(jobPath)) openNative(jobPath);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1779,13 +1846,10 @@ app.post('/api/jobs/:name/open-folder', (req, res) => {
 app.post('/api/system/open-folder', (req, res) => {
     try {
         const { path: folderPath } = req.body;
-        if (folderPath && fs.existsSync(folderPath)) {
-            if (process.platform === 'win32') {
-                spawn('explorer', [folderPath]);
-            } else {
-                const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-                spawn(cmd, [folderPath]);
-            }
+        // On WSL the frontend sends Windows-style paths; convert for fs.existsSync
+        const nativePath = toNativePath(folderPath);
+        if (nativePath && fs.existsSync(nativePath)) {
+            openNative(folderPath);
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Folder not found' });
@@ -2012,12 +2076,7 @@ async function findAvailablePort(startPort, maxAttempts = 10) {
     server.listen(port, () => {
         console.log(`🎯 Anima Training UI running at http://localhost:${port}`);
         try {
-            if (process.platform === 'win32') {
-                spawn('explorer', [`http://localhost:${port}`]);
-            } else {
-                const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-                spawn(cmd, [`http://localhost:${port}`]);
-            }
+            openNative(`http://localhost:${port}`, true);
         } catch (e) {
             console.warn('Could not open browser automatically.');
         }
