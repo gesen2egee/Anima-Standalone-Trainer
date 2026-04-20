@@ -1256,11 +1256,6 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
 
         // Logic for Persistent vs One-Shot
         if (keepLoaded) {
-            // Check if we need to start the server
-            // If running but different job (unlikely since we enforce one job), kill it?
-            // Actually Anima is single model so if job changes we might need to reload. 
-            // For simplicity, if current persistent process jobName != requested jobName, restart.
-
             const multiGpuMode = req.body.gen_multi_gpu_mode || 'parallel_cfg';
             const flashAttn = req.body.flash_attn || false;
 
@@ -1354,10 +1349,6 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
 
         } else {
             // One-shot mode requested
-            // If persistent server is running, kill it first to ensure clean state? 
-            // Or just leave it? User asked to NOT keep loaded. 
-            // Interpretation: "I want to run this once and clear memory."
-            // So we should kill any persistent process.
             if (persistentGenProcess) {
                 killPersistentGen();
             }
@@ -1866,7 +1857,7 @@ function getCpuUsagePct() {
     return Math.round((1 - idleDelta / totalDelta) * 100);
 }
 
-async function getCpuTemp() {
+function getCpuTemp() {
     return new Promise((resolve) => {
         if (isWindows) {
             // Query WMI thermal zone (returns tenths of Kelvin)
@@ -1905,7 +1896,7 @@ async function getCpuTemp() {
     });
 }
 
-async function getGpuStats() {
+function getGpuStats() {
     return new Promise((resolve) => {
         const smi = spawn('nvidia-smi', [
             '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu',
