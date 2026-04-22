@@ -1,5 +1,5 @@
 const express = require('express');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const TOML = require('@iarna/toml');
@@ -8,17 +8,25 @@ const http = require('http');
 const WebSocket = require('ws');
 const os = require('os');
 
+function execWindowsPowerShellSync(script, options = {}) {
+    return execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+        ...options,
+        stdio: options.stdio ?? 'pipe',
+        windowsHide: options.windowsHide ?? true
+    });
+}
+
 // Auto-install cuda_direct_backend Windows only
 (function ensureCudaDirectBackend() {
     if (process.platform !== 'win32') return;
     try {
-        execSync('python -c "import cuda_direct_backend"', { stdio: 'ignore' });
+        execWindowsPowerShellSync('python -c "import cuda_direct_backend"', { stdio: 'ignore' });
     } catch {
         const pkgPath = path.join(__dirname, '..', 'cuda_direct_pkg');
         if (fs.existsSync(pkgPath)) {
             console.log('[setup] Installing cuda_direct_backend...');
             try {
-                execSync(`pip install --no-deps -e "${pkgPath}"`, { stdio: 'pipe' });
+                execWindowsPowerShellSync(`pip install --no-deps -e "${pkgPath}"`, { stdio: 'pipe' });
                 console.log('[setup] cuda_direct_backend installed.\n');
             } catch {
                 console.warn('[setup] Could not install cuda_direct_backend. Multi-GPU cuda_direct will be unavailable.\n');
@@ -801,8 +809,10 @@ function killAllJobs() {
         if (job.pid) {
             try {
                 if (process.platform === 'win32') {
-                    require('child_process').execSync(
-                        `taskkill /PID ${job.pid} /F /T`, { stdio: 'ignore' });
+                    execFileSync('taskkill', ['/PID', String(job.pid), '/F', '/T'], {
+                        stdio: 'ignore',
+                        windowsHide: true
+                    });
                 } else {
                     try { process.kill(-job.pid, 'SIGKILL'); } catch (_) {
                         try { process.kill(job.pid, 'SIGKILL'); } catch (__) {}
@@ -815,8 +825,10 @@ function killAllJobs() {
         const pid = persistentGenProcess.process.pid;
         try {
             if (process.platform === 'win32') {
-                require('child_process').execSync(
-                    `taskkill /PID ${pid} /F /T`, { stdio: 'ignore' });
+                execFileSync('taskkill', ['/PID', String(pid), '/F', '/T'], {
+                    stdio: 'ignore',
+                    windowsHide: true
+                });
             } else {
                 try { process.kill(-pid, 'SIGKILL'); } catch (_) {
                     try { process.kill(pid, 'SIGKILL'); } catch (__) {}
@@ -1035,7 +1047,7 @@ function buildShellScript(activatePath, envVars, command) {
 
 function spawnShell(script, cwd) {
     if (isWindows) {
-        return spawn('powershell', ['-NoProfile', '-Command', script], {
+        return spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
             cwd,
             stdio: ['pipe', 'pipe', 'pipe']
         });
