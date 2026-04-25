@@ -41,51 +41,7 @@ from library.custom_train_functions import apply_masked_loss, add_custom_train_a
 
 
 class AnimaTrainer:
-    """Class-based wrapper around the Anima full-finetune training loop.
-
-    Override the hook methods below to inject behaviour (e.g. Tensor Parallel)
-    without duplicating the training loop.  All hooks are no-ops by default.
-    """
-
-    # ------------------------------------------------------------------
-    # Hooks — override in subclasses
-    # ------------------------------------------------------------------
-
-    def on_train_begin(self, args):
-        """Called once at the top of train(), before dataset/model setup."""
-        pass
-
-    def apply_model_parallelism(self, args, dit):
-        """Called after DiT is loaded, before optimizer setup.
-        Return the (possibly replaced/sharded) dit."""
-        return dit
-
-    def prepare_dit_with_accelerator(self, accelerator, dit, is_swapping_blocks):
-        """Wrap accelerator.prepare(dit).  Override to skip DDP (e.g. for TP)."""
-        dit = accelerator.prepare(dit, device_placement=[not is_swapping_blocks])
-        if is_swapping_blocks:
-            accelerator.unwrap_model(dit).move_to_device_except_swap_blocks(accelerator.device)
-        return dit
-
-    def sync_gradients(self, dit):
-        """Called after accelerator.backward().  Override to all-reduce TP replicated grads."""
-        pass
-
-    def before_save(self, dit):
-        """Called before every model save (step and epoch).  Override to unfuse QKV for TP."""
-        pass
-
-    def after_save(self, dit, train_dit):
-        """Called after every model save.  Override to re-fuse QKV for TP."""
-        pass
-
-    def on_train_end(self, dit):
-        """Called before final saves at end of training.  Override for TP cleanup."""
-        pass
-
-    def on_cleanup(self):
-        """Called at the very end after accelerator is deleted."""
-        pass
+    """Class-based wrapper around the Anima full-finetune training loop."""
 
     # ------------------------------------------------------------------
     # Main training method
@@ -129,13 +85,14 @@ class AnimaTrainer:
             "blocks_to_swap is not supported with unsloth_offload_checkpointing"
 
         # Attention: validate availability
-        if getattr(args, 'flash_attn', False):
-            try:
-                import flash_attn  # noqa: F401
-                logger.info("Flash Attention enabled for DiT blocks")
-            except ImportError:
-                logger.warning("flash_attn package not installed, falling back to PyTorch SDPA")
-                args.flash_attn = False
+    if getattr(args, 'flash_attn', False):
+        try:
+            if not anima_models.FLASH_ATTN_AVAILABLE:
+                raise ImportError("No supported Flash Attention backend is installed")
+            logger.info(f"Flash Attention enabled for DiT blocks ({anima_models.FLASH_ATTN_BACKEND})")
+        except ImportError:
+            logger.warning("flash_attn package not installed, falling back to PyTorch SDPA")
+            args.flash_attn = False
 
         cache_latents = args.cache_latents
         use_dreambooth_method = args.in_json is None
@@ -543,7 +500,9 @@ class AnimaTrainer:
             training_models = [ds_model]
         else:
             if train_dit:
-                dit = self.prepare_dit_with_accelerator(accelerator, dit, is_swapping_blocks)
+                dit = accelerator.prepare(dit, device_placement=[not is_swapping_blocks])
+                if is_swapping_blocks:
+                    accelerator.unwrap_model(dit).move_to_device_except_swap_blocks(accelerator.device)
             optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
 
         # Move non-training models back to GPU

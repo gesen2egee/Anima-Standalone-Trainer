@@ -724,6 +724,9 @@ class NetworkTrainer:
         logger.info("preparing accelerator")
         accelerator = train_util.prepare_accelerator(args)
         is_main_process = accelerator.is_main_process
+        tp_collective_save = int(getattr(args, "tp_degree", 1) or 1) > 1
+        tp_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0))) if tp_collective_save else 0
+        is_tp_writer = (not tp_collective_save) or tp_rank == 0
 
         # mixed precisionに対応した型を用意しておき適宜castする
         weight_dtype, save_dtype = train_util.prepare_dtype(args)
@@ -1518,6 +1521,8 @@ class NetworkTrainer:
                 huggingface_util.upload(args, ckpt_file, "/" + ckpt_name, force_sync_upload=force_sync_upload)
 
         def remove_model(old_ckpt_name):
+            if not is_tp_writer:
+                return
             old_ckpt_file = os.path.join(args.output_dir, old_ckpt_name)
             if os.path.exists(old_ckpt_file):
                 accelerator.print(f"removing old checkpoint: {old_ckpt_file}")
@@ -1796,7 +1801,7 @@ class NetworkTrainer:
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
                         accelerator.wait_for_everyone()
-                        if accelerator.is_main_process:
+                        if accelerator.is_main_process or tp_collective_save:
                             ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, global_step)
                             save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch)
 
@@ -1990,7 +1995,7 @@ class NetworkTrainer:
             optimizer_eval_fn()
             if args.save_every_n_epochs is not None:
                 saving = (epoch + 1) % args.save_every_n_epochs == 0 and (epoch + 1) < num_train_epochs
-                if is_main_process and saving:
+                if (is_main_process or tp_collective_save) and saving:
                     ckpt_name = train_util.get_epoch_ckpt_name(args, "." + args.save_model_as, epoch + 1)
                     save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch + 1)
 
@@ -2017,10 +2022,10 @@ class NetworkTrainer:
         accelerator.end_training()
         optimizer_eval_fn()
 
-        if is_main_process and (args.save_state or args.save_state_on_train_end):
+        if (is_main_process or tp_collective_save) and (args.save_state or args.save_state_on_train_end):
             train_util.save_state_on_train_end(args, accelerator)
 
-        if is_main_process:
+        if is_main_process or tp_collective_save:
             ckpt_name = train_util.get_last_ckpt_name(args, "." + args.save_model_as)
             save_model(ckpt_name, network, global_step, num_train_epochs, force_sync_upload=True)
 

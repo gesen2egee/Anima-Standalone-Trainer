@@ -984,7 +984,8 @@ function buildLaunchConfig(gpuIds, mergedConfig, mergedConfigPath, jobArch) {
                     return { error: `TP/SP mode is not supported for the "${jobArch.id || 'current'}" architecture. No train_network_tp_sp script is defined.` };
                 const n = validIds.length;
                 const target = path.join(ROOT_DIR, tpScript);
-                tpTrainCmd = `python -m torch.distributed.run --nproc_per_node=${n} --master_addr 127.0.0.1 --master_port 29500 "${target}" --tp_degree ${n}${ta.sequence_parallel ? ' --sequence_parallel' : ''} --config_file="${mergedConfigPath}"`;
+                const tpBackend = ta.tp_backend || (isWindows ? 'cuda_direct' : 'nccl');
+                tpTrainCmd = `python -m torch.distributed.run --nproc_per_node=${n} --master_addr 127.0.0.1 --master_port 29500 "${target}" --tp_degree ${n} --tp_backend ${tpBackend} --sequence_parallel --config_file="${mergedConfigPath}"`;
 
             } else if (mode === 'fsdp2') {
                 const reshard = ta.fsdp2_reshard_after_forward ?? true;
@@ -1448,7 +1449,14 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         const launchMode = mergedConfig.training_arguments?.multigpu_mode
             || (mergedConfig.training_arguments?.use_fsdp ? 'fsdp' : 'ddp');
         if (launchMode === 'tp_sp' && mergedConfig.training_arguments) {
+            mergedConfig.training_arguments.sequence_parallel = true;
+            mergedConfig.training_arguments.tp_degree = Math.max(2, Number(mergedConfig.training_arguments.tp_degree || 2));
+            mergedConfig.training_arguments.tp_backend = mergedConfig.training_arguments.tp_backend || (isWindows ? 'cuda_direct' : 'nccl');
+            delete mergedConfig.training_arguments.use_cuda_direct;
             delete mergedConfig.training_arguments.save_state;
+            delete mergedConfig.training_arguments.save_state_on_train_end;
+            delete mergedConfig.training_arguments.save_last_n_steps_state;
+            delete mergedConfig.training_arguments.save_last_n_epochs_state;
         }
 
         // Convert Windows paths to WSL paths when running under WSL

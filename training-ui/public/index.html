@@ -623,7 +623,7 @@
                                 <option value="ddp">DDP — Data Parallel (standard)</option>
                                 <option value="fsdp">FSDP1 — Fully Sharded Data Parallel v1</option>
                                 <option value="fsdp2">FSDP2 — Fully Sharded Data Parallel v2 (Linux only)</option>
-                                <option value="tp_sp" style="display:none">TP/SP — Tensor + Sequence Parallel</option>
+                                <option value="tp_sp">TP/SP — Tensor + Sequence Parallel</option>
                             </select>
                             <small>DDP replicates the full model on each GPU and syncs gradients. FSDP1/FSDP2 shard parameters to reduce VRAM (FSDP2 is the newer, simpler API).</small>
                         </div>
@@ -796,11 +796,20 @@
                                 <small>Number of GPUs for tensor parallelism. Must equal the number of selected GPUs above.</small>
                             </div>
                             <div style="margin-top: 12px;">
-                                <label title="Splits the token sequence across TP ranks in addition to weight sharding. Halves activation memory per GPU at the cost of two extra collectives per block."><input type="checkbox" id="cfg-sequence-parallel"> Enable Sequence Parallel (SP)</label>
-                                <small>Splits spatial tokens across GPUs alongside weight sharding. Reduces activation memory by ~half per GPU. Adds 2 all-gathers per DiT block.</small>
+                                <label>Backend</label>
+                                <select id="cfg-tp-backend">
+                                    <option value="auto">Auto</option>
+                                    <option value="cuda_direct">CUDA Direct (Windows)</option>
+                                    <option value="nccl">NCCL (WSL/Linux)</option>
+                                </select>
+                                <small>Use CUDA Direct on native Windows. Use NCCL from WSL/Linux. Auto lets the TP/SP script choose.</small>
+                            </div>
+                            <div style="margin-top: 12px;">
+                                <label title="TP/SP mode always runs tensor parallel and sequence parallel together."><input type="checkbox" id="cfg-sequence-parallel" checked disabled> Sequence Parallel (SP)</label>
+                                <small>Always enabled for this mode. Spatial tokens are split across GPUs alongside weight sharding.</small>
                             </div>
                             <div style="margin-top: 12px; padding: 10px; background: var(--bg-secondary); border-radius: 4px; border-left: 3px solid var(--accent); font-size: 0.8rem; line-height: 1.5;">
-                                <strong>TP/SP notes:</strong> All standard training configs (LR, batch size, optimizer, network dim, etc.) work. Sample generation during training is disabled. CUDA Direct backend is auto-detected. Torch Compile is incompatible.
+                                <strong>TP/SP notes:</strong> All standard training configs (LR, batch size, optimizer, network dim, etc.) work. Sample generation during training is disabled. Backend is selected above. Torch Compile is incompatible.
                             </div>
                         </div>
 

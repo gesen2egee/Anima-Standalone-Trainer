@@ -425,7 +425,8 @@ function populateConfig(config) {
   applyMultiGpuMode(restoredMode);
   // TP/SP options
   if (t.tp_degree) $("cfg-tp-degree").value = t.tp_degree;
-  $("cfg-sequence-parallel").checked = t.sequence_parallel ?? false;
+  if ($("cfg-tp-backend")) $("cfg-tp-backend").value = t.tp_backend || "auto";
+  $("cfg-sequence-parallel").checked = true;
   $("cfg-fsdp-sharding-strategy").value = t.fsdp_sharding_strategy || "1";
   $("cfg-fsdp-offload-params").checked = t.fsdp_offload_params ?? false;
   $("cfg-fsdp-reshard-after-forward").checked =
@@ -683,7 +684,8 @@ function gatherConfig() {
         document.querySelectorAll('input[name="gpu-select"]:checked').length > 1
           ? {
               tp_degree: safeInt($("cfg-tp-degree").value) || 2,
-              sequence_parallel: $("cfg-sequence-parallel").checked,
+              tp_backend: $("cfg-tp-backend")?.value || "auto",
+              sequence_parallel: true,
             }
           : {}),
       use_cuda_direct:
@@ -2626,6 +2628,10 @@ function updateMultiGPUUI() {
     // directly, so this just keeps the display honest.
     const tpDegreeInput = $("cfg-tp-degree");
     if (tpDegreeInput) tpDegreeInput.value = count;
+    const tpBackend = $("cfg-tp-backend");
+    if (tpBackend && !tpBackend.value) tpBackend.value = "auto";
+    const spToggle = $("cfg-sequence-parallel");
+    if (spToggle) spToggle.checked = true;
     applyMultiGpuMode($("cfg-multigpu-mode")?.value || "ddp");
   } else {
     // Single GPU — disable mode selector and cuda-direct, hide all panels
