@@ -306,12 +306,12 @@ function getDefaultDataset() {
         if (fs.existsSync(f)) {
             try {
                 TOML.parse(fs.readFileSync(f, 'utf8'));
-                console.log(`✅ Template validated: ${path.basename(f)}`);
+                console.log(`Template validated: ${path.basename(f)}`);
             } catch (err) {
-                console.error(`❌ Template error in ${path.basename(f)}: ${err.message}`);
+                console.error(`Template error in ${path.basename(f)}: ${err.message}`);
             }
         } else {
-            console.warn(`⚠️  Template not found: ${path.basename(f)}`);
+            console.warn(`Template not found: ${path.basename(f)}`);
         }
     });
 })();
@@ -461,7 +461,18 @@ function buildTrainingConfig(jobName, jobPath) {
 
 // --- WebSocket ---
 
+// Heartbeat: terminate dead connections so wss.clients never accumulates stale entries
+setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (ws.isAlive === false) { ws.terminate(); return; }
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
 wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
     ws.subscribedJob = null;
 
     ws.on('message', (message) => {
@@ -869,7 +880,7 @@ function killProcess(pid, gracefulMs = 8000) {
             return;
         }
 
-        // SIGTERM → give the training script a chance to flush the last checkpoint
+        // SIGTERM -> give the training script a chance to flush the last checkpoint
         groupKill('SIGTERM');
 
         const timer = setTimeout(() => {
@@ -907,7 +918,7 @@ function openNative(target, isUrl = false) {
             // Already a Windows-style path (e.g. C:\foo), pass directly to explorer
             winTarget = target;
         } else {
-            // Linux path — convert to Windows UNC path via wslpath
+            // Linux path -> convert to Windows UNC path via wslpath
             winTarget = require('child_process').execSync(`wslpath -w "${target}"`).toString().trim();
         }
         spawn('explorer.exe', [winTarget]);
@@ -1250,7 +1261,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         if (genGpuCount > 1) {
             const multiGpuMode = req.body.gen_multi_gpu_mode || 'parallel_cfg';
             args.push(`--device_map=${multiGpuMode}`);
-            // Force single process — both modes run one process across all GPUs
+            // Force single process -> both modes run one process across all GPUs
             genAccelerateFlags = '--num_processes 1';
         }
 
@@ -1467,7 +1478,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (isWSL) {
             // Convert all paths in merged config (model paths, output dirs, etc.)
             const converted = convertPathsInObject(mergedConfig);
-            // Also convert image_dir entries inside dataset.toml → write a WSL version
+            // Also convert image_dir entries inside dataset.toml -> write a WSL version
             const datasetPath = path.join(jobPath, 'dataset.toml');
             if (fs.existsSync(datasetPath)) {
                 const datasetRaw = TOML.parse(fs.readFileSync(datasetPath, 'utf8'));
@@ -1861,6 +1872,7 @@ app.post('/api/jobs/:name/reset-config', (req, res) => {
 // --- Hardware Monitor ---
 
 let prevCpuInfo = null;
+const HW_MONITOR_INTERVAL_MS = 1000;
 
 function getCpuUsagePct() {
     const cpus = os.cpus();
@@ -1882,88 +1894,136 @@ function getCpuUsagePct() {
     return Math.round((1 - idleDelta / totalDelta) * 100);
 }
 
-let cpuTempPending = false;
+function terminateChildProcess(child, { force = false } = {}) {
+    if (!child || child.pid == null) return;
 
-function getCpuTemp() {
-    if (cpuTempPending) return Promise.resolve(null);
-    cpuTempPending = true;
+    if (isWindows) {
+        const args = ['/PID', String(child.pid), '/T'];
+        if (force) args.splice(2, 0, '/F');
+        const killer = spawn('taskkill', args, { stdio: 'ignore', windowsHide: true });
+        killer.on('error', () => { });
+        return;
+    }
+
+    const signal = force ? 'SIGKILL' : 'SIGTERM';
+    try {
+        process.kill(child.pid, signal);
+    } catch (_) {
+        try { process.kill(-child.pid, signal); } catch (__) { }
+    }
+}
+
+function runSingleFlightProbe(state, spawnChild, timeoutMs, parseResult) {
+    if (state.pending) return Promise.resolve(null);
+    state.pending = true;
+
     return new Promise((resolve) => {
-        const done = (val) => { cpuTempPending = false; resolve(val); };
-        if (isWindows) {
-            // Query WMI thermal zone (returns tenths of Kelvin)
-            const proc = spawn('powershell', [
-                '-NoProfile', '-NonInteractive', '-Command',
-                'Get-WmiObject -Namespace root/wmi -Class MSAcpi_ThermalZoneTemperature | Select-Object -ExpandProperty CurrentTemperature'
-            ]);
-            let out = '';
-            proc.stdout.on('data', d => out += d);
-            proc.on('close', (code) => {
-                if (code !== 0 || !out.trim()) return done(null);
-                try {
-                    // Average across all zones, convert tenths-of-Kelvin → Celsius
-                    const vals = out.trim().split('\n')
-                        .map(l => parseFloat(l.trim()))
-                        .filter(v => !isNaN(v) && v > 0);
-                    if (!vals.length) return done(null);
-                    const avgCelsius = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length / 10 - 273.15);
-                    done(avgCelsius);
-                } catch (e) { done(null); }
-            });
-            proc.on('error', () => done(null));
-        } else {
-            // Linux: read from /sys/class/thermal
-            const proc = spawn('bash', ['-c',
-                'paste -sd+ /sys/class/thermal/thermal_zone*/temp 2>/dev/null | bc'
-            ]);
-            let out = '';
-            proc.stdout.on('data', d => out += d);
-            proc.on('close', () => {
-                const val = parseFloat(out.trim());
-                done(isNaN(val) ? null : Math.round(val / 1000));
-            });
-            proc.on('error', () => done(null));
-        }
+        const child = spawnChild();
+        let stdout = '';
+        let settled = false;
+        let timedOut = false;
+        let forceKillTimer = null;
+
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            state.pending = false;
+            clearTimeout(timeout);
+            if (forceKillTimer) clearTimeout(forceKillTimer);
+            resolve(value);
+        };
+
+        const timeout = setTimeout(() => {
+            timedOut = true;
+            terminateChildProcess(child);
+            forceKillTimer = setTimeout(() => terminateChildProcess(child, { force: true }), 1500);
+        }, timeoutMs);
+
+        child.stdout.on('data', (data) => {
+            stdout += data;
+        });
+
+        child.on('close', (code) => {
+            if (timedOut || code !== 0) {
+                finish(null);
+                return;
+            }
+            try {
+                finish(parseResult(stdout));
+            } catch (_) {
+                finish(null);
+            }
+        });
+
+        child.on('error', () => {
+            finish(null);
+        });
     });
 }
 
-let gpuStatsPending = false;
+const cpuTempProbeState = { pending: false };
+
+const gpuStatsProbeState = { pending: false };
+
+function getCpuTemp() {
+    return runSingleFlightProbe(
+        cpuTempProbeState,
+        () => {
+            if (isWindows) {
+                return spawn('powershell', [
+                    '-NoProfile', '-NonInteractive', '-Command',
+                    'Get-WmiObject -Namespace root/wmi -Class MSAcpi_ThermalZoneTemperature | Select-Object -ExpandProperty CurrentTemperature'
+                ], { windowsHide: true });
+            }
+
+            return spawn('bash', ['-c',
+                'paste -sd+ /sys/class/thermal/thermal_zone*/temp 2>/dev/null | bc'
+            ], { windowsHide: true });
+        },
+        4000,
+        (stdout) => {
+            if (!stdout.trim()) return null;
+
+            if (isWindows) {
+                const vals = stdout.trim().split('\n')
+                    .map(l => parseFloat(l.trim()))
+                    .filter(v => !isNaN(v) && v > 0);
+                if (!vals.length) return null;
+                return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length / 10 - 273.15);
+            }
+
+            const val = parseFloat(stdout.trim());
+            return isNaN(val) ? null : Math.round(val / 1000);
+        }
+    );
+}
 
 function getGpuStats() {
-    if (gpuStatsPending) return Promise.resolve(null);
-    gpuStatsPending = true;
-    return new Promise((resolve) => {
-        const smi = spawn('nvidia-smi', [
+    return runSingleFlightProbe(
+        gpuStatsProbeState,
+        () => spawn('nvidia-smi', [
             '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit',
             '--format=csv,noheader,nounits'
-        ]);
-        const timer = setTimeout(() => { smi.kill(); gpuStatsPending = false; resolve(null); }, 3000);
-        let stdout = '';
-        smi.stdout.on('data', d => stdout += d);
-        smi.on('close', (code) => {
-            clearTimeout(timer);
-            gpuStatsPending = false;
-            if (code !== 0 || !stdout.trim()) return resolve(null);
-            try {
-                const gpus = stdout.trim().split('\n').map(line => {
-                    const parts = line.split(',').map(s => s.trim());
-                    return {
-                        index: parseInt(parts[0]),
-                        name: parts[1],
-                        util: parseInt(parts[2]) || 0,
-                        memUsed: parseInt(parts[3]) || 0,
-                        memTotal: parseInt(parts[4]) || 0,
-                        temp: parseInt(parts[5]) || 0,
-                        powerDraw: Math.round(parseFloat(parts[6])) || 0,
-                        powerLimit: Math.round(parseFloat(parts[7])) || 0
-                    };
-                });
-                resolve(gpus);
-            } catch (e) {
-                resolve(null);
-            }
-        });
-        smi.on('error', () => { clearTimeout(timer); gpuStatsPending = false; resolve(null); });
-    });
+        ], { windowsHide: true }),
+        3000,
+        (stdout) => {
+            if (!stdout.trim()) return null;
+
+            return stdout.trim().split('\n').map(line => {
+                const parts = line.split(',').map(s => s.trim());
+                return {
+                    index: parseInt(parts[0]),
+                    name: parts[1],
+                    util: parseInt(parts[2]) || 0,
+                    memUsed: parseInt(parts[3]) || 0,
+                    memTotal: parseInt(parts[4]) || 0,
+                    temp: parseInt(parts[5]) || 0,
+                    powerDraw: Math.round(parseFloat(parts[6])) || 0,
+                    powerLimit: Math.round(parseFloat(parts[7])) || 0
+                };
+            });
+        }
+    );
 }
 
 setInterval(async () => {
@@ -1974,7 +2034,7 @@ setInterval(async () => {
     const freeMem = os.freemem();
     const [gpus, cpuTemp] = await Promise.all([getGpuStats(), getCpuTemp()]);
 
-    if (gpus === null) return; // nvidia-smi busy or timed out — skip this tick
+    if (gpus === null) return; // nvidia-smi busy or timed out -> skip this tick
 
     // Mark active GPUs from running jobs
     const activeGpus = {};
@@ -2011,7 +2071,7 @@ setInterval(async () => {
             client.send(payload);
         }
     });
-}, 500);
+}, HW_MONITOR_INTERVAL_MS);
 
 // Prevent server crash on unhandled errors
 process.on('uncaughtException', (err) => {
@@ -2047,16 +2107,16 @@ async function findAvailablePort(startPort, maxAttempts = 10) {
     const port = await findAvailablePort(DEFAULT_PORT);
 
     if (!port) {
-        console.error(`\n❌ ERROR: No available port found in range ${DEFAULT_PORT}-${DEFAULT_PORT + 10}`);
+        console.error(`\nERROR: No available port found in range ${DEFAULT_PORT}-${DEFAULT_PORT + 10}`);
         process.exit(1);
     }
 
     if (port !== DEFAULT_PORT) {
-        console.warn(`⚠️ Port ${DEFAULT_PORT} was busy, using ${port} instead.`);
+        console.warn(`Port ${DEFAULT_PORT} was busy, using ${port} instead.`);
     }
 
     server.listen(port, () => {
-        console.log(`🎯 Anima Training UI running at http://localhost:${port}`);
+        console.log(`Anima Training UI running at http://localhost:${port}`);
         try {
             openNative(`http://localhost:${port}`, true);
         } catch (e) {
@@ -2064,4 +2124,5 @@ async function findAvailablePort(startPort, maxAttempts = 10) {
         }
     });
 })();
+
 

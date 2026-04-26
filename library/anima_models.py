@@ -1055,8 +1055,10 @@ class Block(nn.Module):
                 # Standard cpu offload: blocking transfers
                 def create_custom_forward(func):
                     def custom_forward(*inputs):
-                        # Determine original device from first tensor input
-                        device = next(t.device for t in inputs if isinstance(t, torch.Tensor))
+                        device = next(
+                            (t.device for t in inputs if isinstance(t, torch.Tensor) and t.device.type != 'cpu'),
+                            torch.device('cuda'),
+                        )
                         device_inputs = to_device(inputs, device)
                         outputs = func(*device_inputs)
                         return to_cpu(outputs)
