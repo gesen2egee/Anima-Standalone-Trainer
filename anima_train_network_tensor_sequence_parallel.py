@@ -246,6 +246,85 @@ def fuse_qkv_for_tp_lora(model: torch.nn.Module, *, include_llm_adapter: bool = 
     return fused_count
 
 
+def enable_tp_async_overlap(model: torch.nn.Module, *, include_llm_adapter: bool = True) -> int:
+    """Enable conservative async overlap for cross-attention Q gather paths."""
+    import types
+    from einops import rearrange
+    from library.anima_models import Attention, LLMAdapterAttention, _adapter_apply_rotary_pos_emb
+    import torch.nn.functional as F
+
+    def _supports_async_overlap(module: torch.nn.Module | None) -> bool:
+        return module is not None and hasattr(module, "prepare_input_async") and hasattr(module, "forward_from_prepared_input")
+
+    def _async_cross_attn_compute_qkv(self, x, context=None, rope_emb=None):
+        del rope_emb
+        ctx = x if context is None else context
+        pending_q = self.q_proj.prepare_input_async(x)
+        if hasattr(self, "kv_proj"):
+            k, v = self.kv_proj(ctx).chunk(2, dim=-1)
+        else:
+            k = self.k_proj(ctx)
+            v = self.v_proj(ctx)
+        q = self.q_proj.forward_from_prepared_input(pending_q.wait())
+        n_h = q.shape[-1] // self.head_dim
+        q, k, v = map(
+            lambda t: rearrange(t, "b ... (h d) -> b ... h d", h=n_h, d=self.head_dim),
+            (q, k, v),
+        )
+        return self.q_norm(q), self.k_norm(k), self.v_norm(v)
+
+    def _async_adapter_cross_attn_forward(
+        self,
+        x,
+        mask=None,
+        context=None,
+        position_embeddings=None,
+        position_embeddings_context=None,
+    ):
+        context = x if context is None else context
+        input_shape = x.shape[:-1]
+        q_shape = (*input_shape, self.n_heads, self.head_dim)
+        context_shape = context.shape[:-1]
+        kv_shape = (*context_shape, self.n_heads, self.head_dim)
+
+        pending_q = self.q_proj.prepare_input_async(x)
+        if hasattr(self, "kv_proj"):
+            k, v = self.kv_proj(context).chunk(2, dim=-1)
+        else:
+            k = self.k_proj(context)
+            v = self.v_proj(context)
+        q = self.q_proj.forward_from_prepared_input(pending_q.wait())
+
+        query_states = self.q_norm(q.view(q_shape)).transpose(1, 2)
+        key_states = self.k_norm(k.view(kv_shape)).transpose(1, 2)
+        value_states = v.view(kv_shape).transpose(1, 2)
+
+        if position_embeddings is not None:
+            assert position_embeddings_context is not None
+            cos, sin = position_embeddings
+            query_states = _adapter_apply_rotary_pos_emb(query_states, cos, sin)
+            cos, sin = position_embeddings_context
+            key_states = _adapter_apply_rotary_pos_emb(key_states, cos, sin)
+
+        attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=mask)
+        attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+        return self.o_proj(attn_output)
+
+    patched = 0
+    for name, module in model.named_modules():
+        if isinstance(module, Attention):
+            if module.is_selfattn or not _supports_async_overlap(getattr(module, "q_proj", None)):
+                continue
+            module.compute_qkv = types.MethodType(_async_cross_attn_compute_qkv, module)
+            patched += 1
+        elif include_llm_adapter and isinstance(module, LLMAdapterAttention):
+            if name.endswith(".self_attn") or not _supports_async_overlap(getattr(module, "q_proj", None)):
+                continue
+            module.forward = types.MethodType(_async_adapter_cross_attn_forward, module)
+            patched += 1
+    return patched
+
+
 def _make_anima_lora_tp_spec(
     sequence_parallel: bool = False,
     use_llm_adapter: bool = False,
@@ -523,6 +602,7 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
             tp_geometry = _infer_anima_tp_padding_geometry(dit, self.tp_groups.tp_size)
             fuse_qkv = not getattr(args, "no_fuse_qkv", False)
             fused_count = 0
+            async_overlap_count = 0
             if fuse_qkv:
                 fused_count = fuse_qkv_for_tp_lora(
                     dit,
@@ -538,6 +618,11 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
             )
             dit = wdp.apply_parallelism(dit, tp_spec, self.tp_config, self.tp_groups)
             self.tp_active = True
+            if getattr(args, "tp_async_overlap", False):
+                async_overlap_count = enable_tp_async_overlap(
+                    dit,
+                    include_llm_adapter=getattr(dit, "use_llm_adapter", False),
+                )
 
             # Attention modules still use the original n_heads after sharding.
             # Set each module to the padded local head count for this rank.
@@ -556,6 +641,7 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
                 f"TP sharding applied: tp_degree={self.tp_groups.tp_size}, sp={self.use_sp}, "
                 f"llm_adapter={getattr(dit, 'use_llm_adapter', False)}, "
                 f"fuse_qkv={fuse_qkv}, fused_attention_modules={fused_count}, "
+                f"async_overlap={getattr(args, 'tp_async_overlap', False)}, async_overlap_modules={async_overlap_count}, "
                 f"attention_modules_patched={n_attn_fixed}, "
                 f"replicated_context_no_input_grad={n_no_input_grad}, "
                 f"model_width={tp_geometry['model_channels']}->{tp_geometry['padded_width']}, "
@@ -566,7 +652,8 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
                 args,
                 f"startup backend={dist.get_backend()} tp_degree={self.tp_groups.tp_size} sp={self.use_sp} "
                 f"llm_adapter={getattr(dit, 'use_llm_adapter', False)} fuse_qkv={fuse_qkv} "
-                f"fused_attention_modules={fused_count} attention_modules_patched={n_attn_fixed} "
+                f"fused_attention_modules={fused_count} async_overlap={getattr(args, 'tp_async_overlap', False)} "
+                f"async_overlap_modules={async_overlap_count} attention_modules_patched={n_attn_fixed} "
                 f"replicated_context_no_input_grad={n_no_input_grad} "
                 f"model_width={tp_geometry['model_channels']} padded_width={tp_geometry['padded_width']} "
                 f"local_width={tp_geometry['local_width']} local_heads={tp_geometry['local_heads']} "
@@ -753,6 +840,16 @@ class AnimaNetworkTrainerTPSP(AnimaNetworkTrainer):
                 batch["text_encoder_outputs_list"] = [
                     self._broadcast_tensor(te, tp_group, dev) for te in te_list
                 ]
+            else:
+                # No TE cache: text conditioning is rebuilt from input_ids_list.
+                # Broadcast it too so all TP ranks encode the SAME prompts as the
+                # rank-0 latents batch. Without this, q comes from the synced
+                # latent batch while k/v may come from a different local text batch.
+                ids_list = batch.get("input_ids_list", None)
+                if ids_list is not None:
+                    batch["input_ids_list"] = [
+                        self._broadcast_tensor(ids, tp_group, dev) for ids in ids_list
+                    ]
 
             # Alpha masks (optional)
             if "alpha_masks" in batch and batch["alpha_masks"] is not None:
@@ -1170,6 +1267,10 @@ def setup_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no_fuse_qkv", action="store_true",
         help="Disable internal fused QKV/KV projections for TP/SP debugging.",
+    )
+    parser.add_argument(
+        "--tp_async_overlap", action="store_true",
+        help="Enable conservative async overlap for TP/SP cross-attention Q gather.",
     )
     return parser
 
