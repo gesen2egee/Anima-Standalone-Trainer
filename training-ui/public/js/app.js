@@ -2762,10 +2762,6 @@ document.addEventListener("DOMContentLoaded", () => {
       reconcileFSDPConflicts();
     });
   }
-  const tpBackendSel = $("cfg-tp-backend");
-  if (tpBackendSel) tpBackendSel.addEventListener("change", updateCudaDirectForTpSp);
-  const spToggleCb = $("cfg-sequence-parallel");
-  if (spToggleCb) spToggleCb.addEventListener("change", updateCudaDirectForTpSp);
   // fsdpToggle is a hidden input
   if (cudaDirectToggle) {
     cudaDirectToggle.addEventListener("change", reconcileFSDPConflicts);
