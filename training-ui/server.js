@@ -1460,6 +1460,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         } else if (mergedConfig.training_arguments) {
             delete mergedConfig.training_arguments.no_fuse_qkv;
             delete mergedConfig.training_arguments.tp_async_overlap;
+            delete mergedConfig.training_arguments.tp_backend;
         }
 
         // Convert Windows paths to WSL paths when running under WSL
@@ -1881,8 +1882,13 @@ function getCpuUsagePct() {
     return Math.round((1 - idleDelta / totalDelta) * 100);
 }
 
+let cpuTempPending = false;
+
 function getCpuTemp() {
+    if (cpuTempPending) return Promise.resolve(null);
+    cpuTempPending = true;
     return new Promise((resolve) => {
+        const done = (val) => { cpuTempPending = false; resolve(val); };
         if (isWindows) {
             // Query WMI thermal zone (returns tenths of Kelvin)
             const proc = spawn('powershell', [
@@ -1892,18 +1898,18 @@ function getCpuTemp() {
             let out = '';
             proc.stdout.on('data', d => out += d);
             proc.on('close', (code) => {
-                if (code !== 0 || !out.trim()) return resolve(null);
+                if (code !== 0 || !out.trim()) return done(null);
                 try {
                     // Average across all zones, convert tenths-of-Kelvin → Celsius
                     const vals = out.trim().split('\n')
                         .map(l => parseFloat(l.trim()))
                         .filter(v => !isNaN(v) && v > 0);
-                    if (!vals.length) return resolve(null);
+                    if (!vals.length) return done(null);
                     const avgCelsius = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length / 10 - 273.15);
-                    resolve(avgCelsius);
-                } catch (e) { resolve(null); }
+                    done(avgCelsius);
+                } catch (e) { done(null); }
             });
-            proc.on('error', () => resolve(null));
+            proc.on('error', () => done(null));
         } else {
             // Linux: read from /sys/class/thermal
             const proc = spawn('bash', ['-c',
@@ -1913,9 +1919,9 @@ function getCpuTemp() {
             proc.stdout.on('data', d => out += d);
             proc.on('close', () => {
                 const val = parseFloat(out.trim());
-                resolve(isNaN(val) ? null : Math.round(val / 1000));
+                done(isNaN(val) ? null : Math.round(val / 1000));
             });
-            proc.on('error', () => resolve(null));
+            proc.on('error', () => done(null));
         }
     });
 }

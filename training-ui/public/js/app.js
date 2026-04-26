@@ -2615,6 +2615,23 @@ function applyMultiGpuMode(mode) {
   // Keep hidden checkbox in sync so reconcileFSDPConflicts still works
   const fsdpToggle = $("cfg-use-fsdp");
   if (fsdpToggle) fsdpToggle.checked = (mode === "fsdp" || mode === "fsdp2");
+
+  updateCudaDirectForTpSp();
+}
+
+function updateCudaDirectForTpSp() {
+  const cudaGroup  = $("group-cuda-direct");
+  const cudaToggle = $("cfg-use-cuda-direct");
+  if (!cudaGroup || !cudaToggle) return;
+
+  const mode      = $("cfg-multigpu-mode")?.value;
+  const tpBackend = $("cfg-tp-backend")?.value;
+  const spChecked = !!$("cfg-sequence-parallel")?.checked;
+  const isTpSp    = mode === "tp_sp" || tpBackend === "tp_sp" || spChecked;
+
+  cudaGroup.classList.toggle("disabled-section", isTpSp);
+  cudaToggle.disabled = isTpSp;
+  if (isTpSp) cudaToggle.checked = false;
 }
 
 function updateMultiGPUUI() {
@@ -2747,6 +2764,10 @@ document.addEventListener("DOMContentLoaded", () => {
       reconcileFSDPConflicts();
     });
   }
+  const tpBackendSel = $("cfg-tp-backend");
+  if (tpBackendSel) tpBackendSel.addEventListener("change", updateCudaDirectForTpSp);
+  const spToggleCb = $("cfg-sequence-parallel");
+  if (spToggleCb) spToggleCb.addEventListener("change", updateCudaDirectForTpSp);
   // fsdpToggle is a hidden input
   if (cudaDirectToggle) {
     cudaDirectToggle.addEventListener("change", reconcileFSDPConflicts);

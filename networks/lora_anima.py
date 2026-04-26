@@ -1055,7 +1055,7 @@ class LoRANetwork(torch.nn.Module):
                 padded_part = int(getattr(org_module, "padded_part_size", 0) or 0)
                 for up in lora.lora_up:
                     w = up.weight.data
-                    if padded_part:
+                    if padded_part and w.shape[0] < padded_part:
                         w = self._pad_tensor_dim(w, 0, padded_part)
                     chunk = w.shape[0] // tp
                     up.weight.data = w[rank * chunk:(rank + 1) * chunk].contiguous()
@@ -1066,7 +1066,8 @@ class LoRANetwork(torch.nn.Module):
                 w = lora.lora_up.weight.data          # (D_out, lora_dim) after gather
                 org_module = lora.org_module_ref[0]
                 padded_out = int(getattr(org_module, "padded_out_features", w.shape[0]))
-                w = self._pad_tensor_dim(w, 0, padded_out)
+                if w.shape[0] < padded_out:
+                    w = self._pad_tensor_dim(w, 0, padded_out)
                 chunk = padded_out // tp
                 lora.lora_up.weight.data = w[rank * chunk:(rank + 1) * chunk].contiguous()
 
@@ -1076,7 +1077,8 @@ class LoRANetwork(torch.nn.Module):
                 w = lora.lora_down.weight.data        # (lora_dim, D_in) after gather
                 org_module = lora.org_module_ref[0]
                 padded_in = int(getattr(org_module, "padded_in_features", w.shape[1]))
-                w = self._pad_tensor_dim(w, 1, padded_in)
+                if w.shape[1] < padded_in:
+                    w = self._pad_tensor_dim(w, 1, padded_in)
                 chunk = padded_in // tp
                 lora.lora_down.weight.data = w[:, rank * chunk:(rank + 1) * chunk].contiguous()
 
