@@ -40,6 +40,64 @@ from library.config_util import (
 from library.custom_train_functions import apply_masked_loss, add_custom_train_arguments
 
 
+def _parse_resolution_schedule(schedule_str: str, total_steps: int):
+    """Parse "RES:FRAC,RES:FRAC,..." into [(resolution, step_end), ...].
+
+    The last phase absorbs any rounding remainder so step_end[-1] == total_steps.
+    Example: "512:0.4,1024:0.3,1536:0.3" with 1000 steps → [(512,400),(1024,700),(1536,1000)]
+    """
+    phases = []
+    parts = [p.strip() for p in schedule_str.split(",")]
+    accumulated = 0
+    for i, part in enumerate(parts):
+        reso_str, frac_str = part.split(":")
+        reso = int(reso_str.strip())
+        frac = float(frac_str.strip())
+        step_end = total_steps if i == len(parts) - 1 else accumulated + round(frac * total_steps)
+        phases.append((reso, step_end))
+        accumulated = step_end
+    return phases
+
+
+def _build_phase_dataset_group(args, phase_reso, blueprint_generator, use_user_config, use_dreambooth_method, user_config):
+    """Build a DatasetGroup for one resolution phase of the progressive schedule.
+
+    When the dataset TOML has per-resolution [[datasets]] sections, only the matching
+    section is kept (preserving its batch_size). Otherwise all sections are overridden.
+    """
+    phase_args = copy.copy(args)
+    phase_args.resolution = phase_reso
+    phase_args.max_bucket_reso = phase_reso
+
+    phase_user_config = copy.deepcopy(user_config)
+
+    def _reso_matches(ds_cfg):
+        r = ds_cfg.get("resolution")
+        if r is None:
+            return False
+        if isinstance(r, (list, tuple)):
+            return len(r) == 2 and int(r[0]) == phase_reso and int(r[1]) == phase_reso
+        return int(r) == phase_reso
+
+    if use_user_config:
+        datasets = phase_user_config.get("datasets", [])
+        matching = [ds for ds in datasets if _reso_matches(ds)]
+        if matching:
+            phase_user_config["datasets"] = matching
+        else:
+            for ds_cfg in datasets:
+                ds_cfg["resolution"] = phase_reso
+                ds_cfg["max_bucket_reso"] = phase_reso
+    else:
+        for ds_cfg in phase_user_config.get("datasets", []):
+            ds_cfg["resolution"] = phase_reso
+            ds_cfg["max_bucket_reso"] = phase_reso
+
+    blueprint = blueprint_generator.generate(phase_user_config, phase_args)
+    phase_dataset_group, _ = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
+    return phase_dataset_group
+
+
 class AnimaTrainer:
     """Class-based wrapper around the Anima full-finetune training loop.
 
@@ -62,7 +120,7 @@ class AnimaTrainer:
 
     def prepare_dit_with_accelerator(self, accelerator, dit, is_swapping_blocks):
         """Wrap accelerator.prepare(dit).  Override to skip DDP (e.g. for TP)."""
-        dit = accelerator.prepare(dit, device_placement=[not is_swapping_blocks])
+        dit = accelerator.prepare(dit)
         if is_swapping_blocks:
             accelerator.unwrap_model(dit).move_to_device_except_swap_blocks(accelerator.device)
         return dit
@@ -86,6 +144,28 @@ class AnimaTrainer:
     def on_cleanup(self):
         """Called at the very end after accelerator is deleted."""
         pass
+
+    def pre_process_batch(self, batch: dict, accelerator) -> dict:
+        """Called at the start of each training step before latent extraction.
+        Override to broadcast batch tensors across TP ranks."""
+        return batch
+
+    @staticmethod
+    def _ensure_optimizer_param_devices_match_grads(optimizer) -> int:
+        """Move swapped/offloaded params back to their grad device before optimizer.step()."""
+        moved = 0
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                if p is None or p.grad is None:
+                    continue
+                grad_device = p.grad.device
+                if p.device != grad_device:
+                    p.data = p.data.to(device=grad_device, non_blocking=True)
+                    for key, state_value in optimizer.state.get(p, {}).items():
+                        if torch.is_tensor(state_value) and state_value.device != grad_device:
+                            optimizer.state[p][key] = state_value.to(device=grad_device, non_blocking=True)
+                    moved += 1
+        return moved
 
     # ------------------------------------------------------------------
     # Main training method
@@ -194,6 +274,21 @@ class AnimaTrainer:
         else:
             train_dataset_group = train_util.load_arbitrary_dataset(args)
             val_dataset_group = None
+
+        # Build phase dataset groups for progressive resolution schedule.
+        # Only supported when using the standard dataset config path (not arbitrary dataset classes).
+        _phase_dataset_groups = []
+        if getattr(args, "resolution_schedule", None) and args.dataset_class is None:
+            _use_user_cfg = args.dataset_config is not None
+            for _ph_reso, _ in [(int(p.split(":")[0].strip()), float(p.split(":")[1].strip()))
+                                 for p in args.resolution_schedule.split(",")]:
+                logger.info(f"[resolution_schedule] building dataset for {_ph_reso}px phase")
+                _phase_dataset_groups.append(
+                    _build_phase_dataset_group(
+                        args, _ph_reso, blueprint_generator,
+                        _use_user_cfg, use_dreambooth_method, user_config,
+                    )
+                )
 
         current_epoch = Value("i", 0)
         current_step = Value("i", 0)
@@ -340,6 +435,14 @@ class AnimaTrainer:
 
             accelerator.wait_for_everyone()
 
+            if _phase_dataset_groups:
+                _te_strat = strategy_base.TextEncoderOutputsCachingStrategy.get_strategy()
+                if _te_strat is not None and hasattr(_te_strat, "get_outputs_npz_path"):
+                    for _pds in _phase_dataset_groups:
+                        for _ds in _pds.datasets:
+                            for _info in _ds.image_data.values():
+                                _info.text_encoder_outputs_npz = _te_strat.get_outputs_npz_path(_info.absolute_path)
+
             # free text encoder memory
             qwen3_text_encoder = None
             clean_memory_on_device(accelerator.device)
@@ -354,6 +457,10 @@ class AnimaTrainer:
             vae.eval()
 
             train_dataset_group.new_cache_latents(vae, accelerator)
+
+            for _pds in _phase_dataset_groups:
+                logger.info(f"[resolution_schedule] caching latents for phase (reso={_pds.datasets[0].width})")
+                _pds.new_cache_latents(vae, accelerator)
 
             vae.to("cpu")
             clean_memory_on_device(accelerator.device)
@@ -402,6 +509,11 @@ class AnimaTrainer:
 
         # Setup optimizer with parameter groups
         if train_dit:
+            # LLM adapter is pre-trained; freeze by default unless explicitly given a non-zero LR.
+            # Leaving it trainable causes DDP static-graph violations when batches lack t5_input_ids.
+            _llm_adapter_lr = getattr(args, 'llm_adapter_lr', None)
+            if _llm_adapter_lr is None:
+                _llm_adapter_lr = 0
             param_groups = anima_train_utils.get_anima_param_groups(
                 dit,
                 base_lr=args.learning_rate,
@@ -409,7 +521,7 @@ class AnimaTrainer:
                 cross_attn_lr=getattr(args, 'cross_attn_lr', None),
                 mlp_lr=getattr(args, 'mlp_lr', None),
                 mod_lr=getattr(args, 'mod_lr', None),
-                llm_adapter_lr=getattr(args, 'llm_adapter_lr', None),
+                llm_adapter_lr=_llm_adapter_lr,
             )
         else:
             param_groups = []
@@ -502,6 +614,25 @@ class AnimaTrainer:
             persistent_workers=args.persistent_data_loader_workers,
         )
 
+        # Build raw phase DataLoaders (prepared individually after accelerator.prepare)
+        _phase_dataloaders_raw = []
+        for _pds in _phase_dataset_groups:
+            _pds.set_current_strategies()
+            _phase_collator = train_util.collator_class(
+                current_epoch, current_step,
+                _pds if args.max_data_loader_n_workers == 0 else None,
+            )
+            _phase_dataloaders_raw.append(
+                torch.utils.data.DataLoader(
+                    _pds,
+                    batch_size=1,
+                    shuffle=not getattr(args, "disable_bucket_shuffle", False),
+                    collate_fn=_phase_collator,
+                    num_workers=n_workers,
+                    persistent_workers=args.persistent_data_loader_workers,
+                )
+            )
+
         # calculate training steps
         if args.max_train_epochs is not None:
             args.max_train_steps = args.max_train_epochs * math.ceil(
@@ -542,10 +673,32 @@ class AnimaTrainer:
                 ds_model, optimizer, train_dataloader, lr_scheduler
             )
             training_models = [ds_model]
+        elif getattr(accelerator, "is_fsdp2", False):
+            # FSDP2 requires model and optimizer in the same prepare() call so
+            # the optimizer parameters are re-wired after model sharding.
+            if not hasattr(dit, "_no_split_modules"):
+                dit._no_split_modules = []
+            dit, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                dit, optimizer, train_dataloader, lr_scheduler
+            )
         else:
             if train_dit:
                 dit = self.prepare_dit_with_accelerator(accelerator, dit, is_swapping_blocks)
             optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
+
+        # Prepare phase DataLoaders individually (each needs its own accelerate wrapping)
+        phase_dataloaders = [accelerator.prepare(dl) for dl in _phase_dataloaders_raw]
+
+        # Finalise phase step-ends now that max_train_steps is known
+        phases = []
+        if phase_dataloaders:
+            phases = _parse_resolution_schedule(args.resolution_schedule, args.max_train_steps)
+            assert len(phases) == len(phase_dataloaders), "resolution_schedule phase count mismatch"
+            accelerator.print("[resolution_schedule] phases:")
+            prev = 0
+            for _ph_reso, _ph_end in phases:
+                accelerator.print(f"  {_ph_reso}px: steps {prev}–{_ph_end - 1}  ({_ph_end - prev} steps)")
+                prev = _ph_end
 
         # Move non-training models back to GPU
         if not args.cache_text_encoder_outputs and qwen3_text_encoder is not None:
@@ -712,8 +865,28 @@ class AnimaTrainer:
 
         loss_recorder = train_util.LossRecorder()
         profiler = StepProfiler(accelerator, args.step_profile, getattr(args, "profile_microbatch", False))
+
+        # Phase state for resolution schedule (all variables are no-ops when phases is empty)
+        _ph_idx = 0
+        _ph_dl = phase_dataloaders[0] if phase_dataloaders else None
+        _ph_iter = iter(_ph_dl) if _ph_dl is not None else None
+
+        # Fast-forward phase state to the correct phase when resuming mid-run
+        if phase_dataloaders and global_step > 0:
+            _new_idx = len(phases) - 1
+            for _i, (_, _end) in enumerate(phases):
+                if global_step < _end:
+                    _new_idx = _i
+                    break
+            _ph_idx = _new_idx
+            _ph_dl = phase_dataloaders[_ph_idx]
+            _ph_iter = iter(_ph_dl)
+
         epoch = 0
         for epoch in range(epoch_to_start, num_train_epochs):
+            if phase_dataloaders and global_step >= args.max_train_steps:
+                break
+
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
             current_epoch.value = epoch + 1
 
@@ -722,6 +895,29 @@ class AnimaTrainer:
 
             for step, batch in enumerate(train_dataloader):
                 current_step.value = global_step
+
+                # Resolution schedule: override batch from the appropriate phase DataLoader.
+                # train_dataloader still drives epoch length and save/sample triggers.
+                if phase_dataloaders:
+                    _new_idx = len(phases) - 1
+                    for _i, (_, _end) in enumerate(phases):
+                        if global_step < _end:
+                            _new_idx = _i
+                            break
+                    if _new_idx != _ph_idx:
+                        _ph_idx = _new_idx
+                        _ph_dl = phase_dataloaders[_ph_idx]
+                        _ph_iter = iter(_ph_dl)
+                        accelerator.print(
+                            f"\n[resolution_schedule] phase {_ph_idx + 1}/{len(phases)}: "
+                            f"{phases[_ph_idx][0]}px  (step {global_step})"
+                        )
+                    batch = next(_ph_iter, None)
+                    if batch is None:
+                        _ph_iter = iter(_ph_dl)
+                        batch = next(_ph_iter)
+
+                batch = self.pre_process_batch(batch, accelerator)
 
                 if args.blockwise_fused_optimizers:
                     optimizer_hooked_count = {i: 0 for i in range(len(optimizers))}  # reset counter for each step
@@ -840,6 +1036,19 @@ class AnimaTrainer:
                             for m in training_models:
                                 params_to_clip.extend(m.parameters())
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+
+                        if (
+                            args.blocks_to_swap
+                            or getattr(args, "cpu_offload_checkpointing", False)
+                            or getattr(args, "unsloth_offload_checkpointing", False)
+                        ):
+                            moved_params = self._ensure_optimizer_param_devices_match_grads(optimizer)
+                            if moved_params > 0 and not getattr(self, "_optimizer_device_fix_warned", False):
+                                logger.warning(
+                                    f"Moved {moved_params} trainable parameters back to their grad device before optimizer.step() "
+                                    f"to support block swap / offload with the current optimizer."
+                                )
+                                self._optimizer_device_fix_warned = True
 
                         optimizer.step()
                         lr_scheduler.step()
@@ -994,6 +1203,16 @@ def setup_parser() -> argparse.ArgumentParser:
         "--skip_latents_validity_check",
         action="store_true",
         help="[Deprecated] use 'skip_cache_check' instead",
+    )
+    parser.add_argument(
+        "--resolution_schedule",
+        type=str,
+        default=None,
+        help=(
+            "Progressive resolution schedule: 'RES:FRAC,RES:FRAC,...' "
+            "e.g. '512:0.4,1024:0.3,1536:0.3'. Each phase uses the given resolution "
+            "for the specified fraction of total steps. Requires max_train_steps."
+        ),
     )
 
     return parser
