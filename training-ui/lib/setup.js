@@ -16,7 +16,7 @@ function getPythonCmd() {
     const venvPath = path.join(ROOT_DIR, 'venv');
     if (process.platform === 'win32') {
         const p = path.join(venvPath, 'Scripts', 'python.exe');
-        return fs.existsSync(p) ? `"${p}"` : 'python';
+        return fs.existsSync(p) ? p : 'python';
     } else {
         const p = path.join(venvPath, 'bin', 'python');
         return fs.existsSync(p) ? p : 'python3';
@@ -26,9 +26,9 @@ function getPythonCmd() {
 function canImport(pythonCmd, moduleName) {
     try {
         if (process.platform === 'win32') {
-            execWindowsPowerShellSync(`${pythonCmd} -c "import ${moduleName}"`, { stdio: 'pipe' });
+            execWindowsPowerShellSync(`& "${pythonCmd}" -c 'import ${moduleName}'`, { stdio: 'pipe' });
         } else {
-            execSync(`${pythonCmd} -c "import ${moduleName}"`, { stdio: 'pipe' });
+            execSync(`"${pythonCmd}" -c "import ${moduleName}"`, { stdio: 'pipe' });
         }
         return true;
     } catch {
@@ -38,9 +38,9 @@ function canImport(pythonCmd, moduleName) {
 
 function pipInstall(pythonCmd, pkgPath) {
     if (process.platform === 'win32') {
-        execWindowsPowerShellSync(`${pythonCmd} -m pip install --no-deps -e "${pkgPath}"`, { stdio: 'pipe' });
+        execWindowsPowerShellSync(`& "${pythonCmd}" -m pip install --no-deps -e "${pkgPath}"`, { stdio: 'pipe' });
     } else {
-        execSync(`${pythonCmd} -m pip install --no-deps -e '${pkgPath}'`, { stdio: 'pipe' });
+        execSync(`"${pythonCmd}" -m pip install --no-deps -e '${pkgPath}'`, { stdio: 'pipe' });
     }
 }
 
