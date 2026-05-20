@@ -788,8 +788,7 @@ class PatchEmbed(nn.Module):
         return x
 
 
-# torch>=2.4 added a device_type arg to is_autocast_enabled; older builds (see
-# README's torch<=2.3 + cuda<=12.4 multi-GPU note) only accept zero-arg.
+# torch>=2.4 added device_type arg; older builds only have zero-arg.
 try:
     torch.is_autocast_enabled("cuda")
     _is_autocast_enabled_for_device = torch.is_autocast_enabled
@@ -799,13 +798,8 @@ except TypeError:
 
 
 def _is_forward_patched(module: nn.Module) -> bool:
-    """True if module.forward has been overridden on the instance or subclass.
-
-    networks/lora.py installs LoRA via instance-level monkey-patch
-    (org_module.forward = self.forward, lands in __dict__). Subclass-style
-    LoRA replacements would override forward at the class level. Bypassing
-    either with F.linear would silently drop LoRA deltas.
-    """
+    """True if module.forward is overridden (instance dict or subclass);
+    bypassing it with F.linear would drop e.g. LoRA deltas."""
     if "forward" in module.__dict__:
         return True
     return type(module).forward is not nn.Linear.forward
@@ -814,13 +808,8 @@ def _is_forward_patched(module: nn.Module) -> bool:
 def _run_adaln_modulation_fp32(modulation: nn.Sequential, x: torch.Tensor) -> torch.Tensor:
     """Run an AdaLN modulation Sequential, returning fp32.
 
-    Hybrid: for Linears with stock forward, run F.linear with fp32 inputs and
-    weights so the matmul executes in real fp32 -- the upstream stability
-    fix's intent (its torch.autocast(dtype=fp32) is a no-op on CUDA). For
-    Linears whose forward is overridden (e.g. LoRA from networks/lora.py),
-    go through module.forward instead; the matmul stays in weight dtype and
-    we accept the overflow risk, because bypassing forward would drop the
-    LoRA delta. Forward/pre hooks on the stock-forward branch are not fired.
+    Stock Linears: F.linear with fp32 weights -> real fp32 matmul. Patched
+    Linears (LoRA): go through forward to keep the delta; matmul stays fp16.
     """
     out = x
     for module in modulation:
@@ -846,10 +835,8 @@ def _modulate_adaln(
 ) -> Tuple[torch.Tensor, ...]:
     """Run an AdaLN modulation, optionally in fp32, and chunk the result.
 
-    do_fp32=True must only be set when an outer autocast(fp16) is active to
-    downcast the chunked result back; otherwise fp32 shifts/scales would hit
-    fp16 Linear weights and crash. lora_addend, if given, must already match
-    the modulation output dtype (fp32 when do_fp32, else module's dtype).
+    do_fp32 needs an outer autocast(fp16) to downcast back; lora_addend, if
+    given, must already match the modulation output dtype.
     """
     if do_fp32:
         with torch.amp.autocast(device_type=emb.device.type, enabled=False):
@@ -916,8 +903,7 @@ class FinalLayer(nn.Module):
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
         use_fp32: bool = False,
     ):
-        # fp32 modulation only when an outer autocast(fp16) is active to downcast
-        # back; do_sample disables autocast and would crash without this gate.
+        # Skip fp32 when no outer autocast; do_sample disables it and would crash.
         do_fp32 = use_fp32 and _is_autocast_enabled_for_device(x_B_T_H_W_D.device.type)
 
         if self.use_adaln_lora:
@@ -1050,7 +1036,6 @@ class Block(nn.Module):
         do_fp32 = use_fp32 and _is_autocast_enabled_for_device(x_B_T_H_W_D.device.type)
 
         if do_fp32:
-            # Residual stays fp32 across sublayers; autocast downcasts inside each one.
             x_B_T_H_W_D = x_B_T_H_W_D.float()
 
         if extra_per_block_pos_emb is not None:
@@ -1532,7 +1517,7 @@ class MiniTrainDIT(nn.Module):
                     block_kwargs["extra_per_block_pos_emb"], _sp_group, seq_dim=2
                 )
 
-        # Block fp32 promotion only for fp16; bf16 has enough range without it.
+        # Only promote fp16; bf16 has range.
         use_fp32 = x_B_T_H_W_D.dtype == torch.float16
 
         for block_idx, block in enumerate(self.blocks):
