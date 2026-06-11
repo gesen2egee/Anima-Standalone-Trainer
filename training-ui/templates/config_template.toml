@@ -8,12 +8,13 @@ max_train_epochs = 15
 save_every_n_epochs = 1
 log_with = "tensorboard"
 learning_rate = 1e-4
-text_encoder_lr = 5e-5
-optimizer_type = "AdamW8bit"
-optimizer_args = [ "weight_decay=0.01",]
+text_encoder_lr = 0
+optimizer_type = "pytorch_optimizer.CAME"
+optimizer_args = [ "weight_decay=0.1",]
 lr_scheduler = "cosine"
 lr_warmup_steps = 0
 mixed_precision = "bf16"
+save_precision = "bf16"
 gradient_checkpointing = true
 gradient_accumulation_steps = 1
 flash_attn = false
@@ -26,12 +27,17 @@ cache_text_encoder_outputs_to_disk = true
 sample_every_n_epochs = 1
 
 [network_arguments]
-network_module = "networks.lora_anima"
+network_module = "networks.cdka"
 network_dim = 16
 network_alpha = 16
 network_train_unet_only = true
+network_args = [
+  'exclude_patterns=[".*"]',
+  'include_patterns=["blocks\\.1[2-8]\\.(self_attn|cross_attn)\\.(v_proj|output_proj)"]',
+  'allora=True'
+]
 
 [anima_arguments]
 timestep_sample_method = "logit_normal"
-discrete_flow_shift = 3.0
+discrete_flow_shift = 1.0
 weighting_scheme = "logit_normal"

@@ -2,7 +2,7 @@
   "architectures": {
     "anima": {
       "display_name": "Anima",
-      "network_modules": ["networks.lora_anima"],
+      "network_modules": ["networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "anima_train.py",
         "train_network": "anima_train_network.py",
@@ -42,7 +42,7 @@
     },
     "lumina": {
       "display_name": "Lumina",
-      "network_modules": ["networks.lora_lumina"],
+      "network_modules": ["networks.lora_lumina", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "lumina_train.py",
         "train_network": "lumina_train_network.py",

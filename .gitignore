@@ -51,3 +51,10 @@ training-ui/_merged_config.toml
 # OS
 .DS_Store
 Thumbs.db
+
+# Project Tasks and Plans
+tasks/
+
+# User Jobs
+training-ui/jobs/my_job1/
+

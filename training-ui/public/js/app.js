@@ -558,13 +558,13 @@ function populateDataset(dataset) {
   currentSubsets = subsetsRaw.map((s) => ({
     image_dir: s.image_dir || "",
     num_repeats: s.num_repeats ?? 1,
-    keep_tokens: s.keep_tokens ?? 1,
+    keep_tokens: s.keep_tokens ?? 5,
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
-    caption_dropout_rate: s.caption_dropout_rate ?? 0.05,
+    caption_dropout_rate: s.caption_dropout_rate ?? 0.0,
     caption_tag_dropout_rate: s.caption_tag_dropout_rate ?? 0.0,
     caption_dropout_every_n_epochs: s.caption_dropout_every_n_epochs ?? 0,
-    shuffle_caption: s.shuffle_caption ?? false,
+    shuffle_caption: s.shuffle_caption ?? true,
     is_reg: s.is_reg ?? false,
   }));
   // Edge case: if empty, force at least 1
@@ -878,13 +878,13 @@ function addSubset(shouldRender = true) {
   currentSubsets.push({
     image_dir: "",
     num_repeats: 1,
-    keep_tokens: 1,
+    keep_tokens: 5,
     flip_aug: false,
     caption_prefix: "",
-    caption_dropout_rate: 0.05,
+    caption_dropout_rate: 0.0,
     caption_tag_dropout_rate: 0.0,
     caption_dropout_every_n_epochs: 0,
-    shuffle_caption: false,
+    shuffle_caption: true,
     is_reg: false,
     collapsed: false,
   });

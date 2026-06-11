@@ -13,10 +13,10 @@ caption_extension = ".txt"
   [[datasets.subsets]]
   image_dir = ""
   num_repeats = 1
-  keep_tokens = 1
+  keep_tokens = 5
   flip_aug = false
   caption_prefix = ""
-  shuffle_caption = false
+  shuffle_caption = true
   caption_tag_dropout_rate = 0.0
-  caption_dropout_rate = 0.05
+  caption_dropout_rate = 0.0
   caption_dropout_every_n_epochs = 0
