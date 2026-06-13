@@ -222,6 +222,11 @@ const UI_TRANSLATIONS = {
   "Please enter a directory path first": { "zh-TW": "請先輸入資料夾路徑", "zh-CN": "请先输入文件夹路径" },
 };
 
+const NETWORK_MODULE_PRESETS = {
+  "networks.krona": { learningRate: "5e-4" },
+  "networks.cdka": { learningRate: "1e-4" },
+};
+
 Object.assign(UI_TRANSLATIONS, {
   "Anima LoRA Training": { "zh-TW": "Anima LoRA 訓練", "zh-CN": "Anima LoRA 训练" },
   "Duration Unit": { "zh-TW": "訓練長度單位", "zh-CN": "训练时长单位" },
@@ -836,6 +841,9 @@ function setLanguage(lang) {
 function refreshI18n() {
   if (currentLanguage !== "en") applyI18n();
 }
+function getNetworkModuleLearningRate(moduleName) {
+  return NETWORK_MODULE_PRESETS[moduleName]?.learningRate || "5e-4";
+}
 // ==========================================
 //  API
 // ==========================================
@@ -1194,8 +1202,9 @@ function populateConfig(config) {
   const t = config.training_arguments || {};
   const n = config.network_arguments || {};
   const a = config.anima_arguments || {};
+  const networkModule = n.network_module || "networks.krona";
   // Training
-  $("cfg-learning-rate").value = t.learning_rate || "1e-4";
+  $("cfg-learning-rate").value = t.learning_rate || getNetworkModuleLearningRate(networkModule);
   $("cfg-text-encoder-lr").value = t.text_encoder_lr ?? "0";
   $("cfg-optimizer").value = t.optimizer_type || "library.came.CAME";
   $("cfg-lr-scheduler").value = t.lr_scheduler || "constant_with_warmup";
@@ -1394,7 +1403,7 @@ function populateConfig(config) {
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
   updateTrainingTypeUI(trainingType);
-  $("cfg-network-module").value = n.network_module || "networks.krona";
+  $("cfg-network-module").value = networkModule;
   $("cfg-network-dim").value = n.network_dim ?? 16;
   $("cfg-network-alpha").value = n.network_alpha ?? 16;
   updateNetworkModuleUI();
@@ -2049,12 +2058,16 @@ function updateNetworkModuleUI() {
   const hidesRankAlpha = moduleName === "networks.cdka" || moduleName === "networks.krona";
   $("network-rank-alpha-row").classList.toggle("hidden", hidesRankAlpha);
 }
+function applyNetworkModulePreset(moduleName) {
+  $("cfg-learning-rate").value = getNetworkModuleLearningRate(moduleName);
+}
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
   checkDirty();
 });
 $("cfg-network-module").addEventListener("change", () => {
   updateNetworkModuleUI();
+  applyNetworkModulePreset($("cfg-network-module").value);
   checkDirty();
 });
 

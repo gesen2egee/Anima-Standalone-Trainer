@@ -316,7 +316,7 @@ function getDefaultConfig() {
         config: {
             training_arguments: {
                 output_name: 'my_anima_lora',
-                learning_rate: 5e-5,
+                learning_rate: 5e-4,
                 max_train_epochs: 20,
                 mixed_precision: 'bf16'
             },
@@ -328,6 +328,10 @@ function getDefaultConfig() {
         },
         useFallback: true
     };
+}
+
+function getNetworkModuleLearningRate(networkModule) {
+    return networkModule === 'networks.cdka' ? 1e-4 : 5e-4;
 }
 
 function getDefaultDataset() {
@@ -709,6 +713,7 @@ app.post('/api/jobs', (req, res) => {
         if (network_module && ['networks.krona', 'networks.cdka'].includes(network_module)) {
             config.network_arguments = config.network_arguments || {};
             config.network_arguments.network_module = network_module;
+            config.training_arguments.learning_rate = getNetworkModuleLearningRate(network_module);
         }
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
@@ -1538,15 +1543,38 @@ app.get('/api/jobs/:name/train/status', (req, res) => {
 const tbProcesses = new Map(); // jobName -> { process, port }
 let nextTbPort = 6006;
 
-app.post('/api/jobs/:name/tensorboard', (req, res) => {
+function getTensorBoardLogDir(jobPath) {
+    const mergedConfigPath = path.join(jobPath, '_merged_config.toml');
+    if (fs.existsSync(mergedConfigPath)) {
+        try {
+            const mergedConfig = TOML.parse(fs.readFileSync(mergedConfigPath, 'utf8'));
+            const configuredDir = mergedConfig.training_arguments?.logging_dir;
+            if (configuredDir && String(configuredDir).trim()) {
+                return toNativePath(stripQuotes(String(configuredDir).trim()));
+            }
+        } catch (err) {
+            console.warn(`[TensorBoard] Failed to read merged config logging_dir: ${err.message}`);
+        }
+    }
+
+    return path.join(jobPath, 'output');
+}
+
+app.post('/api/jobs/:name/tensorboard', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
         const jobPath = getJobPath(jobName);
-        const logsDir = path.join(jobPath, 'logs');
+        const logsDir = getTensorBoardLogDir(jobPath);
 
         if (tbProcesses.has(jobName)) {
             const tb = tbProcesses.get(jobName);
-            return res.json({ success: true, port: tb.port, url: `http://localhost:${tb.port}` });
+            if (path.resolve(tb.logDir || '') === path.resolve(logsDir)) {
+                return res.json({ success: true, port: tb.port, url: `http://localhost:${tb.port}`, logDir: tb.logDir });
+            }
+            if (tb.pid) {
+                await killProcess(tb.pid).catch(() => {});
+            }
+            tbProcesses.delete(jobName);
         }
 
         if (!fs.existsSync(logsDir)) {
@@ -1569,14 +1597,16 @@ app.post('/api/jobs/:name/tensorboard', (req, res) => {
             console.log(`[TensorBoard/${jobName}] ${text.trim()}`);
         });
 
+        console.log(`[TensorBoard/${jobName}] logdir=${logsDir}`);
+
         proc.on('close', (code) => {
             console.log(`[TensorBoard/${jobName}] Exited with code ${code}`);
             tbProcesses.delete(jobName);
         });
 
-        tbProcesses.set(jobName, { process: proc, port, pid: proc.pid });
+        tbProcesses.set(jobName, { process: proc, port, pid: proc.pid, logDir: logsDir });
 
-        res.json({ success: true, port, url: `http://localhost:${port}` });
+        res.json({ success: true, port, url: `http://localhost:${port}`, logDir: logsDir });
 
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1589,7 +1619,7 @@ app.get('/api/jobs/:name/tensorboard/status', (req, res) => {
         const jobName = sanitizeName(req.params.name);
         const tb = tbProcesses.get(jobName);
         if (tb) {
-            res.json({ running: true, port: tb.port, url: `http://localhost:${tb.port}` });
+            res.json({ running: true, port: tb.port, url: `http://localhost:${tb.port}`, logDir: tb.logDir });
         } else {
             res.json({ running: false });
         }
