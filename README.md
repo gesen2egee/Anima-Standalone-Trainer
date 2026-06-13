@@ -168,8 +168,8 @@ Give unrestricted script access to powershell so venv can work:
 Open a regular Powershell terminal and type the following inside:
 
 ```powershell
-git clone https://github.com/kohya-ss/sd-scripts.git
-cd sd-scripts
+git clone https://github.com/gesen2egee/Anima-Standalone-Trainer.git
+cd Anima-Standalone-Trainer
 
 python -m venv venv
 .\venv\Scripts\activate
