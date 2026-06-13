@@ -321,7 +321,7 @@ function getDefaultConfig() {
                 mixed_precision: 'bf16'
             },
             network_arguments: {
-                network_module: 'networks.lora_anima',
+                network_module: 'networks.krona',
                 network_dim: 16,
                 network_alpha: 16
             }

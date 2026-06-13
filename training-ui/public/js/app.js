@@ -1394,7 +1394,7 @@ function populateConfig(config) {
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
   updateTrainingTypeUI(trainingType);
-  $("cfg-network-module").value = n.network_module || "networks.lora_anima";
+  $("cfg-network-module").value = n.network_module || "networks.krona";
   $("cfg-network-dim").value = n.network_dim ?? 16;
   $("cfg-network-alpha").value = n.network_alpha ?? 16;
   updateNetworkModuleUI();
