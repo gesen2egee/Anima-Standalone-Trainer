@@ -123,7 +123,7 @@ const UI_TRANSLATIONS = {
   "+ Add Dataset": { "zh-TW": "+ 新增資料集", "zh-CN": "+ 新增数据集" },
   "Training Type": { "zh-TW": "訓練類型", "zh-CN": "训练类型" },
   "LoRA Configuration": { "zh-TW": "LoRA 設定", "zh-CN": "LoRA 设置" },
-  "Network Module": { "zh-TW": "Network Module", "zh-CN": "Network Module" },
+  "Network Module": { "zh-TW": "網路模組", "zh-CN": "网络模块" },
   "Network Dim (Rank)": { "zh-TW": "Network Dim (Rank)", "zh-CN": "Network Dim (Rank)" },
   "Network Alpha": { "zh-TW": "Network Alpha", "zh-CN": "Network Alpha" },
   "Train UNet Only": { "zh-TW": "只訓練 UNet", "zh-CN": "只训练 UNet" },
@@ -3571,6 +3571,7 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-name").value = defaultName;
   $("new-job-output-name").value = defaultName;
   $("new-job-output-name").dataset.autoValue = defaultName;
+  $("new-job-network-module").value = "networks.krona";
   $("new-job-image-dir").value = "";
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
@@ -3592,6 +3593,7 @@ $("btn-create-job").addEventListener("click", async () => {
     body: {
       name,
       output_name: $("new-job-output-name").value.trim(),
+      network_module: $("new-job-network-module").value,
       image_dir: $("new-job-image-dir").value.trim(),
       max_train_steps: safeInt($("new-job-max-steps").value, 3000),
     },

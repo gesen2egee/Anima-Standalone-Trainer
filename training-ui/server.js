@@ -679,7 +679,7 @@ app.get('/api/jobs', (req, res) => {
 // Create new job
 app.post('/api/jobs', (req, res) => {
     try {
-        const { name, output_name, image_dir, max_train_steps } = req.body;
+        const { name, output_name, network_module, image_dir, max_train_steps } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
 
         const safeName = sanitizeName(name);
@@ -705,6 +705,10 @@ app.post('/api/jobs', (req, res) => {
         if (Number.isFinite(parsedSteps) && parsedSteps > 0) {
             config.training_arguments.max_train_steps = parsedSteps;
             delete config.training_arguments.max_train_epochs;
+        }
+        if (network_module && ['networks.krona', 'networks.cdka'].includes(network_module)) {
+            config.network_arguments = config.network_arguments || {};
+            config.network_arguments.network_module = network_module;
         }
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
