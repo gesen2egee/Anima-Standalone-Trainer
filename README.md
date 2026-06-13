@@ -1,110 +1,271 @@
-[IMPORTANT]
-> ** Commit [ad401a8](https://github.com/gesen2egee/Anima-Standalone-Trainer/commit/ad401a86f15a7064d5cd914d1c4886cb9dc73c9b) should help stabilize distributed training on Windows. If you're still facing issues and previous fixes did not help, try setting GLOO_SOCKET_IFNAME to different networking devices**
+# sd-scripts
 
-# Anima Standalone Trainer
+[English](./README.md) / [日本語](./README-ja.md)
 
-A lightweight, decoupled training environment for circlestone-labs' Anima model, currently support Lora training only. Windows and Linux support. Built upon [sd-scripts](https://github.com/kohya-ss/sd-scripts) implementation.
+## Table of Contents
+<details>
+<summary>Click to expand</summary>
 
-<img width="2554" height="1234" alt="image" src="https://github.com/user-attachments/assets/cb5ff930-ce8c-49d6-a77a-3da393fe719d" />
+- [Introduction](#introduction)
+    - [Supported Models](#supported-models)
+    - [Features](#features)
+    - [Sponsors](#sponsors)
+    - [Support the Project](#support-the-project)
+- [Documentation](#documentation)
+    - [Training Documentation (English and Japanese)](#training-documentation-english-and-japanese)
+    - [Other Documentation (English and Japanese)](#other-documentation-english-and-japanese)
+- [For Developers Using AI Coding Agents](#for-developers-using-ai-coding-agents)
+- [Windows Installation](#windows-installation)
+    - [Windows Required Dependencies](#windows-required-dependencies)
+    - [Installation Steps](#installation-steps)
+    - [About requirements.txt and PyTorch](#about-requirementstxt-and-pytorch)
+    - [xformers installation (optional)](#xformers-installation-optional)
+- [Linux/WSL2 Installation](#linuxwsl2-installation)
+    - [DeepSpeed installation (experimental, Linux or WSL2 only)](#deepspeed-installation-experimental-linux-or-wsl2-only)
+- [Upgrade](#upgrade)
+    - [Upgrade PyTorch](#upgrade-pytorch)
+- [Credits](#credits)
+- [License](#license)
 
+</details>
 
-## Prerequisites
+## Introduction
 
-- **Python 3.10+** (Python 3.12 recommended)
-- **Node.js** (Required for the Web UI)
-- **CUDA fitting your system** (CUDA 12.7+ recommended)
+This repository contains training, generation and utility scripts for Stable Diffusion and other image generation models.
 
-## Installation
+### Sponsors
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/gesen2egee/Anima-Standalone-Trainer.git
-cd Anima-Standalone-Trainer
-```
+We are grateful to the following companies for their generous sponsorship:
 
-### 2. Set up the environment
+<a href="https://aihub.co.jp/top-en">
+  <img src="./images/logo_aihub.png" alt="AiHUB Inc." title="AiHUB Inc." height="100px">
+</a>
 
-Run the provided setup script for your operating system:
+### Support the Project
 
-**Windows:**
+If you find this project helpful, please consider supporting its development via [GitHub Sponsors](https://github.com/sponsors/kohya-ss/). Your support is greatly appreciated!
+
+### Change History
+
+- **Version 0.10.6 (2026-06-12):**
+    - Stable version before refactoring merge.
+
+- **Version 0.10.5 (2026-05-08):**
+    - Support for transformers version 5 and later has been added. Thanks to marcus165090-spec for [PR #2315](https://github.com/kohya-ss/sd-scripts/pull/2315) (followed by [PR #2316](https://github.com/kohya-ss/sd-scripts/pull/2316)).
+        - The `transformers` version in `requirements.txt` remains 4.x, but it also works with 5.x. If you use 5.x for any reason, please also update `diffusers` to the latest version.
+    - Support for ControlNet-LLLite training for Anima has been added. Thanks to [PR #2317](https://github.com/kohya-ss/sd-scripts/pull/2317).
+        - For details, please refer to the [documentation](./docs/anima_train_control_net_lllite.md).
+
+- **Version 0.10.4 (2026-05-07):**
+    - Improved compatibility with Intel GPUs. Thanks to WhitePr for [PR #2307](https://github.com/kohya-ss/sd-scripts/pull/2307).
+    - Support for training inpainting models for SD 1.5/SDXL has been added. Thanks to allanoepping for [PR #2309](https://github.com/kohya-ss/sd-scripts/pull/2309) (followed by [PR #2318](https://github.com/kohya-ss/sd-scripts/pull/2318)).
+        - For details, please refer to the [documentation](./docs/inpainting_training.md).
+
+- **Version 0.10.3 (2026-04-02):**
+    - Stability when training with fp16 on Anima has been further improved. See [PR #2302](https://github.com/kohya-ss/sd-scripts/pull/2302) for details. We deeply appreciate those who reported the issue.
+
+- **Version 0.10.2 (2026-03-30):**
+    - LECO training for SD/SDXL is now supported. Many thanks to umisetokikaze for [PR #2285](https://github.com/kohya-ss/sd-scripts/pull/2285) and [PR #2294](https://github.com/kohya-ss/sd-scripts/pull/2294).
+        - Please refer to the [documentation](./docs/train_leco.md) for details.
+    - `networks/resize_lora.py` has been updated to use `torch.svd_lowrank`, resulting in a significant speedup. Many thanks to woct0rdho for [PR #2240](https://github.com/kohya-ss/sd-scripts/pull/2240) and [PR #2296](https://github.com/kohya-ss/sd-scripts/pull/2296).
+        - It is enabled by default. You can specify the number of iterations with the `--svd_lowrank_niter` option (default is 2, more iterations will improve accuracy). Setting it to 0 will revert to the previous method. Please check `--help` for details.
+    - LoKr/LoHa is now supported for SDXL/Anima. See [PR #2275](https://github.com/kohya-ss/sd-scripts/pull/2275) for details.
+        - Please refer to the [documentation](./docs/loha_lokr.md) for details.
+    - Multi-resolution datasets (using the same image resized to multiple bucket sizes) are now supported in SD/SDXL training. We also addressed the issue of duplicate images with the same resolution being used in multi-resolution datasets. See [PR #2269](https://github.com/kohya-ss/sd-scripts/pull/2269) and [PR #2273](https://github.com/kohya-ss/sd-scripts/pull/2273) for details.
+        - Thanks to woct0rdho for the contribution.
+        - Please refer to the [English documentation](./docs/config_README-en.md#behavior-when-there-are-duplicate-subsets) / [Japanese documentation](./docs/config_README-ja.md#重複したサブセットが存在する時の挙動) for details.
+    - Stability when training with fp16 on Anima has been improved. See [PR #2297](https://github.com/kohya-ss/sd-scripts/pull/2297) for details. However, it still seems to be unstable in some cases. If you encounter any issues, please let us know the details via Issues.
+    - Other minor bug fixes and improvements were made.
+
+### Supported Models
+
+* **Stable Diffusion 1.x/2.x**
+* **SDXL**
+* **SD3/SD3.5**
+* **FLUX.1**
+* **LUMINA**
+* **HunyuanImage-2.1**
+* **Anima preview**
+
+### Features
+
+* LoRA training
+* Fine-tuning (native training, DreamBooth): except for HunyuanImage-2.1
+* Textual Inversion training: SD/SDXL
+* Inpainting model training: SD1.5 and SDXL
+* Image generation
+* Other utilities such as model conversion, image tagging, LoRA merging, etc.
+
+## Documentation
+
+### Training Documentation (English and Japanese)
+
+* [LoRA Training Overview](./docs/train_network.md)
+* [Dataset config](./docs/config_README-en.md) / [Japanese version](./docs/config_README-ja.md)
+* [Advanced Training](./docs/train_network_advanced.md)
+* [SDXL Training](./docs/sdxl_train_network.md)
+* [SD3 Training](./docs/sd3_train_network.md)
+* [FLUX.1 Training](./docs/flux_train_network.md)
+* [LUMINA Training](./docs/lumina_train_network.md)
+* [HunyuanImage-2.1 Training](./docs/hunyuan_image_train_network.md)
+* [Fine-tuning](./docs/fine_tune.md)
+* [Textual Inversion Training](./docs/train_textual_inversion.md)
+* [ControlNet-LLLite Training](./docs/train_lllite_README.md) / [Japanese version](./docs/train_lllite_README-ja.md)
+* [Anima ControlNet-LLLite Training Guide](./docs/anima_train_control_net_lllite.md)
+* [Validation](./docs/validation.md)
+* [Masked Loss Training](./docs/masked_loss_README.md) / [Japanese version](./docs/masked_loss_README-ja.md)
+* [Inpainting Training](./docs/inpainting_training.md)
+
+### Other Documentation (English and Japanese)
+
+* [Image generation](./docs/gen_img_README.md) / [Japanese version](./docs/gen_img_README-ja.md)
+* [Tagging images with WD14 Tagger](./docs/wd14_tagger_README-en.md) / [Japanese version](./docs/wd14_tagger_README-ja.md)
+
+## For Developers Using AI Coding Agents
+
+This repository provides recommended instructions to help AI agents like Claude and Gemini understand our project context and coding standards.
+
+To use them, you need to opt-in by creating your own configuration file in the project root.
+
+**Quick Setup:**
+
+1.  Create a `CLAUDE.md` and/or `GEMINI.md` file in the project root.
+2.  Add the following line to your `CLAUDE.md` to import the repository's recommended prompt:
+
+    ```markdown
+    @./.ai/claude.prompt.md
+    ```
+
+    or for Gemini:
+
+    ```markdown
+    @./.ai/gemini.prompt.md
+    ```
+
+3.  You can now add your own personal instructions below the import line (e.g., `Always respond in Japanese.`).
+
+This approach ensures that you have full control over the instructions given to your agent while benefiting from the shared project context. Your `CLAUDE.md` and `GEMINI.md` are already listed in `.gitignore`, so they won't be committed to the repository.
+
+## Windows Installation
+
+### Windows Required Dependencies
+
+Python 3.10.x and Git:
+
+- Python 3.10.x: Download Windows installer (64-bit) from https://www.python.org/downloads/windows/
+- git: Download latest installer from https://git-scm.com/download/win
+
+Python 3.11.x, and 3.12.x will work but not tested.
+
+Give unrestricted script access to powershell so venv can work:
+
+- Open an administrator powershell window
+- Type `Set-ExecutionPolicy Unrestricted` and answer A
+- Close admin powershell window
+
+### Installation Steps
+
+Open a regular Powershell terminal and type the following inside:
+
 ```powershell
-.\setup_env.bat
+git clone https://github.com/kohya-ss/sd-scripts.git
+cd sd-scripts
+
+python -m venv venv
+.\venv\Scripts\activate
+
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --upgrade -r requirements.txt
+
+accelerate config
 ```
 
-**Linux:**
+If `python -m venv` shows only `python`, change `python` to `py`.
+
+Note: `bitsandbytes`, `prodigyopt` and `lion-pytorch` are included in the requirements.txt. If you'd like to use another version, please install it manually.
+
+This installation is for CUDA 12.4. If you use a different version of CUDA, please install the appropriate version of PyTorch. For example, if you use CUDA 12.1, please install `pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu121`.
+
+Answers to accelerate config:
+
+```txt
+- This machine
+- No distributed training
+- NO
+- NO
+- NO
+- all
+- fp16
+```
+
+If you'd like to use bf16, please answer `bf16` to the last question.
+
+Note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is occurred in training. In this case, answer `0` for the 6th question: 
+``What GPU(s) (by id) should be used for training on this machine as a comma-separated list? [all]:`` 
+
+(Single GPU with id `0` will be used.)
+
+## About requirements.txt and PyTorch
+
+The file does not contain requirements for PyTorch. Because the version of PyTorch depends on the environment, it is not included in the file. Please install PyTorch first according to the environment. See installation instructions below.
+
+The scripts are tested with PyTorch 2.6.0. PyTorch 2.6.0 or later is required.
+
+For RTX 50 series GPUs, PyTorch 2.8.0 with CUDA 12.8/12.9 should be used. `requirements.txt` will work with this version.
+
+### xformers installation (optional)
+
+To install xformers, run the following command in your activated virtual environment:
+
 ```bash
-./setup_env.sh
+pip install xformers --index-url https://download.pytorch.org/whl/cu124
 ```
 
-*This will create a virtual environment (`venv`), install all Python dependencies (assuming you have met the prereqisites), and set up the Web UI.*
+Please change the CUDA version in the URL according to your environment if necessary. xformers may not be available for some GPU architectures.
 
-This script will probably install Torch and Torchvision version below.
-Depends on your system, you may want to install another version of Pytorch with CUDA.
+## Linux/WSL2 Installation
 
-```cmd
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
-```
+Linux or WSL2 installation steps are almost the same as Windows. Just change `venv\Scripts\activate` to `source venv/bin/activate`.
 
-## Launching the UI
+Note: Please make sure that NVIDIA driver and CUDA toolkit are installed in advance.
 
-To start the training server and open the web interface:
+### DeepSpeed installation (experimental, Linux or WSL2 only)
+  
+To install DeepSpeed, run the following command in your activated virtual environment:
 
-**Windows:**
-```cmd
-.\training-ui\start_training_ui_anima.bat
-```
-
-**Linux:**
 ```bash
-./training-ui/start_linux.sh
+pip install deepspeed==0.16.7 
 ```
-Once launched, open your browser to: `http://localhost:3000`
 
-## First Time Setup
+## Upgrade
 
-After launching the UI for the first time, you'll need to configure your model paths:
+When a new release comes out you can upgrade your repo with the following command:
 
-1. Click the ** Global Settings** (gear icon) in the bottom-left corner
-2. Set the following paths:
-   - **DiT Model Path** — Path to your Anima DiT safetensors file (e.g. `C:\model\anima.safetensors`)
-   - **VAE Path** — Path to the VAE model (e.g. `C:\model\qwen_image_vae.safetensors`)  
-   - **TE Path** — Path to the CLIP text encoder (e.g. `C:\model\text_encoders\qwen_3_06b_base.safetensors`)
-   - **Venv Path** - Path to your local venv, venv can be reused if you redownload the repo
-3. Click **Save**
-
-These paths are saved globally and shared across all training jobs.
-
-## Release
-
-**v2.0.0. Linux support, Multi-GPU inference**
-
-**v1.1.0. Improving caching and others I/O performance.**
-
-## Multi-GPU
-
-Tested on torch2.7+cu128 and torch2.10+cu130 with [this fix](https://github.com/pytorch/pytorch/pull/175316) applied on Windows when encountered **libuv** error.
-
-Seems to works best with torch<=2.3 and cuda <= 12.4 without directly applying the fix.
-
-\**NEW\**
-
-Adding support for multi-gpu inference
-
-<img width="1052" height="848" alt="image" src="https://github.com/user-attachments/assets/54192c8f-1501-4a38-b745-3b26499aca5f" />
-
-
-## Update
-
-To update, simply run this command
-
-```cmd
+```powershell
+cd sd-scripts
 git pull
+.\venv\Scripts\activate
+pip install --use-pep517 --upgrade -r requirements.txt
 ```
 
-## Misc
+Once the commands have completed successfully you should be ready to use the new version.
 
-Some features and settings from sd-scripts may not be available or working properly at the momment.
+### Upgrade PyTorch
 
-Built and tested on Windows 11, RTX 5080 + RTX 3090, 96GB DDR5, Python 3.12.1, CUDA 13.1, Pytorch 2.10 
+If you want to upgrade PyTorch, you can upgrade it with `pip install` command in [Windows Installation](#windows-installation) section.
 
+## Credits
 
+The implementation for LoRA is based on [cloneofsimo's repo](https://github.com/cloneofsimo/lora). Thank you for great work!
+
+The LoRA expansion to Conv2d 3x3 was initially released by cloneofsimo and its effectiveness was demonstrated at [LoCon](https://github.com/KohakuBlueleaf/LoCon) by KohakuBlueleaf. Thank you so much KohakuBlueleaf!
+
+## License
+
+The majority of scripts is licensed under ASL 2.0 (including codes from Diffusers, cloneofsimo's and LoCon), however portions of the project are available under separate license terms:
+
+[Memory Efficient Attention Pytorch](https://github.com/lucidrains/memory-efficient-attention-pytorch): MIT
+
+[bitsandbytes](https://github.com/TimDettmers/bitsandbytes): MIT
+
+[BLIP](https://github.com/salesforce/BLIP): BSD-3-Clause

@@ -99,8 +99,10 @@ class KronaModule(torch.nn.Module):
         self.r1 = kwargs.get("factor_out", 64)
         self.r2 = kwargs.get("factor_in", 4)
         self.cdka_factor_in = kwargs.get("cdka_factor_in", None)
-        w2_init = kwargs.get("w2_init", "normal")
-        cdka_alpha = kwargs.get("cdka_alpha", None)
+        w2_init = kwargs.get("w2_init", "kaiming_uniform")
+        if w2_init is not None:
+            w2_init = str(w2_init).strip("'\"").lower()
+        cdka_alpha = kwargs.get("cdka_alpha", 16.0)
         if cdka_alpha is not None and str(cdka_alpha).lower() in ("none", "null", ""):
             cdka_alpha = None
 
@@ -175,6 +177,8 @@ class KronaModule(torch.nn.Module):
 
         nn.init.zeros_(self.lokr_w1)
         
+        self.is_mica = (w2_init == "mica")
+
         # lokr_w2 (A) initialized according to w2_init
         if w2_init == "normal":
             nn.init.normal_(self.lokr_w2, std=1.0 / self.out_l)
@@ -184,6 +188,27 @@ class KronaModule(torch.nn.Module):
             nn.init.kaiming_normal_(self.lokr_w2, a=math.sqrt(5))
         elif w2_init == "zeros":
             nn.init.zeros_(self.lokr_w2)
+        elif w2_init in ("mica", "mica_both"):
+            org_weight = org_module.weight.data.detach().clone().float()
+            if self.is_conv and self.conv_mode == "flat":
+                org_weight = org_weight.flatten(1)
+            elif self.is_conv and self.conv_mode == "1x1":
+                org_weight = org_weight.squeeze(3).squeeze(2)
+
+            # Van Loan's Kronecker reshape
+            W_tilde = org_weight.reshape(
+                self.out_k, self.out_l, self.in_n, self.in_m
+            ).permute(0, 2, 1, 3).reshape(
+                self.out_k * self.in_n, self.out_l * self.in_m
+            )
+
+            # SVD decomposition on GPU/original device
+            U, S, Vh = torch.linalg.svd(W_tilde, full_matrices=False)
+            v_min = Vh[-1, :]  # Right singular vector corresponding to the smallest singular value
+            w2_init_val = v_min.reshape(self.out_l, self.in_m)
+            self.lokr_w2.data.copy_(w2_init_val.to(self.lokr_w2.dtype))
+            if w2_init == "mica":
+                self.lokr_w2.requires_grad = False
         else:
             raise ValueError(f"Unknown w2_init mode: {w2_init}")
 
@@ -303,7 +328,8 @@ class KronaModule(torch.nn.Module):
             rsq_scale = 1.0 / (self.allora_eta ** 2)
             accelerate = 1.0 / torch.sqrt(norms + rsq_scale)
             acc_val = accelerate.to(diff_weight.device).to(diff_weight.dtype)
-            diff_weight.register_hook(lambda grad: grad * acc_val)
+            if diff_weight.requires_grad:
+                diff_weight.register_hook(lambda grad: grad * acc_val)
 
         if self.wd:
 

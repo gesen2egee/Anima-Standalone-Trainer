@@ -6,25 +6,26 @@
       "scripts": {
         "train": "anima_train.py",
         "train_network": "anima_train_network.py",
-        "train_tp_sp": "anima_train_tensor_sequence_parallel.py",
-        "train_network_tp_sp": "anima_train_network_tensor_sequence_parallel.py",
         "generate": "anima_gen.py"
       },
       "global_paths": {
         "dit_path": {
           "label": "DiT Model Path",
           "placeholder": "C:\\Anima\\split_files\\diffusion_models\\anima-preview.safetensors",
-          "cli_flag": "dit_path"
+          "cli_flag": "pretrained_model_name_or_path",
+          "gen_flag": "dit"
         },
         "qwen3_path": {
           "label": "Qwen3 Text Encoder Path",
           "placeholder": "C:\\Anima\\split_files\\text_encoders\\qwen_3_06b_base.safetensors",
-          "cli_flag": "qwen3_path"
+          "cli_flag": "qwen3",
+          "gen_flag": "text_encoder"
         },
         "vae_path": {
           "label": "VAE Path",
           "placeholder": "C:\\Anima\\split_files\\vae\\qwen_image_vae.safetensors",
-          "cli_flag": "vae_path"
+          "cli_flag": "vae",
+          "gen_flag": "vae"
         }
       },
       "gen_params": {
@@ -33,7 +34,7 @@
           "type": "number",
           "default": 3.0,
           "step": 0.5,
-          "cli_flag": "discrete_flow_shift"
+          "cli_flag": "flow_shift"
         }
       },
       "training_section": "anima_arguments",

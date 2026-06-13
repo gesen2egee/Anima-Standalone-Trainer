@@ -181,6 +181,26 @@ body {
     border-top: 1px solid var(--border);
 }
 
+.language-switcher {
+    margin-bottom: 10px;
+}
+
+.language-switcher label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+}
+
+.language-switcher select {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
 .btn-block {
     width: 100%;
     justify-content: center;

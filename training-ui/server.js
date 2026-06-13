@@ -22,7 +22,7 @@ const DEFAULT_PORT = portArg
 
 // Paths
 const ROOT_DIR = path.join(__dirname, '..');
-const JOBS_DIR = path.join(__dirname, 'jobs');
+const DEFAULT_JOBS_DIR = path.join(__dirname, 'jobs');
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const GLOBAL_CONFIG_PATH = path.join(__dirname, 'global_config.toml');
 const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
@@ -59,13 +59,75 @@ function buildModelArgs(arch, globalConfig) {
     return modelArgs;
 }
 
+function stripUiOnlyBackendArgs(trainingArgs) {
+    if (!trainingArgs) return;
+
+    if (trainingArgs.flash_attn) {
+        trainingArgs.attn_mode = 'flash';
+    }
+
+    [
+        'flash_attn',
+        'multigpu_mode',
+        'use_fsdp',
+        'use_cuda_direct',
+        'ddp_gradient_as_bucket_view',
+        'ddp_static_graph',
+        'tp_degree',
+        'tp_backend',
+        'sequence_parallel',
+        'no_fuse_qkv',
+        'fsdp_sharding_strategy',
+        'fsdp_offload_params',
+        'fsdp_reshard_after_forward',
+        'fsdp_activation_checkpointing',
+        'fsdp_cpu_ram_efficient_loading',
+        'fsdp_backward_prefetch',
+        'fsdp_forward_prefetch',
+        'fsdp_use_orig_params',
+        'fsdp_limit_all_gathers',
+        'fsdp_auto_wrap_policy',
+        'fsdp_min_num_params',
+        'fsdp_transformer_layer_cls_to_wrap',
+        'fsdp2_reshard_after_forward',
+        'fsdp2_offload_params',
+        'fsdp2_activation_checkpointing',
+        'fsdp2_cpu_ram_efficient_loading',
+        'fsdp2_auto_wrap_policy',
+        'fsdp2_min_num_params',
+        'fsdp2_transformer_layer_cls_to_wrap',
+        'deepspeed',
+        'zero_stage',
+        'offload_optimizer_device',
+        'offload_optimizer_nvme_path',
+        'offload_param_device',
+        'offload_param_nvme_path',
+        'zero3_init_flag',
+        'zero3_save_16bit_model',
+        'fp16_master_weights_and_gradients',
+        'step_profile',
+        'profile_microbatch'
+    ].forEach(key => delete trainingArgs[key]);
+}
+
+function normalizeAnimaArgs(merged) {
+    const animaArgs = merged.anima_arguments;
+    if (!animaArgs) return;
+
+    if (animaArgs.timestep_sample_method && !animaArgs.timestep_sampling) {
+        const legacyMethod = animaArgs.timestep_sample_method;
+        animaArgs.timestep_sampling = legacyMethod === 'logit_normal' ? 'sigmoid' : legacyMethod;
+    }
+    delete animaArgs.timestep_sample_method;
+}
+
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Ensure directories exist
-if (!fs.existsSync(JOBS_DIR)) {
-    fs.mkdirSync(JOBS_DIR, { recursive: true });
+if (!fs.existsSync(DEFAULT_JOBS_DIR)) {
+    fs.mkdirSync(DEFAULT_JOBS_DIR, { recursive: true });
 }
 if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -102,7 +164,7 @@ function stripQuotes(p) {
 }
 
 function getJobPath(name) {
-    return path.join(JOBS_DIR, sanitizeName(name));
+    return path.join(getJobsDir(), sanitizeName(name));
 }
 
 function getGlobalConfig() {
@@ -125,8 +187,19 @@ function getGlobalConfig() {
             gemma2_path: '',
             lumina_vae_path: ''
         },
-        venv_path: path.join(ROOT_DIR, 'venv')
+        venv_path: path.join(ROOT_DIR, 'venv'),
+        jobs_dir: DEFAULT_JOBS_DIR
     };
+}
+
+function getJobsDir() {
+    const globalConfig = getGlobalConfig();
+    const configured = stripQuotes(globalConfig.jobs_dir || '');
+    const jobsDir = configured ? toNativePath(configured) : DEFAULT_JOBS_DIR;
+    if (!fs.existsSync(jobsDir)) {
+        fs.mkdirSync(jobsDir, { recursive: true });
+    }
+    return jobsDir;
 }
 
 // Serve architecture registry to frontend
@@ -343,7 +416,7 @@ function buildTrainingConfig(jobName, jobPath) {
     const jobConfig = TOML.parse(fs.readFileSync(configPath, 'utf8'));
 
     const outputDir = path.join(jobPath, 'output');
-    const loggingDir = path.join(jobPath, 'logs');
+    const loggingDir = outputDir;
     const datasetConfigPath = path.join(jobPath, 'dataset.toml');
     const samplePromptsPath = path.join(jobPath, 'sample_prompts.txt');
 
@@ -370,11 +443,9 @@ function buildTrainingConfig(jobName, jobPath) {
     merged.training_arguments = {
         ...trainingArgs,
         output_dir: outputDir,
-        logging_dir: loggingDir,
-        save_state: true,
-        save_last_n_steps_state: 1,
-        save_last_n_epochs_state: 1
+        logging_dir: loggingDir
     };
+    stripUiOnlyBackendArgs(merged.training_arguments);
 
     // Move resume from network_args to training_args
     if (jobConfig.network_arguments?.resume) {
@@ -397,16 +468,19 @@ function buildTrainingConfig(jobName, jobPath) {
         const prompts = fs.readFileSync(samplePromptsPath, 'utf8').trim();
         if (prompts.length > 0) {
             const ta = jobConfig.training_arguments || {};
-            if (ta.sample_every_n_steps || ta.sample_every_n_epochs) {
+            if (ta.sample_every_n_steps || ta.sample_every_n_epochs || ta.sample_at_first) {
                 merged.sample_arguments = {
                     sample_prompts: samplePromptsPath
                 };
 
-                //prefer steps if set, otherwise epochs
+                // Prefer steps if set. Do not invent an epoch interval for sample_at_first-only jobs.
                 if (ta.sample_every_n_steps) {
                     merged.sample_arguments.sample_every_n_steps = ta.sample_every_n_steps;
-                } else {
-                    merged.sample_arguments.sample_every_n_epochs = ta.sample_every_n_epochs || 1;
+                } else if (ta.sample_every_n_epochs) {
+                    merged.sample_arguments.sample_every_n_epochs = ta.sample_every_n_epochs;
+                }
+                if (ta.sample_at_first) {
+                    merged.sample_arguments.sample_at_first = true;
                 }
             }
         }
@@ -414,6 +488,7 @@ function buildTrainingConfig(jobName, jobPath) {
 
     delete merged.training_arguments.sample_every_n_epochs;
     delete merged.training_arguments.sample_every_n_steps;
+    delete merged.training_arguments.sample_at_first;
 
     // Convert freeze_llm_adapter flag → llm_adapter_lr: 0 (works for both DDP and TP+SP FFT)
     if (merged.training_arguments.freeze_llm_adapter) {
@@ -429,6 +504,7 @@ function buildTrainingConfig(jobName, jobPath) {
     // Anima arguments
     if (jobConfig.anima_arguments) {
         merged.anima_arguments = { ...jobConfig.anima_arguments };
+        normalizeAnimaArgs(merged);
     }
 
     // Lumina arguments
@@ -575,11 +651,12 @@ app.get('/api/system/gpus', async (req, res) => {
 // List all jobs
 app.get('/api/jobs', (req, res) => {
     try {
-        if (!fs.existsSync(JOBS_DIR)) return res.json([]);
-        const jobs = fs.readdirSync(JOBS_DIR, { withFileTypes: true })
+        const jobsDir = getJobsDir();
+        if (!fs.existsSync(jobsDir)) return res.json([]);
+        const jobs = fs.readdirSync(jobsDir, { withFileTypes: true })
             .filter(d => d.isDirectory())
             .map(d => {
-                const configPath = path.join(JOBS_DIR, d.name, 'config.toml');
+                const configPath = path.join(jobsDir, d.name, 'config.toml');
                 const hasConfig = fs.existsSync(configPath);
                 let mtime = 0;
                 if (hasConfig) {
@@ -606,7 +683,7 @@ app.post('/api/jobs', (req, res) => {
         if (!name) return res.status(400).json({ error: 'Name required' });
 
         const safeName = sanitizeName(name);
-        const jobPath = path.join(JOBS_DIR, safeName);
+        const jobPath = path.join(getJobsDir(), safeName);
 
         if (fs.existsSync(jobPath)) {
             return res.status(409).json({ error: 'Job already exists' });
@@ -948,15 +1025,13 @@ function buildEnvVar(name, value) {
     return isWindows ? `$env:${name}='${value}';` : `export ${name}='${value}';`;
 }
 
-// Returns { gpuEnv, accelerateFlags, tpTrainCmd } or { error }
+// Returns { gpuEnv, accelerateFlags } or { error }
 function buildLaunchConfig(gpuIds, mergedConfig, mergedConfigPath, jobArch) {
     const ta = mergedConfig.training_arguments || {};
     const mixedPrec = ta.mixed_precision || 'bf16';
-    const mode = ta.multigpu_mode || (ta.deepspeed ? 'deepspeed' : (ta.use_fsdp ? 'fsdp' : 'ddp'));
 
     let gpuEnv = '';
-    let accelerateFlags = '';
-    let tpTrainCmd = null;
+    let accelerateFlags = `--mixed_precision ${mixedPrec}`;
 
     if (gpuIds) {
         if (!/^[\d\s,]+$/.test(gpuIds))
@@ -965,99 +1040,16 @@ function buildLaunchConfig(gpuIds, mergedConfig, mergedConfigPath, jobArch) {
         const validIds = gpuIds.split(',').map(s => s.trim()).filter(Boolean);
         if (validIds.some(id => isNaN(parseInt(id))))
             return { error: 'GPU IDs must be valid numbers.' };
+        if (validIds.length > 1)
+            return { error: 'The sd-scripts NEW backend is wired for single-process training here. Select one GPU for training.' };
 
         gpuEnv = buildEnvVar('CUDA_VISIBLE_DEVICES', validIds.join(','));
-
-        if (validIds.length > 1) {
-            if (mode === 'tp_sp') {
-                const hasNet = !!(mergedConfig.network_arguments?.network_module);
-                const tpScript = hasNet
-                    ? jobArch.scripts?.train_network_tp_sp
-                    : jobArch.scripts?.train_tp_sp;
-                if (!tpScript) {
-                    const modeLabel = hasNet ? 'LoRA TP/SP' : 'Full Finetune TP/SP';
-                    return { error: `${modeLabel} is not supported for the "${jobArch.id || 'current'}" architecture.` };
-                }
-                const n = validIds.length;
-                const target = path.join(ROOT_DIR, tpScript);
-                // Validate tp_backend against whitelist
-                const allowedBackends = ['nccl', 'cuda_direct', 'gloo', 'mpi'];
-                const rawBackend = ta.tp_backend || (isWindows ? 'gloo' : 'nccl');
-                const tpBackend = allowedBackends.includes(rawBackend) ? rawBackend : (isWindows ? 'gloo' : 'nccl');
-                tpTrainCmd = `python -m torch.distributed.run --nproc_per_node=${n} --master_addr 127.0.0.1 --master_port 29500 "${target}" --tp_degree ${n} --tp_backend ${tpBackend} --sequence_parallel --config_file="${mergedConfigPath}"`;
-
-            } else if (mode === 'fsdp2') {
-                const reshard = ta.fsdp2_reshard_after_forward ?? true;
-                accelerateFlags = `--use_fsdp --fsdp_version 2 --num_processes ${validIds.length} --mixed_precision ${mixedPrec}`;
-                accelerateFlags += ` --fsdp_reshard_after_forward ${reshard ? 'true' : 'false'}`;
-                if (ta.fsdp2_cpu_ram_efficient_loading)  accelerateFlags += ` --fsdp_sync_module_states true --fsdp_cpu_ram_efficient_loading true`;
-                if (ta.fsdp2_offload_params)             accelerateFlags += ` --fsdp_offload_params true`;
-                if (ta.fsdp2_activation_checkpointing)   accelerateFlags += ` --fsdp_activation_checkpointing true`;
-                if (ta.fsdp2_auto_wrap_policy && ta.fsdp2_auto_wrap_policy !== 'NO_WRAP') {
-                    accelerateFlags += ` --fsdp_auto_wrap_policy ${ta.fsdp2_auto_wrap_policy}`;
-                    if (ta.fsdp2_auto_wrap_policy === 'SIZE_BASED_WRAP' && ta.fsdp2_min_num_params)
-                        accelerateFlags += ` --fsdp_min_num_params ${ta.fsdp2_min_num_params}`;
-                    if (ta.fsdp2_auto_wrap_policy === 'TRANSFORMER_BASED_WRAP') {
-                        const cls = (ta.fsdp2_transformer_layer_cls_to_wrap || '').trim() || (jobArch.fsdp_transformer_cls || '');
-                        if (cls) accelerateFlags += ` --fsdp_transformer_layer_cls_to_wrap "${cls}"`;
-                    }
-                }
-
-            } else if (mode === 'fsdp') {
-                accelerateFlags = `--use_fsdp --fsdp_version 1 --num_processes ${validIds.length} --mixed_precision ${mixedPrec}`;
-                accelerateFlags += ` --fsdp_sharding_strategy ${ta.fsdp_sharding_strategy || 1}`;
-                // sync_module_states must accompany cpu_ram_efficient_loading
-                if (ta.fsdp_cpu_ram_efficient_loading)   accelerateFlags += ` --fsdp_sync_module_states true --fsdp_cpu_ram_efficient_loading true`;
-                if (ta.fsdp_offload_params)              accelerateFlags += ` --fsdp_offload_params true`;
-                if (ta.fsdp_reshard_after_forward)       accelerateFlags += ` --fsdp_reshard_after_forward true`;
-                if (ta.fsdp_activation_checkpointing)    accelerateFlags += ` --fsdp_activation_checkpointing true`;
-                if (ta.fsdp_backward_prefetch)           accelerateFlags += ` --fsdp_backward_prefetch ${ta.fsdp_backward_prefetch}`;
-                if (ta.fsdp_forward_prefetch)            accelerateFlags += ` --fsdp_forward_prefetch true`;
-                if (ta.fsdp_use_orig_params === false)   accelerateFlags += ` --fsdp_use_orig_params false`;
-                if (ta.fsdp_min_num_params)              accelerateFlags += ` --fsdp_min_num_params ${ta.fsdp_min_num_params}`;
-                if (ta.fsdp_auto_wrap_policy) {
-                    accelerateFlags += ` --fsdp_auto_wrap_policy ${ta.fsdp_auto_wrap_policy}`;
-                    if (ta.fsdp_auto_wrap_policy === 'TRANSFORMER_BASED_WRAP') {
-                        const cls = (ta.fsdp_transformer_layer_cls_to_wrap || '').trim() || (jobArch.fsdp_transformer_cls || '');
-                        if (cls) accelerateFlags += ` --fsdp_transformer_layer_cls_to_wrap "${cls}"`;
-                    }
-                }
-
-            } else if (mode === 'deepspeed') {
-                accelerateFlags = `--use_deepspeed --num_processes ${validIds.length} --mixed_precision ${mixedPrec}`;
-                const zeroStage = Number.isFinite(Number(ta.zero_stage)) ? Number(ta.zero_stage) : 2;
-                accelerateFlags += ` --zero_stage ${zeroStage}`;
-                if (ta.offload_optimizer_device) {
-                    accelerateFlags += ` --offload_optimizer_device ${ta.offload_optimizer_device}`;
-                }
-                if (ta.offload_optimizer_device === 'nvme' && ta.offload_optimizer_nvme_path) {
-                    accelerateFlags += ` --offload_optimizer_nvme_path "${ta.offload_optimizer_nvme_path}"`;
-                }
-                if (ta.offload_param_device) {
-                    accelerateFlags += ` --offload_param_device ${ta.offload_param_device}`;
-                }
-                if (ta.offload_param_device === 'nvme' && ta.offload_param_nvme_path) {
-                    accelerateFlags += ` --offload_param_nvme_path "${ta.offload_param_nvme_path}"`;
-                }
-                if (ta.zero3_init_flag) {
-                    accelerateFlags += ' --zero3_init_flag true';
-                }
-                if (ta.zero3_save_16bit_model) {
-                    accelerateFlags += ' --zero3_save_16bit_model true';
-                }
-
-            } else {
-                accelerateFlags = `--multi_gpu --num_processes ${validIds.length} --mixed_precision ${mixedPrec}`;
-            }
-        } else {
-            accelerateFlags = `--mixed_precision ${mixedPrec}`;
-        }
     }
 
-    if (ta.torch_compile && mode !== 'tp_sp' && mode !== 'fsdp2')
+    if (ta.torch_compile)
         accelerateFlags += ' --dynamo_backend inductor';
 
-    return { gpuEnv, accelerateFlags, tpTrainCmd };
+    return { gpuEnv, accelerateFlags };
 }
 
 function buildShellScript(activatePath, envVars, command) {
@@ -1233,19 +1225,36 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             }
         }
 
-        // Build model path args from registry
-        const args = [];
-        for (const [configKey, pathDef] of Object.entries(genArch.global_paths)) {
-            const val = mArgs[pathDef.cli_flag] || '';
-            args.push(`--${pathDef.cli_flag}="${val}"`);
+        const genGpuCount = genGpuIdsNormalized ? genGpuIdsNormalized.split(',').length : 0;
+        if (genGpuCount > 1) {
+            return res.status(400).json({
+                error: 'The sd-scripts NEW backend is wired for single-process generation here. Select one GPU for generation.'
+            });
         }
 
-        // Add common args
+        // Build model path args from registry. Training and inference use different flag names.
+        const args = [];
+        const missingPaths = [];
+        for (const [configKey, pathDef] of Object.entries(genArch.global_paths)) {
+            const val = mArgs[pathDef.cli_flag] || '';
+            if (!val) {
+                missingPaths.push(configKey);
+                continue;
+            }
+            const genFlag = pathDef.gen_flag || pathDef.cli_flag;
+            args.push(`--${genFlag}="${val}"`);
+        }
+        if (missingPaths.length > 0) {
+            return res.status(400).json({
+                error: `Missing model path(s) in Global Settings: ${missingPaths.join(', ')}`
+            });
+        }
+
+        // anima_minimal_inference.py consumes the same prompt-file syntax used by the UI.
         args.push(
-            `--sample_prompts="${promptsPath}"`,
-            `--output_dir="${outputDir}"`,
-            `--output_name="${tArgs.output_name || 'baseline'}"`,
-            `--mixed_precision="${tArgs.mixed_precision || 'bf16'}"`,
+            `--from_file="${promptsPath}"`,
+            `--save_path="${outputDir}"`,
+            '--output_type=images',
             `--seed=${tArgs.seed || 42}`
         );
 
@@ -1259,185 +1268,72 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             }
         }
 
-        // Attention support
+        // Attention support for anima_minimal_inference.py
         if (req.body.flash_attn) {
-            args.push('--flash_attn');
+            args.push('--attn_mode=flash');
         } else if (req.body.sage_attn) {
-            args.push('--sage_attn');
-        }
-
-        // Multi-GPU model sharding support
-        const genGpuCount = genGpuIdsNormalized ? genGpuIdsNormalized.split(',').length : 0;
-        let genAccelerateFlags = '';
-        if (genGpuCount > 1) {
-            const multiGpuMode = req.body.gen_multi_gpu_mode || 'parallel_cfg';
-            args.push(`--device_map=${multiGpuMode}`);
-            // Force single process -> both modes run one process across all GPUs
-            genAccelerateFlags = '--num_processes 1';
+            args.push('--attn_mode=sageattn');
         }
 
         // LoRA support
         if (req.body.network_weights) {
             const nw = stripQuotes(req.body.network_weights);
-            args.push(`--network_weights="${nw}"`);
-            args.push(`--network_mul=${req.body.network_mul || 1.0}`);
+            args.push(`--lora_weight="${nw}"`);
+            args.push(`--lora_multiplier=${req.body.network_mul || 1.0}`);
         }
-
-        const keepLoaded = req.body.keep_loaded === true;
 
         // Ensure logs dir exists
         const logsDir = path.join(jobPath, 'logs');
         if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
-        // Logic for Persistent vs One-Shot
-        if (keepLoaded) {
-            const multiGpuMode = req.body.gen_multi_gpu_mode || 'parallel_cfg';
-            const flashAttn = req.body.flash_attn || false;
-
-            if (persistentGenProcess && (
-                persistentGenProcess.jobName !== jobName ||
-                persistentGenProcess.gpuIds !== genGpuIdsNormalized ||
-                persistentGenProcess.multiGpuMode !== multiGpuMode
-            )) {
-                console.log("Configuration changed, restarting persistent server...");
-                killPersistentGen();
-            }
-
-            if (!persistentGenProcess) {
-                const port = await findAvailablePort(GEN_SERVER_PORT);
-                args.push(`--server_port=${port}`);
-
-                const envVars = [
-                    buildEnvVar('PYTHONIOENCODING', 'utf-8'),
-                    buildEnvVar('LOG_LEVEL', 'DEBUG'),
-                    gpuEnv
-                ].filter(Boolean).join('\n');
-                const launchCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${genAccelerateFlags} "${genScript}" ${args.join(' ')}`;
-                const script = buildShellScript(venv.activate, envVars, launchCmd);
-
-                console.log("Starting persistent generation server...");
-                const proc = spawnShell(script, ROOT_DIR);
-
-                persistentGenProcess = {
-                    process: proc, port, jobName,
-                    gpuIds: genGpuIdsNormalized,
-                    multiGpuMode: multiGpuMode,
-                    flashAttn: req.body.flash_attn || false,
-                    sageAttn: req.body.sage_attn || false
-                };
-
-                // Stream output
-                const logFileName = `gen_server_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
-                const logStream = fs.createWriteStream(path.join(logsDir, logFileName), { flags: 'a' });
-
-                const appendLog = (data) => {
-                    const text = data.toString();
-                    logStream.write(text);
-                    broadcastLog(jobName, text);
-                };
-                proc.stdout.on('data', appendLog);
-                proc.stderr.on('data', appendLog);
-
-                proc.on('close', (code) => {
-                    console.log(`Persistent server exited with code ${code}`);
-                    if (persistentGenProcess && persistentGenProcess.process === proc) {
-                        persistentGenProcess = null;
-                    }
-                });
-
-                // Wait for server to be ready (ping loop)
-                let attempts = 0;
-                while (attempts < 60) { // 60s timeout
-                    await new Promise(r => setTimeout(r, 1000));
-                    try {
-                        const ping = await fetch(`http://localhost:${port}/ping`);
-                        if (ping.ok) break;
-                    } catch (e) { }
-                    attempts++;
-                }
-                if (attempts >= 60) {
-                    killPersistentGen();
-                    return res.status(500).json({ error: "Failed to start persistent generation server (timeout)" });
-                }
-            }
-
-            // Send generation request
-            const payload = {
-                sample_prompts: promptsPath,
-                network_weights: req.body.network_weights ? stripQuotes(req.body.network_weights) : null,
-                network_mul: req.body.network_mul || 1.0,
-                flash_attn: req.body.flash_attn || false,
-                sage_attn: req.body.sage_attn || false
-            };
-
-            const response = await fetch(`http://localhost:${persistentGenProcess.port}/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await response.json();
-
-            if (!result.success) throw new Error(result.error);
-
-            res.json({ success: true, message: "Generation completed (Server kept running)" });
-            return;
-
-        } else {
-            // One-shot mode requested
-            if (persistentGenProcess) {
-                killPersistentGen();
-            }
-
-            // Standard One-Shot Logic
-            const oneShotEnvVars = [
-                buildEnvVar('PYTHONIOENCODING', 'utf-8'),
-                gpuEnv
-            ].filter(Boolean).join('\n');
-            const oneShotCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${genAccelerateFlags} "${genScript}" ${args.join(' ')}`;
-            const oneShotScript = buildShellScript(venv.activate, oneShotEnvVars, oneShotCmd);
-
-            const oneShotProc = spawnShell(oneShotScript, ROOT_DIR);
-
-            // Write logs to file
-            const oneShotLogFileName = `gen_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
-            const oneShotLogStream = fs.createWriteStream(path.join(logsDir, oneShotLogFileName), { flags: 'a' });
-
-            const oneShotAppendLog = (data) => {
-                const text = data.toString();
-                oneShotLogStream.write(text);
-                broadcastLog(jobName, text);
-            };
-
-            oneShotProc.stdout.on('data', oneShotAppendLog);
-            oneShotProc.stderr.on('data', oneShotAppendLog);
-
-            // Prevent crashes on stream errors
-            oneShotProc.stdout.on('error', (err) => console.error(`[Gen/stdout] ${err.message}`));
-            oneShotProc.stderr.on('error', (err) => console.error(`[Gen/stderr] ${err.message}`));
-            oneShotLogStream.on('error', (err) => console.error(`[Gen/LogFile] ${err.message}`));
-
-            oneShotProc.on('close', (code) => {
-                const msg = `\n--- Generation finished (exit code: ${code}) ---\n`;
-                oneShotLogStream.write(msg);
-                oneShotLogStream.end();
-                broadcastLog(jobName, msg);
-                runningJobs.delete(jobName);
-                broadcastStatus(jobName, 'idle');
-            });
-
-            runningJobs.set(jobName, {
-                process: oneShotProc,
-                pid: oneShotProc.pid,
-                startTime: Date.now(),
-                type: 'generation',
-                gpuIds: currentGpuIdsRaw
-            });
-
-            broadcastStatus(jobName, 'generating');
-            res.json({ success: true, pid: oneShotProc.pid });
-
-
+        if (persistentGenProcess) {
+            killPersistentGen();
         }
+
+        const oneShotEnvVars = [
+            buildEnvVar('PYTHONIOENCODING', 'utf-8'),
+            gpuEnv
+        ].filter(Boolean).join('\n');
+        const oneShotCmd = `python "${genScript}" ${args.join(' ')}`;
+        const oneShotScript = buildShellScript(venv.activate, oneShotEnvVars, oneShotCmd);
+
+        const oneShotProc = spawnShell(oneShotScript, ROOT_DIR);
+
+        const oneShotLogFileName = `gen_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+        const oneShotLogStream = fs.createWriteStream(path.join(logsDir, oneShotLogFileName), { flags: 'a' });
+
+        const oneShotAppendLog = (data) => {
+            const text = data.toString();
+            oneShotLogStream.write(text);
+            broadcastLog(jobName, text);
+        };
+
+        oneShotProc.stdout.on('data', oneShotAppendLog);
+        oneShotProc.stderr.on('data', oneShotAppendLog);
+
+        oneShotProc.stdout.on('error', (err) => console.error(`[Gen/stdout] ${err.message}`));
+        oneShotProc.stderr.on('error', (err) => console.error(`[Gen/stderr] ${err.message}`));
+        oneShotLogStream.on('error', (err) => console.error(`[Gen/LogFile] ${err.message}`));
+
+        oneShotProc.on('close', (code) => {
+            const msg = `\n--- Generation finished (exit code: ${code}) ---\n`;
+            oneShotLogStream.write(msg);
+            oneShotLogStream.end();
+            broadcastLog(jobName, msg);
+            runningJobs.delete(jobName);
+            broadcastStatus(jobName, 'idle');
+        });
+
+        runningJobs.set(jobName, {
+            process: oneShotProc,
+            pid: oneShotProc.pid,
+            startTime: Date.now(),
+            type: 'generation',
+            gpuIds: currentGpuIdsRaw
+        });
+
+        broadcastStatus(jobName, 'generating');
+        res.json({ success: true, pid: oneShotProc.pid });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1466,45 +1362,6 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         // Build merged config and write to temp file
         const mergedConfig = buildTrainingConfig(jobName, jobPath);
-
-        // TP/SP: strip options that are incompatible with the TP training script.
-        const launchMode = mergedConfig.training_arguments?.multigpu_mode
-            || (mergedConfig.training_arguments?.deepspeed ? 'deepspeed' : (mergedConfig.training_arguments?.use_fsdp ? 'fsdp' : 'ddp'));
-        if (launchMode === 'tp_sp' && mergedConfig.training_arguments) {
-            mergedConfig.training_arguments.sequence_parallel = true;
-            // Normalize tp_degree with NaN guard
-            let tp = Number(mergedConfig.training_arguments.tp_degree || 2);
-            if (!Number.isFinite(tp)) tp = 2;
-            mergedConfig.training_arguments.tp_degree = Math.max(2, tp);
-            // Validate tp_backend against whitelist
-            const allowedBackends = ['nccl', 'cuda_direct', 'gloo', 'mpi'];
-            const rawBackend = mergedConfig.training_arguments.tp_backend || (isWindows ? 'gloo' : 'nccl');
-            mergedConfig.training_arguments.tp_backend = allowedBackends.includes(rawBackend) ? rawBackend : (isWindows ? 'gloo' : 'nccl');
-            delete mergedConfig.training_arguments.use_cuda_direct;
-            delete mergedConfig.training_arguments.save_state;
-            delete mergedConfig.training_arguments.save_state_on_train_end;
-            delete mergedConfig.training_arguments.save_last_n_steps_state;
-            delete mergedConfig.training_arguments.save_last_n_epochs_state;
-        } else if (mergedConfig.training_arguments) {
-            delete mergedConfig.training_arguments.no_fuse_qkv;
-            delete mergedConfig.training_arguments.tp_backend;
-            delete mergedConfig.training_arguments.tp_degree;
-            delete mergedConfig.training_arguments.sequence_parallel;
-        }
-
-        if (mergedConfig.training_arguments && launchMode !== 'deepspeed') {
-            delete mergedConfig.training_arguments.deepspeed;
-            delete mergedConfig.training_arguments.zero_stage;
-            delete mergedConfig.training_arguments.offload_optimizer_device;
-            delete mergedConfig.training_arguments.offload_optimizer_nvme_path;
-            delete mergedConfig.training_arguments.offload_param_device;
-            delete mergedConfig.training_arguments.offload_param_nvme_path;
-            delete mergedConfig.training_arguments.zero3_init_flag;
-            delete mergedConfig.training_arguments.zero3_save_16bit_model;
-            delete mergedConfig.training_arguments.fp16_master_weights_and_gradients;
-        } else if (mergedConfig.training_arguments) {
-            mergedConfig.training_arguments.deepspeed = true;
-        }
 
         // Convert Windows paths to WSL paths when running under WSL
         if (isWSL) {
@@ -1551,25 +1408,18 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         const launch = buildLaunchConfig(currentGpuIds, mergedConfig, mergedConfigPath, jobArch);
         if (launch.error) return res.status(400).json({ error: launch.error });
-        const { gpuEnv, accelerateFlags, tpTrainCmd } = launch;
+        const { gpuEnv, accelerateFlags } = launch;
 
-        const resolvedMode = mergedConfig.training_arguments?.multigpu_mode
-            || (mergedConfig.training_arguments?.deepspeed ? 'deepspeed' : (mergedConfig.training_arguments?.use_fsdp ? 'fsdp' : 'ddp'));
-
-        let trainCmd;
-        if (resolvedMode === 'tp_sp' && tpTrainCmd) {
-            trainCmd = tpTrainCmd;
-        } else {
-            const scriptName = hasNetwork ? jobArch.scripts.train_network : jobArch.scripts.train;
-            const targetScript = path.join(ROOT_DIR, scriptName);
-            trainCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${accelerateFlags} "${targetScript}" --config_file="${mergedConfigPath}"`;
-        }
+        const scriptName = hasNetwork ? jobArch.scripts.train_network : jobArch.scripts.train;
+        const targetScript = path.join(ROOT_DIR, scriptName);
+        const trainCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${accelerateFlags} "${targetScript}" --config_file="${mergedConfigPath}"`;
 
         // Spawn training process
         const isMultiGpu = currentGpuIds && currentGpuIds.split(',').map(s => s.trim()).filter(s => s.length > 0).length > 1;
         const trainEnvVars = [
             buildEnvVar('PYTHONIOENCODING', 'utf-8'),
             buildEnvVar('TOKENIZERS_PARALLELISM', 'false'),
+            buildEnvVar('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True'),
             gpuEnv,
             mergedConfig.training_arguments?.step_profile ? buildEnvVar('STEP_PROFILE', '1') : '',
             mergedConfig.training_arguments?.profile_microbatch ? buildEnvVar('PROFILE_MICROBATCH', '1') : '',

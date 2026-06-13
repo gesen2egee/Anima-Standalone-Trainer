@@ -1,21 +1,19 @@
---extra-index-url https://download.pytorch.org/whl/cu128
-torch==2.7.0
-torchvision==0.22.0
 accelerate==1.6.0
 transformers==4.54.1
-diffusers==0.32.1
+diffusers[torch]==0.32.1
 ftfy==6.3.1
-Pillow
 # albumentations==1.3.0
 opencv-python==4.10.0.84
 einops==0.7.0
 # pytorch-lightning==1.9.0
 bitsandbytes
 lion-pytorch==0.2.3
-schedulefree==1.4
-pytorch-optimizer==3.9.0
-prodigy-plus-schedule-free==1.9.2
+schedulefree @ git+https://github.com/facebookresearch/schedule_free.git@43e5c2d978920e1a3707a7609662c72b56401e62
+pytorch-optimizer @ git+https://github.com/kozistr/pytorch_optimizer.git@3d08fa0
+prodigy-plus-schedule-free==2.0.1
 prodigyopt==1.1.2
+torch-optimi==0.3.3
+adv-optm==2.5.2
 tensorboard
 safetensors==0.4.5
 # gradio==3.16.2
@@ -50,14 +48,4 @@ rich==14.1.0
 # for T5XXL tokenizer (SD3/FLUX)
 sentencepiece==0.2.1
 # for kohya_ss library
-flask
-wandb
-./cuda_direct_pkg
-./wd_parallel_pkg
-
 -e .
-setuptools==80.0.0
-
-
-
-

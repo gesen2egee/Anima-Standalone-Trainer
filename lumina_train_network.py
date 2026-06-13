@@ -23,7 +23,6 @@ from library import (
     train_util,
 )
 from library.utils import setup_logging
-from library.lumina_debug_tracker import LuminaDebugTracker, DebugTrackerConfig
 
 setup_logging()
 import logging
@@ -36,18 +35,6 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         super().__init__()
         self.sample_prompts_te_outputs = None
         self.is_swapping_blocks: bool = False
-        # Debug tracker — disabled by default; enable via --debug_vram flag or manually flip enabled=True
-        self.debug_tracker = LuminaDebugTracker(DebugTrackerConfig(
-            enabled=False,
-            log_every_n_steps=10,
-            log_vram=True,
-            log_block_devices=True,
-            log_tensor_stats=True,
-            log_attention_sizes=True,
-            log_on_phase_change=True,
-            vram_spike_threshold_mb=200.0,
-            log_file=None,  # set to e.g. "lumina_debug.log" to also write to file
-        ))
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
         super().assert_extra_args(args, train_dataset_group, val_dataset_group)
@@ -62,36 +49,11 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
 
         self.train_gemma2 = not args.network_train_unet_only
 
-        # Enable debug tracker if --debug_vram flag is set
-        if getattr(args, "debug_vram", False):
-            self.debug_tracker.cfg.enabled = True
-            self.debug_tracker.cfg.log_every_n_steps = getattr(args, "debug_vram_log_every_n_steps", 10)
-            log_file = getattr(args, "debug_vram_log_file", None)
-            if log_file:
-                self.debug_tracker.cfg.log_file = log_file
-            logger.info(
-                f"[LuminaDebug] VRAM debug tracker enabled "
-                f"(log_every_n_steps={self.debug_tracker.cfg.log_every_n_steps}, "
-                f"log_file={self.debug_tracker.cfg.log_file})"
-            )
-
     def load_target_model(self, args, weight_dtype, accelerator):
         loading_dtype = None if args.fp8_base else weight_dtype
 
-        ckpt_path = args.pretrained_model_name_or_path
-        if ckpt_path is None or ckpt_path == "":
-            ckpt_path = getattr(args, "dit_path", None)
-
-        if ckpt_path is None or ckpt_path == "":
-            raise ValueError(
-                "pretrained_model_name_or_path or dit_path is required / pretrained_model_name_or_pathまたはdit_pathが必要です"
-            )
-
-        # set it back to args for other functions
-        args.pretrained_model_name_or_path = ckpt_path
-
         model = lumina_util.load_lumina_model(
-            ckpt_path,
+            args.pretrained_model_name_or_path,
             loading_dtype,
             torch.device("cpu"),
             disable_mmap=args.disable_mmap_load_safetensors,
@@ -235,13 +197,6 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
             # Text Encoderから毎回出力を取得するので、GPUに乗せておく
             text_encoders[0].to(accelerator.device, dtype=weight_dtype)
 
-    def on_step_start(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype, is_train: bool = True):
-        self.debug_tracker.on_step_start(
-            step=getattr(args, "_debug_global_step", 0),
-            model=unet,
-            phase="train" if is_train else "val",
-        )
-
     def sample_images(
         self,
         accelerator,
@@ -254,12 +209,6 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         text_encoder,
         lumina,
     ):
-        # Store global_step for on_step_start access
-        args._debug_global_step = global_step or 0
-
-        self.debug_tracker.on_phase_boundary(global_step or 0, "sampling_start", model=lumina)
-        self.debug_tracker.report_block_swap_state(global_step or 0, lumina)
-
         lumina_train_util.sample_images(
             accelerator,
             args,
@@ -270,9 +219,6 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
             self.get_models_for_text_encoding(args, accelerator, text_encoder),
             self.sample_prompts_te_outputs,
         )
-
-        self.debug_tracker.on_phase_boundary(global_step or 0, "sampling_end", model=lumina)
-        self.debug_tracker.report_block_swap_state(global_step or 0, lumina)
 
     # Remaining methods maintain similar structure to flux implementation
     # with Lumina-specific model calls and strategies
@@ -336,17 +282,6 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
             gemma2_hidden_states=gemma2_hidden_states,
             gemma2_attn_mask=gemma2_attn_mask,
             timesteps=timesteps,
-        )
-
-        # Debug: log tensor stats and VRAM after forward pass
-        cap_len = gemma2_attn_mask.shape[-1] if gemma2_attn_mask is not None else 256
-        self.debug_tracker.on_forward_end(
-            step=getattr(args, "_debug_global_step", 0),
-            noisy_input=noisy_model_input,
-            model_pred=model_pred,
-            timesteps=timesteps,
-            model=dit,
-            cap_len=cap_len,
         )
 
         # apply model prediction type
@@ -438,26 +373,6 @@ def setup_parser() -> argparse.ArgumentParser:
     parser = train_network.setup_parser()
     train_util.add_dit_training_arguments(parser)
     lumina_train_util.add_lumina_train_arguments(parser)
-
-    # Debug tracker arguments
-    parser.add_argument(
-        "--debug_vram",
-        action="store_true",
-        help="Enable Lumina VRAM/tensor/block-device debug tracker during training",
-    )
-    parser.add_argument(
-        "--debug_vram_log_every_n_steps",
-        type=int,
-        default=10,
-        help="Log debug info every N steps (default: 10). Only used when --debug_vram is set.",
-    )
-    parser.add_argument(
-        "--debug_vram_log_file",
-        type=str,
-        default=None,
-        help="Also write debug log to this file (e.g. lumina_debug.log). Only used when --debug_vram is set.",
-    )
-
     return parser
 
 

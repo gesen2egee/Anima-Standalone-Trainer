@@ -1,4 +1,5 @@
 venv_path = ""
+jobs_dir = ""
 
 [model_paths]
 # Anima Paths

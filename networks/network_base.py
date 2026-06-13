@@ -371,6 +371,9 @@ class AdditionalNetwork(torch.nn.Module):
             pass  # already a list with one element
 
         self.requires_grad_(True)
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if getattr(lora, "is_mica", False):
+                lora.lokr_w2.requires_grad = False
 
         all_params = []
         lr_descriptions = []
@@ -389,6 +392,8 @@ class AdditionalNetwork(torch.nn.Module):
                         break
 
                 for name, param in lora.named_parameters():
+                    if not param.requires_grad:
+                        continue
                     if matched_reg_lr is not None:
                         reg_idx, reg_lr = matched_reg_lr
                         group_key = f"reg_lr_{reg_idx}"
@@ -477,6 +482,9 @@ class AdditionalNetwork(torch.nn.Module):
 
     def prepare_grad_etc(self, text_encoder, unet):
         self.requires_grad_(True)
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if getattr(lora, "is_mica", False):
+                lora.lokr_w2.requires_grad = False
 
     def on_epoch_start(self, text_encoder, unet):
         self.train()

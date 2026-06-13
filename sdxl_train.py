@@ -1,9 +1,8 @@
-﻿# training with captions
+# training with captions
 
 import argparse
 import math
 import os
-from library.profiler import StepProfiler
 from multiprocessing import Value
 from typing import List
 import toml
@@ -71,7 +70,7 @@ def get_block_params_to_optimize(unet: SdxlUNet2DConditionModel, block_lrs: List
 
     params_to_optimize = []
     for i, params in enumerate(block_params):
-        if block_lrs[i] == 0:  # 0ã®ã¨ãã¯å­¦ç¿’ã—ãªã„ do not optimize when lr is 0
+        if block_lrs[i] == 0:  # 0のときは学習しない do not optimize when lr is 0
             continue
         params_to_optimize.append({"params": params, "lr": block_lrs[i]})
 
@@ -106,16 +105,16 @@ def train(args):
 
     assert (
         not args.weighted_captions or not args.cache_text_encoder_outputs
-    ), "weighted_captions is not supported when caching text encoder outputs / cache_text_encoder_outputsã‚’ä½¿ã†ã¨ãã¯weighted_captionsã¯ã‚µãƒãƒ¼ãƒˆã•ã‚Œã¦ã„ã¾ã›ã‚“"
+    ), "weighted_captions is not supported when caching text encoder outputs / cache_text_encoder_outputsを使うときはweighted_captionsはサポートされていません"
     assert (
         not args.train_text_encoder or not args.cache_text_encoder_outputs
-    ), "cache_text_encoder_outputs is not supported when training text encoder / text encoderã‚’å­¦ç¿’ã™ã‚‹ã¨ãã¯cache_text_encoder_outputsã¯ã‚µãƒãƒ¼ãƒˆã•ã‚Œã¦ã„ã¾ã›ã‚“"
+    ), "cache_text_encoder_outputs is not supported when training text encoder / text encoderを学習するときはcache_text_encoder_outputsはサポートされていません"
 
     if args.block_lr:
         block_lrs = [float(lr) for lr in args.block_lr.split(",")]
         assert (
             len(block_lrs) == UNET_NUM_BLOCKS_FOR_BLOCK_LR
-        ), f"block_lr must have {UNET_NUM_BLOCKS_FOR_BLOCK_LR} values / block_lrã¯{UNET_NUM_BLOCKS_FOR_BLOCK_LR}å€‹ã®å€¤ã‚’æŒ‡å®šã—ã¦ãã ã•ã„"
+        ), f"block_lr must have {UNET_NUM_BLOCKS_FOR_BLOCK_LR} values / block_lrは{UNET_NUM_BLOCKS_FOR_BLOCK_LR}個の値を指定してください"
     else:
         block_lrs = None
 
@@ -123,7 +122,7 @@ def train(args):
     use_dreambooth_method = args.in_json is None
 
     if args.seed is not None:
-        set_seed(args.seed)  # ä¹±æ•°ç³»åˆ—ã‚’åˆæœŸåŒ–ã™ã‚‹
+        set_seed(args.seed)  # 乱数系列を初期化する
 
     tokenize_strategy = strategy_sdxl.SdxlTokenizeStrategy(args.max_token_length, args.tokenizer_cache_dir)
     strategy_base.TokenizeStrategy.set_strategy(tokenize_strategy)
@@ -136,7 +135,7 @@ def train(args):
         )
         strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
-    # ãƒ‡ãƒ¼ã‚¿ã‚»ãƒƒãƒˆã‚’æº–å‚™ã™ã‚‹
+    # データセットを準備する
     if args.dataset_class is None:
         blueprint_generator = BlueprintGenerator(ConfigSanitizer(True, True, args.masked_loss, True))
         if args.dataset_config is not None:
@@ -145,7 +144,7 @@ def train(args):
             ignored = ["train_data_dir", "in_json"]
             if any(getattr(args, attr) is not None for attr in ignored):
                 logger.warning(
-                    "ignore following options because config file is found: {0} / è¨­å®šãƒ•ã‚¡ã‚¤ãƒ«ãŒåˆ©ç”¨ã•ã‚Œã‚‹ãŸã‚ä»¥ä¸‹ã®ã‚ªãƒ—ã‚·ãƒ§ãƒ³ã¯ç„¡è¦–ã•ã‚Œã¾ã™: {0}".format(
+                    "ignore following options because config file is found: {0} / 設定ファイルが利用されるため以下のオプションは無視されます: {0}".format(
                         ", ".join(ignored)
                     )
                 )
@@ -194,29 +193,29 @@ def train(args):
         return
     if len(train_dataset_group) == 0:
         logger.error(
-            "No data found. Please verify the metadata file and train_data_dir option. / ç”»åƒãŒã‚ã‚Šã¾ã›ã‚“ã€‚ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ãŠã‚ˆã³train_data_dirã‚ªãƒ—ã‚·ãƒ§ãƒ³ã‚’ç¢ºèªã—ã¦ãã ã•ã„ã€‚"
+            "No data found. Please verify the metadata file and train_data_dir option. / 画像がありません。メタデータおよびtrain_data_dirオプションを確認してください。"
         )
         return
 
     if cache_latents:
         assert (
             train_dataset_group.is_latent_cacheable()
-        ), "when caching latents, either color_aug or random_crop cannot be used / latentã‚’ã‚­ãƒ£ãƒƒã‚·ãƒ¥ã™ã‚‹ã¨ãã¯color_augã¨random_cropã¯ä½¿ãˆã¾ã›ã‚“"
+        ), "when caching latents, either color_aug or random_crop cannot be used / latentをキャッシュするときはcolor_augとrandom_cropは使えません"
 
     if args.cache_text_encoder_outputs:
         assert (
             train_dataset_group.is_text_encoder_output_cacheable()
-        ), "when caching text encoder output, either caption_dropout_rate, shuffle_caption, token_warmup_step or caption_tag_dropout_rate cannot be used / text encoderã®å‡ºåŠ›ã‚’ã‚­ãƒ£ãƒƒã‚·ãƒ¥ã™ã‚‹ã¨ãã¯caption_dropout_rate, shuffle_caption, token_warmup_step, caption_tag_dropout_rateã¯ä½¿ãˆã¾ã›ã‚“"
+        ), "when caching text encoder output, either caption_dropout_rate, shuffle_caption, token_warmup_step or caption_tag_dropout_rate cannot be used / text encoderの出力をキャッシュするときはcaption_dropout_rate, shuffle_caption, token_warmup_step, caption_tag_dropout_rateは使えません"
 
-    # acceleratorã‚’æº–å‚™ã™ã‚‹
+    # acceleratorを準備する
     logger.info("prepare accelerator")
     accelerator = train_util.prepare_accelerator(args)
 
-    # mixed precisionã«å¯¾å¿œã—ãŸåž‹ã‚’ç”¨æ„ã—ã¦ãŠãé©å®œcastã™ã‚‹
+    # mixed precisionに対応した型を用意しておき適宜castする
     weight_dtype, save_dtype = train_util.prepare_dtype(args)
     vae_dtype = torch.float32 if args.no_half_vae else weight_dtype
 
-    # ãƒ¢ãƒ‡ãƒ«ã‚’èª­ã¿è¾¼ã‚€
+    # モデルを読み込む
     (
         load_stable_diffusion_format,
         text_encoder1,
@@ -242,9 +241,9 @@ def train(args):
     else:
         save_stable_diffusion_format = args.save_model_as.lower() == "ckpt" or args.save_model_as.lower() == "safetensors"
         use_safetensors = args.use_safetensors or ("safetensors" in args.save_model_as.lower())
-        # assert save_stable_diffusion_format, "save_model_as must be ckpt or safetensors / save_model_asã¯ckptã‹safetensorsã§ã‚ã‚‹å¿…è¦ãŒã‚ã‚Šã¾ã™"
+        # assert save_stable_diffusion_format, "save_model_as must be ckpt or safetensors / save_model_asはckptかsafetensorsである必要があります"
 
-    # Diffusersç‰ˆã®xformersä½¿ç”¨ãƒ•ãƒ©ã‚°ã‚’è¨­å®šã™ã‚‹é–¢æ•°
+    # Diffusers版のxformers使用フラグを設定する関数
     def set_diffusers_xformers_flag(model, valid):
         def fn_recursive_set_mem_eff(module: torch.nn.Module):
             if hasattr(module, "set_use_memory_efficient_attention_xformers"):
@@ -255,20 +254,20 @@ def train(args):
 
         fn_recursive_set_mem_eff(model)
 
-    # ãƒ¢ãƒ‡ãƒ«ã« xformers ã¨ã‹ memory efficient attention ã‚’çµ„ã¿è¾¼ã‚€
+    # モデルに xformers とか memory efficient attention を組み込む
     if args.diffusers_xformers:
-        # ã‚‚ã†U-Netã‚’ç‹¬è‡ªã«ã—ãŸã®ã§å‹•ã‹ãªã„ã‘ã©VAEã®xformersã¯å‹•ãã¯ãš
+        # もうU-Netを独自にしたので動かないけどVAEのxformersは動くはず
         accelerator.print("Use xformers by Diffusers")
         # set_diffusers_xformers_flag(unet, True)
         set_diffusers_xformers_flag(vae, True)
     else:
-        # Windowsç‰ˆã®xformersã¯floatã§å­¦ç¿’ã§ããªã‹ã£ãŸã‚Šã™ã‚‹ã®ã§xformersã‚’ä½¿ã‚ãªã„è¨­å®šã‚‚å¯èƒ½ã«ã—ã¦ãŠãå¿…è¦ãŒã‚ã‚‹
+        # Windows版のxformersはfloatで学習できなかったりするのでxformersを使わない設定も可能にしておく必要がある
         accelerator.print("Disable Diffusers' xformers")
         train_util.replace_unet_modules(unet, args.mem_eff_attn, args.xformers, args.sdpa)
-        if torch.__version__ >= "2.0.0":  # PyTorch 2.0.0 ä»¥ä¸Šå¯¾å¿œã®xformersãªã‚‰ä»¥ä¸‹ãŒä½¿ãˆã‚‹
+        if torch.__version__ >= "2.0.0":  # PyTorch 2.0.0 以上対応のxformersなら以下が使える
             vae.set_use_memory_efficient_attention_xformers(args.xformers)
 
-    # å­¦ç¿’ã‚’æº–å‚™ã™ã‚‹
+    # 学習を準備する
     if cache_latents:
         vae.to(accelerator.device, dtype=vae_dtype)
         vae.requires_grad_(False)
@@ -281,7 +280,7 @@ def train(args):
 
         accelerator.wait_for_everyone()
 
-    # å­¦ç¿’ã‚’æº–å‚™ã™ã‚‹ï¼šãƒ¢ãƒ‡ãƒ«ã‚’é©åˆ‡ãªçŠ¶æ…‹ã«ã™ã‚‹
+    # 学習を準備する：モデルを適切な状態にする
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
     train_unet = args.learning_rate != 0
@@ -319,7 +318,7 @@ def train(args):
         text_encoder1.eval()
         text_encoder2.eval()
 
-        # TextEncoderã®å‡ºåŠ›ã‚’ã‚­ãƒ£ãƒƒã‚·ãƒ¥ã™ã‚‹
+        # TextEncoderの出力をキャッシュする
         if args.cache_text_encoder_outputs:
             # Text Encodes are eval and no grad
             text_encoder_output_caching_strategy = strategy_sdxl.SdxlTextEncoderOutputsCachingStrategy(
@@ -369,7 +368,7 @@ def train(args):
     accelerator.print(f"number of models: {len(training_models)}")
     accelerator.print(f"number of trainable parameters: {n_params}")
 
-    # å­¦ç¿’ã«å¿…è¦ãªã‚¯ãƒ©ã‚¹ã‚’æº–å‚™ã™ã‚‹
+    # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
     if args.fused_optimizer_groups:
@@ -424,30 +423,30 @@ def train(args):
     # some strategies can be None
     train_dataset_group.set_current_strategies()
 
-    # DataLoaderã®ãƒ—ãƒ­ã‚»ã‚¹æ•°ï¼š0 ã¯ persistent_workers ãŒä½¿ãˆãªã„ã®ã§æ³¨æ„
+    # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
     n_workers = min(args.max_data_loader_n_workers, os.cpu_count())  # cpu_count or max_data_loader_n_workers
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset_group,
         batch_size=1,
-        shuffle=not getattr(args, 'disable_bucket_shuffle', False),
+        shuffle=True,
         collate_fn=collator,
         num_workers=n_workers,
         persistent_workers=args.persistent_data_loader_workers,
     )
 
-    # å­¦ç¿’ã‚¹ãƒ†ãƒƒãƒ—æ•°ã‚’è¨ˆç®—ã™ã‚‹
+    # 学習ステップ数を計算する
     if args.max_train_epochs is not None:
         args.max_train_steps = args.max_train_epochs * math.ceil(
             len(train_dataloader) / accelerator.num_processes / args.gradient_accumulation_steps
         )
         accelerator.print(
-            f"override steps. steps for {args.max_train_epochs} epochs is / æŒ‡å®šã‚¨ãƒãƒƒã‚¯ã¾ã§ã®ã‚¹ãƒ†ãƒƒãƒ—æ•°: {args.max_train_steps}"
+            f"override steps. steps for {args.max_train_epochs} epochs is / 指定エポックまでのステップ数: {args.max_train_steps}"
         )
 
-    # ãƒ‡ãƒ¼ã‚¿ã‚»ãƒƒãƒˆå´ã«ã‚‚å­¦ç¿’ã‚¹ãƒ†ãƒƒãƒ—ã‚’é€ä¿¡
+    # データセット側にも学習ステップを送信
     train_dataset_group.set_max_train_steps(args.max_train_steps)
 
-    # lr schedulerã‚’ç”¨æ„ã™ã‚‹
+    # lr schedulerを用意する
     if args.fused_optimizer_groups:
         # prepare lr schedulers for each optimizer
         lr_schedulers = [train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes) for optimizer in optimizers]
@@ -455,11 +454,11 @@ def train(args):
     else:
         lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
 
-    # å®Ÿé¨“çš„æ©Ÿèƒ½ï¼šå‹¾é…ã‚‚å«ã‚ãŸfp16/bf16å­¦ç¿’ã‚’è¡Œã†ã€€ãƒ¢ãƒ‡ãƒ«å…¨ä½“ã‚’fp16/bf16ã«ã™ã‚‹
+    # 実験的機能：勾配も含めたfp16/bf16学習を行う　モデル全体をfp16/bf16にする
     if args.full_fp16:
         assert (
             args.mixed_precision == "fp16"
-        ), "full_fp16 requires mixed precision='fp16' / full_fp16ã‚’ä½¿ã†å ´åˆã¯mixed_precision='fp16'ã‚’æŒ‡å®šã—ã¦ãã ã•ã„ã€‚"
+        ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
         accelerator.print("enable full fp16 training.")
         unet.to(weight_dtype)
         text_encoder1.to(weight_dtype)
@@ -467,7 +466,7 @@ def train(args):
     elif args.full_bf16:
         assert (
             args.mixed_precision == "bf16"
-        ), "full_bf16 requires mixed precision='bf16' / full_bf16ã‚’ä½¿ã†å ´åˆã¯mixed_precision='bf16'ã‚’æŒ‡å®šã—ã¦ãã ã•ã„ã€‚"
+        ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
         accelerator.print("enable full bf16 training.")
         unet.to(weight_dtype)
         text_encoder1.to(weight_dtype)
@@ -492,7 +491,7 @@ def train(args):
         training_models = [ds_model]
 
     else:
-        # acceleratorãŒãªã‚“ã‹ã‚ˆã‚ã—ãã‚„ã£ã¦ãã‚Œã‚‹ã‚‰ã—ã„
+        # acceleratorがなんかよろしくやってくれるらしい
         if train_unet:
             unet = accelerator.prepare(unet)
         if train_text_encoder1:
@@ -501,7 +500,7 @@ def train(args):
             text_encoder2 = accelerator.prepare(text_encoder2)
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
 
-    # TextEncoderã®å‡ºåŠ›ã‚’ã‚­ãƒ£ãƒƒã‚·ãƒ¥ã™ã‚‹ã¨ãã«ã¯CPUã¸ç§»å‹•ã™ã‚‹
+    # TextEncoderの出力をキャッシュするときにはCPUへ移動する
     if args.cache_text_encoder_outputs:
         # move Text Encoders for sampling images. Text Encoder doesn't work on CPU with fp16
         text_encoder1.to("cpu", dtype=torch.float32)
@@ -512,13 +511,13 @@ def train(args):
         text_encoder1.to(accelerator.device)
         text_encoder2.to(accelerator.device)
 
-    # å®Ÿé¨“çš„æ©Ÿèƒ½ï¼šå‹¾é…ã‚‚å«ã‚ãŸfp16å­¦ç¿’ã‚’è¡Œã†ã€€PyTorchã«ãƒ‘ãƒƒãƒã‚’å½“ã¦ã¦fp16ã§ã®grad scaleã‚’æœ‰åŠ¹ã«ã™ã‚‹
+    # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
     if args.full_fp16:
         # During deepseed training, accelerate not handles fp16/bf16|mixed precision directly via scaler. Let deepspeed engine do.
         # -> But we think it's ok to patch accelerator even if deepspeed is enabled.
         train_util.patch_accelerator_for_fp16_training(accelerator)
 
-    # resumeã™ã‚‹
+    # resumeする
     train_util.resume_from_local_or_hf_if_specified(accelerator, args)
 
     if args.fused_backward_pass:
@@ -572,26 +571,26 @@ def train(args):
                         parameter_optimizer_map[parameter] = opt_idx
                         num_parameters_per_group[opt_idx] += 1
 
-    # epochæ•°ã‚’è¨ˆç®—ã™ã‚‹
+    # epoch数を計算する
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
     if (args.save_n_epoch_ratio is not None) and (args.save_n_epoch_ratio > 0):
         args.save_every_n_epochs = math.floor(num_train_epochs / args.save_n_epoch_ratio) or 1
 
-    # å­¦ç¿’ã™ã‚‹
+    # 学習する
     # total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-    accelerator.print("running training / å­¦ç¿’é–‹å§‹")
-    accelerator.print(f"  num examples / ã‚µãƒ³ãƒ—ãƒ«æ•°: {train_dataset_group.num_train_images}")
-    accelerator.print(f"  num batches per epoch / 1epochã®ãƒãƒƒãƒæ•°: {len(train_dataloader)}")
-    accelerator.print(f"  num epochs / epochæ•°: {num_train_epochs}")
+    accelerator.print("running training / 学習開始")
+    accelerator.print(f"  num examples / サンプル数: {train_dataset_group.num_train_images}")
+    accelerator.print(f"  num batches per epoch / 1epochのバッチ数: {len(train_dataloader)}")
+    accelerator.print(f"  num epochs / epoch数: {num_train_epochs}")
     accelerator.print(
-        f"  batch size per device / ãƒãƒƒãƒã‚µã‚¤ã‚º: {', '.join([str(d.batch_size) for d in train_dataset_group.datasets])}"
+        f"  batch size per device / バッチサイズ: {', '.join([str(d.batch_size) for d in train_dataset_group.datasets])}"
     )
     # accelerator.print(
-    #     f"  total train batch size (with parallel & distributed & accumulation) / ç·ãƒãƒƒãƒã‚µã‚¤ã‚ºï¼ˆä¸¦åˆ—å­¦ç¿’ã€å‹¾é…åˆè¨ˆå«ã‚€ï¼‰: {total_batch_size}"
+    #     f"  total train batch size (with parallel & distributed & accumulation) / 総バッチサイズ（並列学習、勾配合計含む）: {total_batch_size}"
     # )
-    accelerator.print(f"  gradient accumulation steps / å‹¾é…ã‚’åˆè¨ˆã™ã‚‹ã‚¹ãƒ†ãƒƒãƒ—æ•° = {args.gradient_accumulation_steps}")
-    accelerator.print(f"  total optimization steps / å­¦ç¿’ã‚¹ãƒ†ãƒƒãƒ—æ•°: {args.max_train_steps}")
+    accelerator.print(f"  gradient accumulation steps / 勾配を合計するステップ数 = {args.gradient_accumulation_steps}")
+    accelerator.print(f"  total optimization steps / 学習ステップ数: {args.max_train_steps}")
 
     progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
     global_step = 0
@@ -624,7 +623,6 @@ def train(args):
         accelerator.log({}, step=0)
 
     loss_recorder = train_util.LossRecorder()
-    profiler = StepProfiler(accelerator, args.step_profile, getattr(args, "profile_microbatch", False))
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
@@ -639,15 +637,14 @@ def train(args):
                 optimizer_hooked_count = {i: 0 for i in range(len(optimizers))}  # reset counter for each step
 
             with accelerator.accumulate(*training_models):
-                profiler.on_batch_start()
                 if "latents" in batch and batch["latents"] is not None:
                     latents = batch["latents"].to(accelerator.device).to(dtype=weight_dtype)
                 else:
                     with torch.no_grad():
-                        # latentã«å¤‰æ›
+                        # latentに変換
                         latents = vae.encode(batch["images"].to(vae_dtype)).latent_dist.sample().to(weight_dtype)
 
-                        # NaNãŒå«ã¾ã‚Œã¦ã„ã‚Œã°è­¦å‘Šã‚’è¡¨ç¤ºã—0ã«ç½®ãæ›ãˆã‚‹
+                        # NaNが含まれていれば警告を表示し0に置き換える
                         if torch.any(torch.isnan(latents)):
                             accelerator.print("NaN found in latents, replacing with zeros")
                             latents = torch.nan_to_num(latents, 0, out=latents)
@@ -710,6 +707,19 @@ def train(args):
 
                 noisy_latents = noisy_latents.to(weight_dtype)  # TODO check why noisy_latents is not weight_dtype
 
+                if batch["masks"] is not None:
+                    with torch.no_grad():
+                        masked_latents = vae.encode(
+                            batch["masked_images"].to(vae_dtype)
+                        ).latent_dist.sample().to(weight_dtype)
+                        masked_latents = masked_latents * sdxl_model_util.VAE_SCALE_FACTOR
+
+                        # Resize the mask to latents shape as we concatenate the mask to the latents
+                        mask = torch.nn.functional.interpolate(
+                            batch["masks"].to(weight_dtype), size=latents.shape[2:]
+                        )
+                    noisy_latents = torch.cat([noisy_latents, mask, masked_latents], dim=1)
+
                 # Predict the noise residual
                 with accelerator.autocast():
                     noise_pred = unet(noisy_latents, timesteps, text_embedding, vector_embedding)
@@ -747,10 +757,7 @@ def train(args):
                 else:
                     loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "mean", huber_c)
 
-                profiler.on_fwd_done()
                 accelerator.backward(loss)
-                profiler.on_bwd_done()
-                profiler.on_comm_done()
 
                 if not (args.fused_backward_pass or args.fused_optimizer_groups):
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
@@ -769,8 +776,6 @@ def train(args):
                         for i in range(1, len(optimizers)):
                             lr_schedulers[i].step()
 
-                profiler.on_step_done(global_step)  # summary line logic here
-
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 progress_bar.update(1)
@@ -788,7 +793,7 @@ def train(args):
                     unet,
                 )
 
-                # æŒ‡å®šã‚¹ãƒ†ãƒƒãƒ—ã”ã¨ã«ãƒ¢ãƒ‡ãƒ«ã‚’ä¿å­˜
+                # 指定ステップごとにモデルを保存
                 if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
                     accelerator.wait_for_everyone()
                     if accelerator.is_main_process:
@@ -810,12 +815,9 @@ def train(args):
                             vae,
                             logit_scale,
                             ckpt_info,
-                            text_encoder1_for_save=text_encoder1,
-                            text_encoder2_for_save=text_encoder2,
-                            unet_for_save=unet,
                         )
 
-            current_loss = loss.detach().item()  # å¹³å‡ãªã®ã§batch sizeã¯é–¢ä¿‚ãªã„ã¯ãš
+            current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
             if len(accelerator.trackers) > 0:
                 logs = {"loss": current_loss}
                 if block_lrs is None:
@@ -859,9 +861,6 @@ def train(args):
                     vae,
                     logit_scale,
                     ckpt_info,
-                    text_encoder1_for_save=text_encoder1,
-                    text_encoder2_for_save=text_encoder2,
-                    unet_for_save=unet,
                 )
 
         sdxl_train_util.sample_images(
@@ -877,41 +876,36 @@ def train(args):
         )
 
     is_main_process = accelerator.is_main_process
-    export_unet = accelerator.unwrap_model(unet)
-    export_text_encoder1 = accelerator.unwrap_model(text_encoder1)
-    export_text_encoder2 = accelerator.unwrap_model(text_encoder2)
+    # if is_main_process:
+    unet = accelerator.unwrap_model(unet)
+    text_encoder1 = accelerator.unwrap_model(text_encoder1)
+    text_encoder2 = accelerator.unwrap_model(text_encoder2)
+
+    accelerator.end_training()
 
     if args.save_state or args.save_state_on_train_end:
         train_util.save_state_on_train_end(args, accelerator)
 
-    save_accelerator = accelerator
-
-    del accelerator  # ã“ã®å¾Œãƒ¡ãƒ¢ãƒªã‚’ä½¿ã†ã®ã§ã“ã‚Œã¯æ¶ˆã™
+    del accelerator  # この後メモリを使うのでこれは消す
 
     if is_main_process:
         src_path = src_stable_diffusion_ckpt if save_stable_diffusion_format else src_diffusers_model_path
         sdxl_train_util.save_sd_model_on_train_end(
             args,
-            save_accelerator,
             src_path,
             save_stable_diffusion_format,
             use_safetensors,
             save_dtype,
             epoch,
             global_step,
-            export_text_encoder1,
-            export_text_encoder2,
-            export_unet,
+            text_encoder1,
+            text_encoder2,
+            unet,
             vae,
             logit_scale,
             ckpt_info,
-            text_encoder1_for_save=text_encoder1,
-            text_encoder2_for_save=text_encoder2,
-            unet_for_save=unet,
         )
         logger.info("model saved.")
-
-    save_accelerator.end_training()
 
 
 def setup_parser() -> argparse.ArgumentParser:
@@ -934,36 +928,36 @@ def setup_parser() -> argparse.ArgumentParser:
         "--learning_rate_te1",
         type=float,
         default=None,
-        help="learning rate for text encoder 1 (ViT-L) / text encoder 1 (ViT-L)ã®å­¦ç¿’çŽ‡",
+        help="learning rate for text encoder 1 (ViT-L) / text encoder 1 (ViT-L)の学習率",
     )
     parser.add_argument(
         "--learning_rate_te2",
         type=float,
         default=None,
-        help="learning rate for text encoder 2 (BiG-G) / text encoder 2 (BiG-G)ã®å­¦ç¿’çŽ‡",
+        help="learning rate for text encoder 2 (BiG-G) / text encoder 2 (BiG-G)の学習率",
     )
 
     parser.add_argument(
-        "--diffusers_xformers", action="store_true", help="use xformers by diffusers / Diffusersã§xformersã‚’ä½¿ç”¨ã™ã‚‹"
+        "--diffusers_xformers", action="store_true", help="use xformers by diffusers / Diffusersでxformersを使用する"
     )
-    parser.add_argument("--train_text_encoder", action="store_true", help="train text encoder / text encoderã‚‚å­¦ç¿’ã™ã‚‹")
+    parser.add_argument("--train_text_encoder", action="store_true", help="train text encoder / text encoderも学習する")
     parser.add_argument(
         "--no_half_vae",
         action="store_true",
-        help="do not use fp16/bf16 VAE in mixed precision (use float VAE) / mixed precisionã§ã‚‚ fp16/bf16 VAEã‚’ä½¿ã‚ãšfloat VAEã‚’ä½¿ã†",
+        help="do not use fp16/bf16 VAE in mixed precision (use float VAE) / mixed precisionでも fp16/bf16 VAEを使わずfloat VAEを使う",
     )
     parser.add_argument(
         "--block_lr",
         type=str,
         default=None,
         help=f"learning rates for each block of U-Net, comma-separated, {UNET_NUM_BLOCKS_FOR_BLOCK_LR} values / "
-        + f"U-Netã®å„ãƒ–ãƒ­ãƒƒã‚¯ã®å­¦ç¿’çŽ‡ã€ã‚«ãƒ³ãƒžåŒºåˆ‡ã‚Šã€{UNET_NUM_BLOCKS_FOR_BLOCK_LR}å€‹ã®å€¤",
+        + f"U-Netの各ブロックの学習率、カンマ区切り、{UNET_NUM_BLOCKS_FOR_BLOCK_LR}個の値",
     )
     parser.add_argument(
         "--fused_optimizer_groups",
         type=int,
         default=None,
-        help="number of optimizers for fused backward pass and optimizer step / fused backward passã¨optimizer stepã®ãŸã‚ã®optimizeræ•°",
+        help="number of optimizers for fused backward pass and optimizer step / fused backward passとoptimizer stepのためのoptimizer数",
     )
     return parser
 

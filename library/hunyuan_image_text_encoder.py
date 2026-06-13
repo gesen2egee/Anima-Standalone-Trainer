@@ -173,7 +173,7 @@ def load_byt5(
     device: Union[str, torch.device],
     disable_mmap: bool = False,
     state_dict: Optional[dict] = None,
-) -> Tuple[PreTrainedTokenizer, T5Stack]:
+) -> Tuple[T5Stack, PreTrainedTokenizer]:
     BYT5_CONFIG_JSON = """
 {
     "_name_or_path": "/home/patrick/t5/byt5-small",

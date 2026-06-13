@@ -2,11 +2,11 @@
 enable_bucket = true
 bucket_no_upscale = true
 min_bucket_reso = 512
-max_bucket_reso = 1536
+max_bucket_reso = 2048
 bucket_reso_steps = 64
 
 [[datasets]]
-resolution = [1536, 1536]
+resolution = [1024, 1024]
 batch_size = 1
 caption_extension = ".txt"
 
@@ -17,6 +17,8 @@ caption_extension = ".txt"
   flip_aug = false
   caption_prefix = ""
   shuffle_caption = true
-  caption_tag_dropout_rate = 0.0
+  enable_wildcard = true
+  alpha_mask = true
+  caption_tag_dropout_rate = 0.3
   caption_dropout_rate = 0.0
   caption_dropout_every_n_epochs = 0

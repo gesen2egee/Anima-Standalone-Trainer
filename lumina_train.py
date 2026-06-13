@@ -14,7 +14,6 @@ import argparse
 import copy
 import math
 import os
-from library.profiler import StepProfiler
 from multiprocessing import Value
 import toml
 
@@ -445,7 +444,7 @@ def train(args):
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset_group,
         batch_size=1,
-        shuffle=not getattr(args, 'disable_bucket_shuffle', False),
+        shuffle=True,
         collate_fn=collator,
         num_workers=n_workers,
         persistent_workers=args.persistent_data_loader_workers,
@@ -673,7 +672,6 @@ def train(args):
         accelerator.log({}, step=0)
 
     loss_recorder = train_util.LossRecorder()
-    profiler = StepProfiler(accelerator, args.step_profile, getattr(args, "profile_microbatch", False))
     epoch = 0  # avoid error when max_train_steps is 0
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
@@ -691,7 +689,6 @@ def train(args):
                 }  # reset counter for each step
 
             with accelerator.accumulate(*training_models):
-                profiler.on_batch_start()
                 if "latents" in batch and batch["latents"] is not None:
                     latents = batch["latents"].to(
                         accelerator.device, dtype=weight_dtype
@@ -793,10 +790,7 @@ def train(args):
                 loss = loss.mean()
 
                 # backward
-                profiler.on_fwd_done()
                 accelerator.backward(loss)
-                profiler.on_bwd_done()
-                profiler.on_comm_done()
 
                 if not (args.fused_backward_pass or args.blockwise_fused_optimizers):
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
@@ -814,8 +808,6 @@ def train(args):
                     if args.blockwise_fused_optimizers:
                         for i in range(1, len(optimizers)):
                             lr_schedulers[i].step()
-
-                profiler.on_step_done(global_step)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -849,7 +841,7 @@ def train(args):
                             epoch,
                             num_train_epochs,
                             global_step,
-                            nextdit,
+                            accelerator.unwrap_model(nextdit),
                         )
                 optimizer_train_fn()
 
@@ -887,7 +879,7 @@ def train(args):
                     epoch,
                     num_train_epochs,
                     global_step,
-                    nextdit,
+                    accelerator.unwrap_model(nextdit),
                 )
 
         lumina_train_util.sample_images(
@@ -903,24 +895,22 @@ def train(args):
         optimizer_train_fn()
 
     is_main_process = accelerator.is_main_process
+    # if is_main_process:
+    nextdit = accelerator.unwrap_model(nextdit)
 
+    accelerator.end_training()
     optimizer_eval_fn()
 
     if args.save_state or args.save_state_on_train_end:
         train_util.save_state_on_train_end(args, accelerator)
 
-    save_accelerator = accelerator
-
     del accelerator  # この後メモリを使うのでこれは消す
 
     if is_main_process:
         lumina_train_util.save_lumina_model_on_train_end(
-            args, save_accelerator, save_dtype, epoch, global_step, nextdit
+            args, save_dtype, epoch, global_step, nextdit
         )
         logger.info("model saved.")
-
-    save_accelerator.end_training()
-    optimizer_eval_fn()
 
 
 def setup_parser() -> argparse.ArgumentParser:

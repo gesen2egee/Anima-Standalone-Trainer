@@ -20,6 +20,809 @@ const emptyState = $("empty-state");
 const jobEditor = $("job-editor");
 const jobTitle = $("job-title");
 const consoleOutput = $("console-output");
+
+// ==========================================
+//  Localization
+// ==========================================
+const I18N_STORAGE_KEY = "ui_language";
+const SUPPORTED_LANGUAGES = ["zh-TW", "zh-CN", "en"];
+const originalTextNodes = new WeakMap();
+const originalAttrs = new WeakMap();
+
+const UI_TRANSLATIONS = {
+  "🎯 Jobs": { "zh-TW": "🎯 工作", "zh-CN": "🎯 任务" },
+  "+ New": { "zh-TW": "+ 新增", "zh-CN": "+ 新建" },
+  "Language": { "zh-TW": "語言", "zh-CN": "语言" },
+  "⚙️ Global Settings": { "zh-TW": "⚙️ 全域設定", "zh-CN": "⚙️ 全局设置" },
+  "No Job Selected": { "zh-TW": "尚未選擇工作", "zh-CN": "尚未选择任务" },
+  "Create a new training job or select one from the sidebar": {
+    "zh-TW": "建立新的訓練工作，或從側邊欄選擇一個工作",
+    "zh-CN": "创建新的训练任务，或从侧边栏选择一个任务",
+  },
+  "Job Name": { "zh-TW": "工作名稱", "zh-CN": "任务名称" },
+  "💾 Save": { "zh-TW": "💾 儲存", "zh-CN": "💾 保存" },
+  "Discard": { "zh-TW": "放棄變更", "zh-CN": "放弃更改" },
+  "Clone": { "zh-TW": "複製", "zh-CN": "克隆" },
+  "▶ Train": { "zh-TW": "▶ 訓練", "zh-CN": "▶ 训练" },
+  "⏹ Stop": { "zh-TW": "⏹ 停止", "zh-CN": "⏹ 停止" },
+  "Delete": { "zh-TW": "刪除", "zh-CN": "删除" },
+  "Training": { "zh-TW": "訓練", "zh-CN": "训练" },
+  "Dataset": { "zh-TW": "資料集", "zh-CN": "数据集" },
+  "Network": { "zh-TW": "網路", "zh-CN": "网络" },
+  "Multi-GPUs": { "zh-TW": "多 GPU", "zh-CN": "多 GPU" },
+  "Prompts": { "zh-TW": "提示詞", "zh-CN": "提示词" },
+  "Samples": { "zh-TW": "樣本", "zh-CN": "样本" },
+  "Console": { "zh-TW": "主控台", "zh-CN": "控制台" },
+  "📊 TensorBoard": { "zh-TW": "📊 TensorBoard", "zh-CN": "📊 TensorBoard" },
+  "Optimization": { "zh-TW": "最佳化", "zh-CN": "优化" },
+  "Learning Rate": { "zh-TW": "學習率", "zh-CN": "学习率" },
+  "Text Encoder LR": { "zh-TW": "Text Encoder 學習率", "zh-CN": "Text Encoder 学习率" },
+  "Optimizer": { "zh-TW": "最佳化器", "zh-CN": "优化器" },
+  "LR Scheduler": { "zh-TW": "學習率排程", "zh-CN": "学习率调度" },
+  "LR Warmup Steps": { "zh-TW": "學習率 Warmup Steps", "zh-CN": "学习率 Warmup Steps" },
+  "Weight Decay": { "zh-TW": "Weight Decay", "zh-CN": "Weight Decay" },
+  "Seed": { "zh-TW": "Seed", "zh-CN": "Seed" },
+  "Duration": { "zh-TW": "訓練長度", "zh-CN": "训练长度" },
+  "Max Epochs": { "zh-TW": "最大 Epochs", "zh-CN": "最大 Epochs" },
+  "Save Every N Epochs": { "zh-TW": "每 N Epochs 儲存", "zh-CN": "每 N Epochs 保存" },
+  "Max Steps": { "zh-TW": "最大 Steps", "zh-CN": "最大 Steps" },
+  "Save Every N Steps": { "zh-TW": "每 N Steps 儲存", "zh-CN": "每 N Steps 保存" },
+  "Checkpoint Management": { "zh-TW": "Checkpoint 管理", "zh-CN": "Checkpoint 管理" },
+  "Save Last N Steps": { "zh-TW": "保留最近 N Steps", "zh-CN": "保留最近 N Steps" },
+  "Save Last N Epochs": { "zh-TW": "保留最近 N Epochs", "zh-CN": "保留最近 N Epochs" },
+  "Save Training State": { "zh-TW": "儲存訓練 State", "zh-CN": "保存训练 State" },
+  "Save State at Train End": { "zh-TW": "訓練結束儲存 State", "zh-CN": "训练结束保存 State" },
+  "Save Last N Step States": { "zh-TW": "保留最近 N Step States", "zh-CN": "保留最近 N Step States" },
+  "Save Last N Epoch States": { "zh-TW": "保留最近 N Epoch States", "zh-CN": "保留最近 N Epoch States" },
+  "blank = keep all": { "zh-TW": "空白 = 全部保留", "zh-CN": "空白 = 全部保留" },
+  "blank = use checkpoint count": { "zh-TW": "空白 = 使用 checkpoint 保留數", "zh-CN": "空白 = 使用 checkpoint 保留数" },
+  "Output Name": { "zh-TW": "輸出名稱", "zh-CN": "输出名称" },
+  "Save Format": { "zh-TW": "儲存格式", "zh-CN": "保存格式" },
+  "Performance": { "zh-TW": "效能", "zh-CN": "性能" },
+  "Mixed Precision": { "zh-TW": "混合精度", "zh-CN": "混合精度" },
+  "Transformer DType": { "zh-TW": "Transformer DType", "zh-CN": "Transformer DType" },
+  "Save Precision": { "zh-TW": "儲存精度", "zh-CN": "保存精度" },
+  "DataLoader Workers": { "zh-TW": "DataLoader Workers", "zh-CN": "DataLoader Workers" },
+  "KNN Noise K": { "zh-TW": "KNN Noise K", "zh-CN": "KNN Noise K" },
+  "CEP Noise": { "zh-TW": "CEP Noise", "zh-CN": "CEP Noise" },
+  "Persistent DataLoader Workers": { "zh-TW": "持續保留 DataLoader Workers", "zh-CN": "持续保留 DataLoader Workers" },
+  "Gradient Checkpointing": { "zh-TW": "Gradient Checkpointing", "zh-CN": "Gradient Checkpointing" },
+  "Flash Attention": { "zh-TW": "Flash Attention", "zh-CN": "Flash Attention" },
+  "Torch Compile": { "zh-TW": "Torch Compile", "zh-CN": "Torch Compile" },
+  "Low RAM Optimization": { "zh-TW": "低 RAM 最佳化", "zh-CN": "低 RAM 优化" },
+  "Blocks to Swap": { "zh-TW": "要 Swap 的 Blocks", "zh-CN": "要 Swap 的 Blocks" },
+  "Activation Offload": { "zh-TW": "Activation Offload", "zh-CN": "Activation Offload" },
+  "Caching": { "zh-TW": "快取", "zh-CN": "缓存" },
+  "Cache Latents to Disk": { "zh-TW": "快取 Latents 到硬碟", "zh-CN": "缓存 Latents 到硬盘" },
+  "VAE Batch Size": { "zh-TW": "VAE Batch Size", "zh-CN": "VAE Batch Size" },
+  "VAE Chunk Size": { "zh-TW": "VAE Chunk Size", "zh-CN": "VAE Chunk Size" },
+  "Cache Text Encoder Outputs to": { "zh-TW": "快取 Text Encoder Outputs 到", "zh-CN": "缓存 Text Encoder Outputs 到" },
+  "Disk": { "zh-TW": "硬碟", "zh-CN": "硬盘" },
+  "Disable VAE Cache": { "zh-TW": "停用 VAE Cache", "zh-CN": "禁用 VAE Cache" },
+  "Timestep Sample Method": { "zh-TW": "Timestep 取樣方式", "zh-CN": "Timestep 采样方式" },
+  "Flow Shift": { "zh-TW": "Flow Shift", "zh-CN": "Flow Shift" },
+  "Weighting Scheme": { "zh-TW": "權重方案", "zh-CN": "权重方案" },
+  "Sigmoid Scale": { "zh-TW": "Sigmoid Scale", "zh-CN": "Sigmoid Scale" },
+  "Qwen3 Max Tokens": { "zh-TW": "Qwen3 最大 Tokens", "zh-CN": "Qwen3 最大 Tokens" },
+  "T5 Max Tokens": { "zh-TW": "T5 最大 Tokens", "zh-CN": "T5 最大 Tokens" },
+  "Global Dataset Settings": { "zh-TW": "資料集全域設定", "zh-CN": "数据集全局设置" },
+  "Resolution(s)": { "zh-TW": "解析度", "zh-CN": "分辨率" },
+  "Batch Size(s)": { "zh-TW": "Batch Size", "zh-CN": "Batch Size" },
+  "Progressive Resolution Schedule": { "zh-TW": "漸進式解析度排程", "zh-CN": "渐进式分辨率调度" },
+  "Gradient Accumulation": { "zh-TW": "Gradient Accumulation", "zh-CN": "Gradient Accumulation" },
+  "Caption Extension": { "zh-TW": "Caption 副檔名", "zh-CN": "Caption 扩展名" },
+  "Alpha Mask": { "zh-TW": "Alpha Mask", "zh-CN": "Alpha Mask" },
+  "Enable Aspect Ratio Bucketing": { "zh-TW": "啟用長寬比分桶", "zh-CN": "启用宽高比分桶" },
+  "Do Not Upscale": { "zh-TW": "不要放大圖片", "zh-CN": "不要放大图片" },
+  "Images": { "zh-TW": "圖片", "zh-CN": "图片" },
+  "Min Bucket Resolution": { "zh-TW": "最小 Bucket 解析度", "zh-CN": "最小 Bucket 分辨率" },
+  "Max Bucket Resolution": { "zh-TW": "最大 Bucket 解析度", "zh-CN": "最大 Bucket 分辨率" },
+  "Bucket Resolution Steps": { "zh-TW": "Bucket 解析度間隔", "zh-CN": "Bucket 分辨率间隔" },
+  "Disable Bucket Shuffle": { "zh-TW": "停用 Bucket Shuffle", "zh-CN": "禁用 Bucket Shuffle" },
+  "Dataset Folders": { "zh-TW": "資料集資料夾", "zh-CN": "数据集文件夹" },
+  "+ Add Dataset": { "zh-TW": "+ 新增資料集", "zh-CN": "+ 新增数据集" },
+  "Training Type": { "zh-TW": "訓練類型", "zh-CN": "训练类型" },
+  "LoRA Configuration": { "zh-TW": "LoRA 設定", "zh-CN": "LoRA 设置" },
+  "Network Module": { "zh-TW": "Network Module", "zh-CN": "Network Module" },
+  "Network Dim (Rank)": { "zh-TW": "Network Dim (Rank)", "zh-CN": "Network Dim (Rank)" },
+  "Network Alpha": { "zh-TW": "Network Alpha", "zh-CN": "Network Alpha" },
+  "Train UNet Only": { "zh-TW": "只訓練 UNet", "zh-CN": "只训练 UNet" },
+  "Network Dropout": { "zh-TW": "Network Dropout", "zh-CN": "Network Dropout" },
+  "Network Args": { "zh-TW": "Network Args", "zh-CN": "Network Args" },
+  "Network Weights (LoRA checkpoint)": { "zh-TW": "Network Weights (LoRA checkpoint)", "zh-CN": "Network Weights (LoRA checkpoint)" },
+  "Full Finetune Configuration": { "zh-TW": "Full Finetune 設定", "zh-CN": "Full Finetune 设置" },
+  "Freeze LLM Adapter": { "zh-TW": "凍結 LLM Adapter", "zh-CN": "冻结 LLM Adapter" },
+  "Prompt List": { "zh-TW": "提示詞列表", "zh-CN": "提示词列表" },
+  "+ Add Prompt": { "zh-TW": "+ 新增提示詞", "zh-CN": "+ 新增提示词" },
+  "Generate Sample": { "zh-TW": "生成樣本", "zh-CN": "生成样本" },
+  "Sampling": { "zh-TW": "取樣", "zh-CN": "采样" },
+  "Sample Schedule": { "zh-TW": "Sample 排程", "zh-CN": "Sample 调度" },
+  "Sample at First": { "zh-TW": "開始前先 Sample", "zh-CN": "开始前先 Sample" },
+  "Enable Sampling During Training": { "zh-TW": "訓練中啟用 Sample", "zh-CN": "训练中启用 Sample" },
+  "Sample Every N Steps": { "zh-TW": "每 N Steps Sample", "zh-CN": "每 N Steps Sample" },
+  "Refresh": { "zh-TW": "重新整理", "zh-CN": "刷新" },
+  "TensorBoard": { "zh-TW": "TensorBoard", "zh-CN": "TensorBoard" },
+  "Running on port": { "zh-TW": "執行中，port", "zh-CN": "运行中，端口" },
+  "Not running": { "zh-TW": "未執行", "zh-CN": "未运行" },
+  "Starting...": { "zh-TW": "啟動中...", "zh-CN": "启动中..." },
+  "Launch": { "zh-TW": "啟動", "zh-CN": "启动" },
+  "Open": { "zh-TW": "開啟", "zh-CN": "打开" },
+  "Stop TensorBoard": { "zh-TW": "停止 TensorBoard", "zh-CN": "停止 TensorBoard" },
+  "Job Maintenance": { "zh-TW": "工作維護", "zh-CN": "任务维护" },
+  "📂 Open Job Folder": { "zh-TW": "📂 開啟工作資料夾", "zh-CN": "📂 打开任务文件夹" },
+  "Logging": { "zh-TW": "記錄", "zh-CN": "日志" },
+  "🗑️ Clear TensorBoard Logs": { "zh-TW": "🗑️ 清除 TensorBoard Logs", "zh-CN": "🗑️ 清除 TensorBoard Logs" },
+  "Danger Zone": { "zh-TW": "危險區", "zh-CN": "危险区" },
+  "⚠️ Reset Config to Defaults": { "zh-TW": "⚠️ 重設為預設值", "zh-CN": "⚠️ 重置为默认值" },
+  "Create New Training Job": { "zh-TW": "建立新的訓練工作", "zh-CN": "创建新的训练任务" },
+  "Job Name": { "zh-TW": "工作名稱", "zh-CN": "任务名称" },
+  "Cancel": { "zh-TW": "取消", "zh-CN": "取消" },
+  "Create": { "zh-TW": "建立", "zh-CN": "创建" },
+  "Clone Job": { "zh-TW": "複製工作", "zh-CN": "克隆任务" },
+  "New Job Name": { "zh-TW": "新工作名稱", "zh-CN": "新任务名称" },
+  "Confirm": { "zh-TW": "確認", "zh-CN": "确认" },
+  "Are you sure?": { "zh-TW": "確定嗎？", "zh-CN": "确定吗？" },
+  "Python Venv Path": { "zh-TW": "Python Venv 路徑", "zh-CN": "Python Venv 路径" },
+  "Theme": { "zh-TW": "主題", "zh-CN": "主题" },
+  "Background Image": { "zh-TW": "背景圖片", "zh-CN": "背景图片" },
+  "Choose Image": { "zh-TW": "選擇圖片", "zh-CN": "选择图片" },
+  "Remove": { "zh-TW": "移除", "zh-CN": "移除" },
+  "Positioning (Drag to focal point)": { "zh-TW": "位置調整（拖曳焦點）", "zh-CN": "位置调整（拖拽焦点）" },
+  "Dim Level (Overlay Opacity):": { "zh-TW": "暗化程度（遮罩透明度）：", "zh-CN": "暗化程度（遮罩透明度）：" },
+  "Image Brightness:": { "zh-TW": "圖片亮度：", "zh-CN": "图片亮度：" },
+  "Backdrop Blur:": { "zh-TW": "背景模糊：", "zh-CN": "背景模糊：" },
+  "Text Shadow Intensity:": { "zh-TW": "文字陰影強度：", "zh-CN": "文字阴影强度：" },
+  "Save Settings": { "zh-TW": "儲存設定", "zh-CN": "保存设置" },
+  "LoRA Output Location": { "zh-TW": "LoRA 輸出位置", "zh-CN": "LoRA 输出位置" },
+  "Application": { "zh-TW": "應用程式", "zh-CN": "应用程序" },
+  "Anima Models": { "zh-TW": "Anima 模型", "zh-CN": "Anima 模型" },
+  "Lumina Models": { "zh-TW": "Lumina 模型", "zh-CN": "Lumina 模型" },
+  "DiT Model Path": { "zh-TW": "DiT 模型路徑", "zh-CN": "DiT 模型路径" },
+  "Qwen3 Text Encoder Path": { "zh-TW": "Qwen3 Text Encoder 路徑", "zh-CN": "Qwen3 Text Encoder 路径" },
+  "VAE Path": { "zh-TW": "VAE 路徑", "zh-CN": "VAE 路径" },
+  "Image Directory": { "zh-TW": "圖片資料夾", "zh-CN": "图片文件夹" },
+  "Num Repeats": { "zh-TW": "重複次數", "zh-CN": "重复次数" },
+  "Keep Tokens": { "zh-TW": "保留 Tokens", "zh-CN": "保留 Tokens" },
+  "Caption Prefix": { "zh-TW": "Caption 前綴", "zh-CN": "Caption 前缀" },
+  "Caption Dropout Rate": { "zh-TW": "Caption Dropout Rate", "zh-CN": "Caption Dropout Rate" },
+  "Tag Dropout Rate": { "zh-TW": "Tag Dropout Rate", "zh-CN": "Tag Dropout Rate" },
+  "Dropout Every N Epochs": { "zh-TW": "每 N Epochs Dropout", "zh-CN": "每 N Epochs Dropout" },
+  "Shuffle Captions": { "zh-TW": "打亂 Captions", "zh-CN": "打乱 Captions" },
+  "Enable Wildcard": { "zh-TW": "啟用 Wildcard", "zh-CN": "启用 Wildcard" },
+  "Flip Augmentations": { "zh-TW": "Flip Augmentations", "zh-CN": "Flip Augmentations" },
+  "Regularization Dataset": { "zh-TW": "正則化資料集", "zh-CN": "正则化数据集" },
+  "Enter prompt text...": { "zh-TW": "輸入提示詞...", "zh-CN": "输入提示词..." },
+  "Base Model (No LoRA)": { "zh-TW": "基礎模型（無 LoRA）", "zh-CN": "基础模型（无 LoRA）" },
+  "No jobs yet": { "zh-TW": "還沒有工作", "zh-CN": "还没有任务" },
+  "Connecting...": { "zh-TW": "連線中...", "zh-CN": "连接中..." },
+  "Idle": { "zh-TW": "閒置", "zh-CN": "空闲" },
+  "Single GPU": { "zh-TW": "單 GPU", "zh-CN": "单 GPU" },
+  "No NVIDIA GPUs detected (CPU only).": { "zh-TW": "未偵測到 NVIDIA GPU（僅 CPU）。", "zh-CN": "未检测到 NVIDIA GPU（仅 CPU）。" },
+  "No NVIDIA GPUs detected.": { "zh-TW": "未偵測到 NVIDIA GPU。", "zh-CN": "未检测到 NVIDIA GPU。" },
+  "Job saved": { "zh-TW": "工作已儲存", "zh-CN": "任务已保存" },
+  "Changes discarded": { "zh-TW": "已放棄變更", "zh-CN": "已放弃更改" },
+  "Global settings saved": { "zh-TW": "全域設定已儲存", "zh-CN": "全局设置已保存" },
+  "Job created": { "zh-TW": "工作已建立", "zh-CN": "任务已创建" },
+  "Job cloned": { "zh-TW": "工作已複製", "zh-CN": "任务已克隆" },
+  "Job deleted": { "zh-TW": "工作已刪除", "zh-CN": "任务已删除" },
+  "Training started": { "zh-TW": "訓練已開始", "zh-CN": "训练已开始" },
+  "Training stopped": { "zh-TW": "訓練已停止", "zh-CN": "训练已停止" },
+  "Generation started": { "zh-TW": "生成已開始", "zh-CN": "生成已开始" },
+  "Add sample prompts first": { "zh-TW": "請先新增 sample 提示詞", "zh-CN": "请先新增 sample 提示词" },
+  "Unloading model...": { "zh-TW": "正在卸載模型...", "zh-CN": "正在卸载模型..." },
+  "Model unloaded": { "zh-TW": "模型已卸載", "zh-CN": "模型已卸载" },
+  "Checkpoints refreshed": { "zh-TW": "Checkpoints 已重新整理", "zh-CN": "Checkpoints 已刷新" },
+  "TensorBoard launched": { "zh-TW": "TensorBoard 已啟動", "zh-CN": "TensorBoard 已启动" },
+  "TensorBoard stopped": { "zh-TW": "TensorBoard 已停止", "zh-CN": "TensorBoard 已停止" },
+  "Logs cleared": { "zh-TW": "Logs 已清除", "zh-CN": "Logs 已清除" },
+  "Config reset to defaults": { "zh-TW": "設定已重設為預設值", "zh-CN": "设置已重置为默认值" },
+  "Background updated!": { "zh-TW": "背景已更新！", "zh-CN": "背景已更新！" },
+  "Background removed": { "zh-TW": "背景已移除", "zh-CN": "背景已移除" },
+  "Please enter a directory path first": { "zh-TW": "請先輸入資料夾路徑", "zh-CN": "请先输入文件夹路径" },
+};
+
+Object.assign(UI_TRANSLATIONS, {
+  "Anima LoRA Training": { "zh-TW": "Anima LoRA 訓練", "zh-CN": "Anima LoRA 训练" },
+  "Duration Unit": { "zh-TW": "訓練長度單位", "zh-CN": "训练时长单位" },
+  "Epochs": { "zh-TW": "Epochs", "zh-CN": "Epochs" },
+  "Steps": { "zh-TW": "Steps", "zh-CN": "Steps" },
+  "Bucketing": { "zh-TW": "分桶", "zh-CN": "分桶" },
+  "Do Not Upscale Images": { "zh-TW": "不要放大圖片", "zh-CN": "不要放大图片" },
+  "Groups images by aspect ratio for efficient training.": {
+    "zh-TW": "依照圖片長寬比分組，讓訓練更有效率。",
+    "zh-CN": "按照图片宽高比分组，让训练更有效率。",
+  },
+  "Images smaller than the bucket resolution will not be upscaled, saving VRAM and disk space.": {
+    "zh-TW": "小於 bucket 解析度的圖片不會被放大，可節省 VRAM 與硬碟空間。",
+    "zh-CN": "小于 bucket 分辨率的图片不会被放大，可节省 VRAM 与硬盘空间。",
+  },
+  "Keeps DataLoader order within resolution buckets.": {
+    "zh-TW": "保留每個解析度 bucket 內的 DataLoader 順序。",
+    "zh-CN": "保留每个分辨率 bucket 内的 DataLoader 顺序。",
+  },
+  "Max resolution(s) for bucketing. Comma-separate for multi-resolution caching (e.g. 512, 1024).": {
+    "zh-TW": "分桶用最大解析度。多解析度快取可用逗號分隔，例如 512, 1024。",
+    "zh-CN": "分桶用最大分辨率。多分辨率缓存可用逗号分隔，例如 512, 1024。",
+  },
+  "Comma-separate to assign varying batch sizes per resolution.": {
+    "zh-TW": "用逗號分隔，可替不同解析度指定不同 batch size。",
+    "zh-CN": "用逗号分隔，可给不同分辨率指定不同 batch size。",
+  },
+  "Training Schedule": { "zh-TW": "訓練排程", "zh-CN": "训练调度" },
+  "Checkpoint Management": { "zh-TW": "Checkpoint 管理", "zh-CN": "Checkpoint 管理" },
+  "Save Last N Steps": { "zh-TW": "保留最近 N Steps", "zh-CN": "保留最近 N Steps" },
+  "Save Last N Epochs": { "zh-TW": "保留最近 N Epochs", "zh-CN": "保留最近 N Epochs" },
+  "Save Training State": { "zh-TW": "儲存訓練 State", "zh-CN": "保存训练 State" },
+  "Save State at Train End": { "zh-TW": "訓練結束儲存 State", "zh-CN": "训练结束保存 State" },
+  "Save Last N Step States": { "zh-TW": "保留最近 N Step States", "zh-CN": "保留最近 N Step States" },
+  "Save Last N Epoch States": { "zh-TW": "保留最近 N Epoch States", "zh-CN": "保留最近 N Epoch States" },
+  "Only applies when saving by steps. Leave blank to keep all checkpoints.": {
+    "zh-TW": "只在依 steps 儲存時生效。留空代表保留全部 checkpoints。",
+    "zh-CN": "只在按 steps 保存时生效。留空代表保留全部 checkpoints。",
+  },
+  "Only applies when saving by epochs. Leave blank to keep all checkpoints.": {
+    "zh-TW": "只在依 epochs 儲存時生效。留空代表保留全部 checkpoints。",
+    "zh-CN": "只在按 epochs 保存时生效。留空代表保留全部 checkpoints。",
+  },
+  "Also saves optimizer and scheduler state when a checkpoint is saved.": {
+    "zh-TW": "儲存 checkpoint 時，同時儲存 optimizer 與 scheduler 狀態。",
+    "zh-CN": "保存 checkpoint 时，同时保存 optimizer 与 scheduler 状态。",
+  },
+  "Saves a final state folder when training finishes.": {
+    "zh-TW": "訓練完成時額外儲存最後的 state 資料夾。",
+    "zh-CN": "训练完成时额外保存最后的 state 文件夹。",
+  },
+  "Overrides step checkpoint retention for state folders.": {
+    "zh-TW": "覆蓋 step state 資料夾的保留數。",
+    "zh-CN": "覆盖 step state 文件夹的保留数量。",
+  },
+  "Overrides epoch checkpoint retention for state folders.": {
+    "zh-TW": "覆蓋 epoch state 資料夾的保留數。",
+    "zh-CN": "覆盖 epoch state 文件夹的保留数量。",
+  },
+  "blank = keep all": { "zh-TW": "空白 = 全部保留", "zh-CN": "空白 = 全部保留" },
+  "blank = use checkpoint count": {
+    "zh-TW": "空白 = 使用 checkpoint 保留數",
+    "zh-CN": "空白 = 使用 checkpoint 保留数",
+  },
+  "Restart Cycles": { "zh-TW": "重啟週期", "zh-CN": "重启周期" },
+  "Number of times the learning rate restarts from max to min.": {
+    "zh-TW": "學習率從最大值重新下降到最小值的次數。",
+    "zh-CN": "学习率从最大值重新下降到最小值的次数。",
+  },
+  "Min LR Ratio": { "zh-TW": "最小 LR 比例", "zh-CN": "最小 LR 比例" },
+  "Minimum LR as a fraction of the initial LR (e.g. 0.1 = decays to 10%).": {
+    "zh-TW": "最小學習率佔初始學習率的比例，例如 0.1 代表降到 10%。",
+    "zh-CN": "最小学习率占初始学习率的比例，例如 0.1 代表降到 10%。",
+  },
+  "Decouple Weight Decay": { "zh-TW": "Decouple Weight Decay", "zh-CN": "Decouple Weight Decay" },
+  "Separates weight penalty from gradient scaling to prevent overfitting when using Weight Decay.": {
+    "zh-TW": "將權重懲罰與梯度縮放分離，使用 Weight Decay 時可降低過擬合風險。",
+    "zh-CN": "将权重惩罚与梯度缩放分离，使用 Weight Decay 时可降低过拟合风险。",
+  },
+  "Activation Checkpointing": { "zh-TW": "Activation Checkpointing", "zh-CN": "Activation Checkpointing" },
+  "Cache Text Encoder Outputs to Disk": {
+    "zh-TW": "快取 Text Encoder Outputs 到硬碟",
+    "zh-CN": "缓存 Text Encoder Outputs 到硬盘",
+  },
+  "Pre-encode images as .safetensors files for faster training.": {
+    "zh-TW": "預先把圖片編碼成 .safetensors，加快訓練讀取。",
+    "zh-CN": "预先把图片编码成 .safetensors，加快训练读取。",
+  },
+  "Pre-encode captions. Required if text encoder is frozen.": {
+    "zh-TW": "預先編碼 captions。凍結 text encoder 時需要啟用。",
+    "zh-CN": "预先编码 captions。冻结 text encoder 时需要启用。",
+  },
+  "Can reduce VAE memory if chunking is still not enough.": {
+    "zh-TW": "如果 VAE chunking 仍不夠，可再降低 VAE 記憶體使用。",
+    "zh-CN": "如果 VAE chunking 仍不够，可进一步降低 VAE 内存使用。",
+  },
+  "0 disables chunked VAE decode. Lower values use less VRAM.": {
+    "zh-TW": "0 代表停用 VAE 分塊 decode。數值越低越省 VRAM。",
+    "zh-CN": "0 代表禁用 VAE 分块 decode。数值越低越省 VRAM。",
+  },
+  "Trades compute for VRAM savings. Recommended on.": {
+    "zh-TW": "用額外計算換取 VRAM 節省，建議開啟。",
+    "zh-CN": "用额外计算换取 VRAM 节省，建议开启。",
+  },
+  "Requires flash-attn package.": { "zh-TW": "需要 flash-attn 套件。", "zh-CN": "需要 flash-attn 包。" },
+  "Uses dynamo inductor backend. Slower first step, faster training after.": {
+    "zh-TW": "使用 dynamo inductor backend。第一步較慢，之後訓練可能更快。",
+    "zh-CN": "使用 dynamo inductor backend。第一步较慢，之后训练可能更快。",
+  },
+  "Moves transformer blocks to RAM to save VRAM. 0=Off.": {
+    "zh-TW": "把 transformer blocks 移到 RAM 以節省 VRAM。0 = 關閉。",
+    "zh-CN": "把 transformer blocks 移到 RAM 以节省 VRAM。0 = 关闭。",
+  },
+  "Offloads activations to CPU during backward pass. Requires Gradient Checkpointing.": {
+    "zh-TW": "backward 時把 activations 卸載到 CPU。需要 Gradient Checkpointing。",
+    "zh-CN": "backward 时把 activations 卸载到 CPU。需要 Gradient Checkpointing。",
+  },
+  "Keeps workers alive between epochs (less startup lag).": {
+    "zh-TW": "讓 workers 在 epochs 間保持啟動，減少重新啟動延遲。",
+    "zh-CN": "让 workers 在 epochs 间保持启动，减少重新启动延迟。",
+  },
+  "Timestep Sample Method": { "zh-TW": "Timestep 取樣方式", "zh-CN": "Timestep 采样方式" },
+  "Uniform (Kohya Default)": { "zh-TW": "Uniform（Kohya 預設）", "zh-CN": "Uniform（Kohya 默认）" },
+  "Training Type": { "zh-TW": "訓練類型", "zh-CN": "训练类型" },
+  "LoRA trains lightweight adapter weights. Full Finetune trains the entire DiT model.": {
+    "zh-TW": "LoRA 只訓練輕量 adapter 權重；Full Finetune 會訓練整個 DiT 模型。",
+    "zh-CN": "LoRA 只训练轻量 adapter 权重；Full Finetune 会训练整个 DiT 模型。",
+  },
+  "LoRA Configuration": { "zh-TW": "LoRA 設定", "zh-CN": "LoRA 设置" },
+  "LoRA": { "zh-TW": "LoRA", "zh-CN": "LoRA" },
+  "Full Finetune": { "zh-TW": "Full Finetune", "zh-CN": "Full Finetune" },
+  "Full Finetune Options": { "zh-TW": "Full Finetune 選項", "zh-CN": "Full Finetune 选项" },
+  "Freeze text encoder. Recommended for most LoRA training.": {
+    "zh-TW": "凍結 text encoder。大多數 LoRA 訓練建議開啟。",
+    "zh-CN": "冻结 text encoder。大多数 LoRA 训练建议开启。",
+  },
+  "Dropout rate (0-1). Randomly zeroes LoRA neurons to reduce overfitting. 0 = off.": {
+    "zh-TW": "Dropout 比例（0-1）。隨機歸零 LoRA 神經元以降低過擬合；0 = 關閉。",
+    "zh-CN": "Dropout 比例（0-1）。随机归零 LoRA 神经元以降低过拟合；0 = 关闭。",
+  },
+  "Space-separated key=value pairs passed to the network module.": {
+    "zh-TW": "傳給 network module 的 key=value 參數，使用空格分隔。",
+    "zh-CN": "传给 network module 的 key=value 参数，使用空格分隔。",
+  },
+  "Initialize from an existing LoRA. Often used for fine-tuning the lora. Usually not needed.": {
+    "zh-TW": "從既有 LoRA 初始化。常用於接續微調，一般不需要。",
+    "zh-CN": "从已有 LoRA 初始化。常用于接续微调，一般不需要。",
+  },
+  "Keep the LLM adapter weights frozen during training. Recommended — the adapter is pre-trained and retraining it risks degrading text understanding and causes DDP graph errors.": {
+    "zh-TW": "訓練時保持 LLM adapter 權重凍結。建議開啟，因為 adapter 已預訓練，重訓可能降低文字理解並造成 DDP graph 錯誤。",
+    "zh-CN": "训练时保持 LLM adapter 权重冻结。建议开启，因为 adapter 已预训练，重训可能降低文本理解并造成 DDP graph 错误。",
+  },
+  "Resume Training": { "zh-TW": "恢復訓練", "zh-CN": "恢复训练" },
+  "Auto-resume from last saved state": { "zh-TW": "自動從最後儲存的 state 恢復", "zh-CN": "自动从最后保存的 state 恢复" },
+  "Automatically resumes from the most recent saved state in the output folder.": {
+    "zh-TW": "自動從輸出資料夾中最新的 state 恢復訓練。",
+    "zh-CN": "自动从输出文件夹中最新的 state 恢复训练。",
+  },
+  "Resume State Folder": { "zh-TW": "恢復用 State 資料夾", "zh-CN": "恢复用 State 文件夹" },
+  "Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.": {
+    "zh-TW": "恢復訓練狀態（optimizer、scheduler、step 數）。啟用自動恢復時請留空。",
+    "zh-CN": "恢复训练状态（optimizer、scheduler、step 数）。启用自动恢复时请留空。",
+  },
+  "In-Training Sampling": { "zh-TW": "訓練中 Sample", "zh-CN": "训练中 Sample" },
+  "Enable Sampling": { "zh-TW": "啟用 Sample", "zh-CN": "启用 Sample" },
+  "Sample at First": { "zh-TW": "開始前先 Sample", "zh-CN": "开始前先 Sample" },
+  "Generate sample images before training starts.": {
+    "zh-TW": "訓練開始前先產生 sample 圖。",
+    "zh-CN": "训练开始前先生成 sample 图。",
+  },
+  "Sample Every N Epochs": { "zh-TW": "每 N Epochs Sample", "zh-CN": "每 N Epochs Sample" },
+  "Sample Every N Steps": { "zh-TW": "每 N Steps Sample", "zh-CN": "每 N Steps Sample" },
+  "Test Generation": { "zh-TW": "測試生成", "zh-CN": "测试生成" },
+  "LoRA Strength": { "zh-TW": "LoRA 強度", "zh-CN": "LoRA 强度" },
+  "GPU Selection": { "zh-TW": "GPU 選擇", "zh-CN": "GPU 选择" },
+  "Multi-GPU Mode": { "zh-TW": "多 GPU 模式", "zh-CN": "多 GPU 模式" },
+  "Keep Model Loaded": { "zh-TW": "保留模型載入", "zh-CN": "保持模型载入" },
+  "Unload Model": { "zh-TW": "卸載模型", "zh-CN": "卸载模型" },
+  "Generate": { "zh-TW": "生成", "zh-CN": "生成" },
+  "Sample Prompts": { "zh-TW": "Sample 提示詞", "zh-CN": "Sample 提示词" },
+  "Negative Prompt": { "zh-TW": "負面提示詞", "zh-CN": "负面提示词" },
+  "Apply to All": { "zh-TW": "套用到全部", "zh-CN": "应用到全部" },
+  "No sample prompts yet. Click \"+ Add Prompt\" to add one.": {
+    "zh-TW": "尚未新增 sample 提示詞。點擊「+ 新增提示詞」來新增。",
+    "zh-CN": "尚未新增 sample 提示词。点击「+ 新增提示词」来新增。",
+  },
+  "Generated Samples": { "zh-TW": "已生成 Samples", "zh-CN": "已生成 Samples" },
+  "No sample images yet. They will appear here during training.": {
+    "zh-TW": "尚未產生 sample 圖，訓練期間會顯示在這裡。",
+    "zh-CN": "尚未生成 sample 图，训练期间会显示在这里。",
+  },
+  "Training Console": { "zh-TW": "訓練主控台", "zh-CN": "训练控制台" },
+  "Waiting for training to start...": { "zh-TW": "等待訓練開始...", "zh-CN": "等待训练开始..." },
+  "Clear": { "zh-TW": "清除", "zh-CN": "清除" },
+  "Running on port": { "zh-TW": "執行中，port", "zh-CN": "运行中，port" },
+  "Click \"Launch\" to start TensorBoard and view training metrics.": {
+    "zh-TW": "點擊「啟動」開啟 TensorBoard 並查看訓練指標。",
+    "zh-CN": "点击「启动」开启 TensorBoard 并查看训练指标。",
+  },
+  "Job Maintenance": { "zh-TW": "工作維護", "zh-CN": "任务维护" },
+  "Open the job's directory in file explorer.": {
+    "zh-TW": "在檔案總管中開啟此工作的資料夾。",
+    "zh-CN": "在文件资源管理器中打开此任务的文件夹。",
+  },
+  "Logs directory:": { "zh-TW": "Logs 資料夾：", "zh-CN": "Logs 文件夹：" },
+  "Delete all TensorBoard event files for this job.": {
+    "zh-TW": "刪除此工作的所有 TensorBoard event 檔案。",
+    "zh-CN": "删除此任务的所有 TensorBoard event 文件。",
+  },
+  "Revert all settings to template defaults.": {
+    "zh-TW": "將所有設定還原為模板預設值。",
+    "zh-CN": "将所有设置还原为模板默认值。",
+  },
+  "Hardware Allocation": { "zh-TW": "硬體分配", "zh-CN": "硬件分配" },
+  "Multi-GPU Optimization": { "zh-TW": "多 GPU 最佳化", "zh-CN": "多 GPU 优化" },
+  "Parallelism Mode": { "zh-TW": "平行模式", "zh-CN": "并行模式" },
+  "DDP Options": { "zh-TW": "DDP 選項", "zh-CN": "DDP 选项" },
+  "DeepSpeed Options": { "zh-TW": "DeepSpeed 選項", "zh-CN": "DeepSpeed 选项" },
+  "TP/SP Options": { "zh-TW": "TP/SP 選項", "zh-CN": "TP/SP 选项" },
+  "Use CUDA Direct Backend": { "zh-TW": "使用 CUDA Direct Backend", "zh-CN": "使用 CUDA Direct Backend" },
+  "Windows-only custom backend replacing NCCL for native multi-GPU. Auto-detected in TP/SP mode. Incompatible with Torch Compile.": {
+    "zh-TW": "Windows 專用自訂 backend，用於 native 多 GPU 時取代 NCCL。TP/SP 模式會自動偵測，且不相容 Torch Compile。",
+    "zh-CN": "Windows 专用自定义 backend，用于 native 多 GPU 时替代 NCCL。TP/SP 模式会自动检测，且不兼容 Torch Compile。",
+  },
+  "Gradient as Bucket View": { "zh-TW": "Gradient as Bucket View", "zh-CN": "Gradient as Bucket View" },
+  "Static Graph": { "zh-TW": "Static Graph", "zh-CN": "Static Graph" },
+  "Reduces gradient memory overhead by eliminating a copy per step. Recommended for DDP training.": {
+    "zh-TW": "每 step 少一次複製，降低 gradient 記憶體開銷。DDP 訓練建議開啟。",
+    "zh-CN": "每 step 少一次复制，降低 gradient 内存开销。DDP 训练建议开启。",
+  },
+  "Allows DDP to overlap communication and computation more aggressively. Recommended when model structure does not change between steps.": {
+    "zh-TW": "讓 DDP 更積極重疊通訊與計算。模型結構每 step 不變時建議開啟。",
+    "zh-CN": "让 DDP 更积极重叠通信与计算。模型结构每 step 不变时建议开启。",
+  },
+  "Sharding Strategy": { "zh-TW": "Sharding 策略", "zh-CN": "Sharding 策略" },
+  "CPU Offloading": { "zh-TW": "CPU Offloading", "zh-CN": "CPU Offloading" },
+  "Enable Resharding After Forward": { "zh-TW": "啟用 Forward 後 Reshard", "zh-CN": "启用 Forward 后 Reshard" },
+  "Enable FSDP Activation Checkpointing": {
+    "zh-TW": "啟用 FSDP Activation Checkpointing",
+    "zh-CN": "启用 FSDP Activation Checkpointing",
+  },
+  "CPU RAM Efficient Loading": { "zh-TW": "CPU RAM 省記憶體載入", "zh-CN": "CPU RAM 省内存加载" },
+  "Backward Prefetch": { "zh-TW": "Backward Prefetch", "zh-CN": "Backward Prefetch" },
+  "Forward Prefetch": { "zh-TW": "Forward Prefetch", "zh-CN": "Forward Prefetch" },
+  "Use Original Parameters": { "zh-TW": "使用原始 Parameters", "zh-CN": "使用原始 Parameters" },
+  "Limit All-Gathers": { "zh-TW": "限制 All-Gathers", "zh-CN": "限制 All-Gathers" },
+  "Auto Wrap Policy": { "zh-TW": "Auto Wrap Policy", "zh-CN": "Auto Wrap Policy" },
+  "Transformer Layer to Wrap": { "zh-TW": "要 Wrap 的 Transformer Layer", "zh-CN": "要 Wrap 的 Transformer Layer" },
+  "Parameters Threshold": { "zh-TW": "Parameters 門檻", "zh-CN": "Parameters 阈值" },
+  "Diagnostics": { "zh-TW": "診斷", "zh-CN": "诊断" },
+  "Enable Step Profiling": { "zh-TW": "啟用 Step Profiling", "zh-CN": "启用 Step Profiling" },
+  "Track Microbatches": { "zh-TW": "追蹤 Microbatches", "zh-CN": "追踪 Microbatches" },
+  "Prints per-step timing breakdown (forward, backward, communication, optimizer, Python overhead) to the training log.": {
+    "zh-TW": "在訓練 log 輸出每個 step 的耗時拆解：forward、backward、通訊、optimizer、Python overhead。",
+    "zh-CN": "在训练 log 输出每个 step 的耗时拆解：forward、backward、通信、optimizer、Python overhead。",
+  },
+  "Also print per-microbatch fwd/bwd times within each step (only available with step profiling enabled).": {
+    "zh-TW": "同時輸出每個 step 內各 microbatch 的 fwd/bwd 時間，只在 step profiling 開啟時可用。",
+    "zh-CN": "同时输出每个 step 内各 microbatch 的 fwd/bwd 时间，只在 step profiling 开启时可用。",
+  },
+  "Path to the Python virtual environment with training dependencies.": {
+    "zh-TW": "包含訓練依賴套件的 Python venv 路徑。",
+    "zh-CN": "包含训练依赖包的 Python venv 路径。",
+  },
+  "Drag the focal point in the preview above. Auto-scales to fit.": {
+    "zh-TW": "拖曳上方預覽中的焦點位置，會自動縮放適配。",
+    "zh-CN": "拖拽上方预览中的焦点位置，会自动缩放适配。",
+  },
+  "Apply these settings to all prompts below": {
+    "zh-TW": "將這些設定套用到下方所有提示詞",
+    "zh-CN": "将这些设置应用到下方所有提示词",
+  },
+  "Enter negative prompt tags...": { "zh-TW": "輸入負面提示詞 tags...", "zh-CN": "输入负面提示词 tags..." },
+  "Refresh Checkpoints": { "zh-TW": "重新整理 Checkpoints", "zh-CN": "刷新 Checkpoints" },
+  "Free VRAM by unloading the generation model": {
+    "zh-TW": "卸載生成模型以釋放 VRAM",
+    "zh-CN": "卸载生成模型以释放 VRAM",
+  },
+  "Open in new tab": { "zh-TW": "在新分頁開啟", "zh-CN": "在新标签页打开" },
+  "e.g. 512, 1024, 2048": { "zh-TW": "例如 512, 1024, 2048", "zh-CN": "例如 512, 1024, 2048" },
+  "e.g. 1, 2, 4": { "zh-TW": "例如 1, 2, 4", "zh-CN": "例如 1, 2, 4" },
+  "e.g. conv_dim=4 conv_alpha=4": {
+    "zh-TW": "例如 conv_dim=4 conv_alpha=4",
+    "zh-CN": "例如 conv_dim=4 conv_alpha=4",
+  },
+  "e.g. Block": { "zh-TW": "例如 Block", "zh-CN": "例如 Block" },
+  "e.g. Aemeath_copy": { "zh-TW": "例如 Aemeath_copy", "zh-CN": "例如 Aemeath_copy" },
+});
+
+Object.assign(UI_TRANSLATIONS, {
+  "Backend": { "zh-TW": "Backend", "zh-CN": "Backend" },
+  "Better Multi-GPU support.": { "zh-TW": "較好的多 GPU 支援。", "zh-CN": "较好的多 GPU 支持。" },
+  "Loading GPUs...": { "zh-TW": "正在載入 GPUs...", "zh-CN": "正在加载 GPUs..." },
+  "Requires flash-attn.": { "zh-TW": "需要 flash-attn。", "zh-CN": "需要 flash-attn。" },
+  "Scale": { "zh-TW": "Scale", "zh-CN": "Scale" },
+  "W": { "zh-TW": "寬", "zh-CN": "宽" },
+  "H": { "zh-TW": "高", "zh-CN": "高" },
+  "Safetensors": { "zh-TW": "Safetensors", "zh-CN": "Safetensors" },
+  "Checkpoint": { "zh-TW": "Checkpoint", "zh-CN": "Checkpoint" },
+  "GitHub Dark": { "zh-TW": "GitHub 深色", "zh-CN": "GitHub 深色" },
+  "GitHub Light": { "zh-TW": "GitHub 淺色", "zh-CN": "GitHub 浅色" },
+  "Midnight Blue": { "zh-TW": "午夜藍", "zh-CN": "午夜蓝" },
+  "Cherry Pink": { "zh-TW": "櫻桃粉", "zh-CN": "樱桃粉" },
+  "Positioning (Drag to focal point)": { "zh-TW": "位置調整（拖曳焦點）", "zh-CN": "位置调整（拖拽焦点）" },
+  "Dim Level (Overlay Opacity):": { "zh-TW": "暗化程度（遮罩透明度）：", "zh-CN": "暗化程度（遮罩透明度）：" },
+  "Image Brightness:": { "zh-TW": "圖片亮度：", "zh-CN": "图片亮度：" },
+  "Backdrop Blur:": { "zh-TW": "背景模糊：", "zh-CN": "背景模糊：" },
+  "Text Shadow Intensity:": { "zh-TW": "文字陰影強度：", "zh-CN": "文字阴影强度：" },
+  "📁 Choose Image": { "zh-TW": "📁 選擇圖片", "zh-CN": "📁 选择图片" },
+  "🔄 Refresh": { "zh-TW": "🔄 重新整理", "zh-CN": "🔄 刷新" },
+  "🗑️ Delete Selected": { "zh-TW": "🗑️ 刪除選取", "zh-CN": "🗑️ 删除选中" },
+  "🚀 Launch": { "zh-TW": "🚀 啟動", "zh-CN": "🚀 启动" },
+  "↗ Open": { "zh-TW": "↗ 開啟", "zh-CN": "↗ 打开" },
+  "For more information, please refer to the": {
+    "zh-TW": "更多資訊請參考",
+    "zh-CN": "更多信息请参考",
+  },
+  "official PyTorch docs": { "zh-TW": "PyTorch 官方文件", "zh-CN": "PyTorch 官方文档" },
+  "Select a strategy to see details.": { "zh-TW": "選擇策略後會顯示詳細說明。", "zh-CN": "选择策略后会显示详细说明。" },
+  "DDP replicates the full model on each GPU and syncs gradients. FSDP1/FSDP2 shard parameters to reduce VRAM (FSDP2 is the newer, simpler API).": {
+    "zh-TW": "DDP 會在每張 GPU 複製完整模型並同步 gradients。FSDP1/FSDP2 會切分參數以降低 VRAM 使用量（FSDP2 是較新的簡化 API）。",
+    "zh-CN": "DDP 会在每张 GPU 复制完整模型并同步 gradients。FSDP1/FSDP2 会切分参数以降低 VRAM 使用量（FSDP2 是较新的简化 API）。",
+  },
+  "DDP — Data Parallel (standard)": { "zh-TW": "DDP — Data Parallel（標準）", "zh-CN": "DDP — Data Parallel（标准）" },
+  "FSDP1 — Fully Sharded Data Parallel v1": { "zh-TW": "FSDP1 — Fully Sharded Data Parallel v1", "zh-CN": "FSDP1 — Fully Sharded Data Parallel v1" },
+  "FSDP2 — Fully Sharded Data Parallel v2 (Linux only)": {
+    "zh-TW": "FSDP2 — Fully Sharded Data Parallel v2（僅 Linux）",
+    "zh-CN": "FSDP2 — Fully Sharded Data Parallel v2（仅 Linux）",
+  },
+  "DeepSpeed — ZeRO Optimizer Sharding": {
+    "zh-TW": "DeepSpeed — ZeRO Optimizer Sharding",
+    "zh-CN": "DeepSpeed — ZeRO Optimizer Sharding",
+  },
+  "TP/SP — Tensor + Sequence Parallel": {
+    "zh-TW": "TP/SP — Tensor + Sequence Parallel",
+    "zh-CN": "TP/SP — Tensor + Sequence Parallel",
+  },
+  "Parallel CFG (Speed) - run pos/neg on separate GPUs": {
+    "zh-TW": "Parallel CFG（速度）- 正/負提示詞分別跑在不同 GPU",
+    "zh-CN": "Parallel CFG（速度）- 正/负提示词分别跑在不同 GPU",
+  },
+  "Sharding (VRAM) - split model across GPUs": {
+    "zh-TW": "Sharding（省 VRAM）- 將模型切分到多張 GPU",
+    "zh-CN": "Sharding（省 VRAM）- 将模型切分到多张 GPU",
+  },
+  "Disable Fused QKV": { "zh-TW": "停用 Fused QKV", "zh-CN": "禁用 Fused QKV" },
+  "Debug option. Leaves attention q/k/v projections unfused instead of using the packed QKV/KV TP path.": {
+    "zh-TW": "除錯選項。保留 attention q/k/v projections 不融合，不使用 packed QKV/KV TP 路徑。",
+    "zh-CN": "调试选项。保留 attention q/k/v projections 不融合，不使用 packed QKV/KV TP 路径。",
+  },
+  "TP Degree": { "zh-TW": "TP Degree", "zh-CN": "TP Degree" },
+  "Number of GPUs for tensor parallelism. Must equal the number of selected GPUs above.": {
+    "zh-TW": "Tensor parallelism 使用的 GPU 數量，必須等於上方選取的 GPU 數。",
+    "zh-CN": "Tensor parallelism 使用的 GPU 数量，必须等于上方选择的 GPU 数。",
+  },
+  "Sequence Parallel (SP)": { "zh-TW": "Sequence Parallel（SP）", "zh-CN": "Sequence Parallel（SP）" },
+  "Always enabled for this mode. Spatial tokens are split across GPUs alongside weight sharding.": {
+    "zh-TW": "此模式會固定啟用。Spatial tokens 會和權重切分一起分散到多張 GPU。",
+    "zh-CN": "此模式会固定启用。Spatial tokens 会和权重切分一起分散到多张 GPU。",
+  },
+  "TP/SP notes:": { "zh-TW": "TP/SP 注意事項：", "zh-CN": "TP/SP 注意事项：" },
+  "All standard training configs (LR, batch size, optimizer, network dim, etc.) work. Sample generation during training is disabled. Backend is selected above. Torch Compile is incompatible.": {
+    "zh-TW": "標準訓練設定（LR、batch size、optimizer、network dim 等）都可用。訓練中 sample 會停用。Backend 由上方選擇。Torch Compile 不相容。",
+    "zh-CN": "标准训练设置（LR、batch size、optimizer、network dim 等）都可用。训练中 sample 会禁用。Backend 由上方选择。Torch Compile 不兼容。",
+  },
+  "Use Gloo on native Windows. Use NCCL from WSL/Linux. Auto lets the TP/SP script choose.": {
+    "zh-TW": "native Windows 使用 Gloo；WSL/Linux 使用 NCCL。Auto 會讓 TP/SP script 自行選擇。",
+    "zh-CN": "native Windows 使用 Gloo；WSL/Linux 使用 NCCL。Auto 会让 TP/SP script 自行选择。",
+  },
+  "DeepSpeed note:": { "zh-TW": "DeepSpeed 注意事項：", "zh-CN": "DeepSpeed 注意事项：" },
+  "This mode uses Accelerate DeepSpeed launch options plus existing training arguments.": {
+    "zh-TW": "此模式會使用 Accelerate DeepSpeed 啟動選項，並搭配現有訓練參數。",
+    "zh-CN": "此模式会使用 Accelerate DeepSpeed 启动选项，并搭配现有训练参数。",
+  },
+  "ZeRO Stage": { "zh-TW": "ZeRO Stage", "zh-CN": "ZeRO Stage" },
+  "Higher stage saves more VRAM but can increase communication overhead.": {
+    "zh-TW": "Stage 越高越省 VRAM，但可能增加通訊成本。",
+    "zh-CN": "Stage 越高越省 VRAM，但可能增加通信成本。",
+  },
+  "Optimizer Offload Device": { "zh-TW": "Optimizer Offload 裝置", "zh-CN": "Optimizer Offload 设备" },
+  "Optimizer NVMe Path": { "zh-TW": "Optimizer NVMe 路徑", "zh-CN": "Optimizer NVMe 路径" },
+  "Parameter Offload Device": { "zh-TW": "Parameter Offload 裝置", "zh-CN": "Parameter Offload 设备" },
+  "Parameter NVMe Path": { "zh-TW": "Parameter NVMe 路徑", "zh-CN": "Parameter NVMe 路径" },
+  "Enable ZeRO-3 Init": { "zh-TW": "啟用 ZeRO-3 Init", "zh-CN": "启用 ZeRO-3 Init" },
+  "Save 16-bit Model with ZeRO-3": { "zh-TW": "使用 ZeRO-3 儲存 16-bit 模型", "zh-CN": "使用 ZeRO-3 保存 16-bit 模型" },
+  "FP16 Master Weights and Gradients": {
+    "zh-TW": "FP16 Master Weights and Gradients",
+    "zh-CN": "FP16 Master Weights and Gradients",
+  },
+  "Primarily useful for ZeRO-Offload configurations that support this mode.": {
+    "zh-TW": "主要用於支援此模式的 ZeRO-Offload 設定。",
+    "zh-CN": "主要用于支持此模式的 ZeRO-Offload 设置。",
+  },
+  "Moves parameters to Main System RAM when not in use. Slows down training but drastically reduces VRAM requirements.": {
+    "zh-TW": "未使用時把 parameters 移到系統 RAM。訓練會變慢，但可大幅降低 VRAM 需求。",
+    "zh-CN": "未使用时把 parameters 移到系统 RAM。训练会变慢，但可大幅降低 VRAM 需求。",
+  },
+  "Frees gathered parameters after the forward pass. Highly recommended for maximizing VRAM savings.": {
+    "zh-TW": "forward 後釋放已 gather 的 parameters。想最大化節省 VRAM 時強烈建議開啟。",
+    "zh-CN": "forward 后释放已 gather 的 parameters。想最大化节省 VRAM 时强烈建议开启。",
+  },
+  "Uses FSDP's native activation checkpointing. Can be used alongside standard gradient checkpointing for maximum VRAM savings.": {
+    "zh-TW": "使用 FSDP 原生 activation checkpointing，可和標準 gradient checkpointing 搭配以最大化節省 VRAM。",
+    "zh-CN": "使用 FSDP 原生 activation checkpointing，可和标准 gradient checkpointing 搭配以最大化节省 VRAM。",
+  },
+  "Only rank 0 loads the model from disk; other ranks receive weights via broadcast. Reduces peak system RAM by ~50% during startup. Automatically enables Sync Module States (required by accelerate).": {
+    "zh-TW": "只有 rank 0 從硬碟載入模型，其他 ranks 透過 broadcast 接收權重。啟動時可降低約 50% 系統 RAM 峰值，並自動啟用 accelerate 需要的 Sync Module States。",
+    "zh-CN": "只有 rank 0 从硬盘加载模型，其他 ranks 通过 broadcast 接收权重。启动时可降低约 50% 系统 RAM 峰值，并自动启用 accelerate 需要的 Sync Module States。",
+  },
+  "Overlaps parameter all-gather with gradient computation in the backward pass.": {
+    "zh-TW": "在 backward pass 中重疊 parameter all-gather 與 gradient 計算。",
+    "zh-CN": "在 backward pass 中重叠 parameter all-gather 与 gradient 计算。",
+  },
+  "BACKWARD_PRE": { "zh-TW": "BACKWARD_PRE", "zh-CN": "BACKWARD_PRE" },
+  "BACKWARD_POST": { "zh-TW": "BACKWARD_POST", "zh-CN": "BACKWARD_POST" },
+  "BACKWARD_PRE (Recommended)": { "zh-TW": "BACKWARD_PRE（建議）", "zh-CN": "BACKWARD_PRE（建议）" },
+  "None (No Prefetch)": { "zh-TW": "None（不 Prefetch）", "zh-CN": "None（不 Prefetch）" },
+  "Pre-fetches the next layer's parameters during the forward pass to overlap communication with computation. Safe for DiT/UNet (static graphs). Speeds up forward pass at a small VRAM cost.": {
+    "zh-TW": "forward pass 時預先抓取下一層 parameters，讓通訊與計算重疊。對 DiT/UNet（static graphs）安全，會用少量 VRAM 換取 forward 加速。",
+    "zh-CN": "forward pass 时预先抓取下一层 parameters，让通信与计算重叠。对 DiT/UNet（static graphs）安全，会用少量 VRAM 换取 forward 加速。",
+  },
+  "Required for LoRA training. Keeps original parameter references so FSDP handles mixed frozen/trainable parameters (frozen UNet + LoRA hooks) correctly. Disable only if you know the entire model has uniform requires_grad.": {
+    "zh-TW": "LoRA 訓練需要。保留原始 parameter references，讓 FSDP 正確處理凍結/可訓練混合參數（凍結 UNet + LoRA hooks）。只有確定整個模型 requires_grad 一致時才關閉。",
+    "zh-CN": "LoRA 训练需要。保留原始 parameter references，让 FSDP 正确处理冻结/可训练混合参数（冻结 UNet + LoRA hooks）。只有确定整个模型 requires_grad 一致时才关闭。",
+  },
+  "Prevents too many simultaneous all-gather ops from piling up, reducing CUDA malloc retries and potential OOM spikes. Recommended on.": {
+    "zh-TW": "避免太多 all-gather 同時堆積，降低 CUDA malloc 重試與潛在 OOM 尖峰。建議開啟。",
+    "zh-CN": "避免太多 all-gather 同时堆积，降低 CUDA malloc 重试与潜在 OOM 峰值。建议开启。",
+  },
+  "Determines how FSDP clusters parameters into sharded units. TRANSFORMER_BASED_WRAP is recommended for large models.": {
+    "zh-TW": "決定 FSDP 如何把 parameters 分組成 sharded units。大型模型建議使用 TRANSFORMER_BASED_WRAP。",
+    "zh-CN": "决定 FSDP 如何把 parameters 分组成 sharded units。大型模型建议使用 TRANSFORMER_BASED_WRAP。",
+  },
+  "Determines how FSDP2 groups parameters into sharded units. TRANSFORMER_BASED_WRAP is recommended for large DiT/UNet models: each transformer block is all-gathered and reduce-scattered independently, enabling communication/computation overlap.": {
+    "zh-TW": "決定 FSDP2 如何把 parameters 分組成 sharded units。大型 DiT/UNet 建議 TRANSFORMER_BASED_WRAP：每個 transformer block 獨立 all-gather/reduce-scatter，可重疊通訊與計算。",
+    "zh-CN": "决定 FSDP2 如何把 parameters 分组成 sharded units。大型 DiT/UNet 建议 TRANSFORMER_BASED_WRAP：每个 transformer block 独立 all-gather/reduce-scatter，可重叠通信与计算。",
+  },
+  "Exact class name of the transformer block to wrap per-layer. Required for TRANSFORMER_BASED_WRAP.": {
+    "zh-TW": "要逐層 wrap 的 transformer block 精確 class 名稱。TRANSFORMER_BASED_WRAP 必填。",
+    "zh-CN": "要逐层 wrap 的 transformer block 精确 class 名称。TRANSFORMER_BASED_WRAP 必填。",
+  },
+  "The exact class name of the transformer block. Required for TRANSFORMER_BASED_WRAP.": {
+    "zh-TW": "transformer block 的精確 class 名稱。TRANSFORMER_BASED_WRAP 必填。",
+    "zh-CN": "transformer block 的精确 class 名称。TRANSFORMER_BASED_WRAP 必填。",
+  },
+  "Only shards modules with at least this many parameters. Default is 100M (1e8).": {
+    "zh-TW": "只有參數量達到此門檻的 modules 才會 shard。預設 100M（1e8）。",
+    "zh-CN": "只有参数量达到此阈值的 modules 才会 shard。默认 100M（1e8）。",
+  },
+  "FSDP2 vs FSDP1:": { "zh-TW": "FSDP2 與 FSDP1：", "zh-CN": "FSDP2 与 FSDP1：" },
+  "FSDP2 uses": { "zh-TW": "FSDP2 使用", "zh-CN": "FSDP2 使用" },
+  "This is not available on Windows.": { "zh-TW": "Windows 無法使用此功能。", "zh-CN": "Windows 无法使用此功能。" },
+  "(PyTorch ≥ 2.4). Parameters are always exposed as originals (no FlatParameter), making it compatible with LoRA. Backward prefetch, forward prefetch, and limit-all-gathers are handled automatically. Sharding strategy is replaced by the single Reshard After Forward toggle.": {
+    "zh-TW": "（PyTorch ≥ 2.4）。Parameters 會一直以原始形式暴露（沒有 FlatParameter），因此相容 LoRA。Backward prefetch、forward prefetch、limit-all-gathers 會自動處理。Sharding strategy 會改由單一 Reshard After Forward 開關控制。",
+    "zh-CN": "（PyTorch ≥ 2.4）。Parameters 会一直以原始形式暴露（没有 FlatParameter），因此兼容 LoRA。Backward prefetch、forward prefetch、limit-all-gathers 会自动处理。Sharding strategy 会改由单一 Reshard After Forward 开关控制。",
+  },
+  "When enabled (default), frees unsharded parameters after each forward pass and re-all-gathers them in backward. Maximizes VRAM savings. Disable to keep parameters unsharded between forward and backward — saves one backward all-gather at the cost of higher VRAM.": {
+    "zh-TW": "啟用時（預設）會在每次 forward 後釋放 unsharded parameters，並在 backward 重新 all-gather。這最省 VRAM。關閉後會在 forward/backward 間保留 unsharded parameters，可少一次 backward all-gather，但會使用更多 VRAM。",
+    "zh-CN": "启用时（默认）会在每次 forward 后释放 unsharded parameters，并在 backward 重新 all-gather。这最省 VRAM。关闭后会在 forward/backward 间保留 unsharded parameters，可少一次 backward all-gather，但会使用更多 VRAM。",
+  },
+  "Frees intermediate activations during forward and recomputes them in backward. Reduces VRAM at the cost of extra compute. Combine with Reshard After Forward for maximum VRAM savings.": {
+    "zh-TW": "forward 時釋放中間 activations，並在 backward 重新計算。用額外計算換取 VRAM 節省；搭配 Reshard After Forward 最省。",
+    "zh-CN": "forward 时释放中间 activations，并在 backward 重新计算。用额外计算换取 VRAM 节省；搭配 Reshard After Forward 最省。",
+  },
+  "Only rank 0 loads the model checkpoint; other ranks receive weights via broadcast. Reduces peak system RAM by ~50% during startup.": {
+    "zh-TW": "只有 rank 0 載入模型 checkpoint，其他 ranks 透過 broadcast 接收權重。啟動時可降低約 50% 系統 RAM 峰值。",
+    "zh-CN": "只有 rank 0 加载模型 checkpoint，其他 ranks 通过 broadcast 接收权重。启动时可降低约 50% 系统 RAM 峰值。",
+  },
+  "Moves sharded parameters and gradients to CPU when not in use. Drastically reduces VRAM at the cost of H2D/D2H copy overhead per step.": {
+    "zh-TW": "未使用時把 sharded parameters 與 gradients 移到 CPU。可大幅降低 VRAM，但每 step 會增加 H2D/D2H copy 成本。",
+    "zh-CN": "未使用时把 sharded parameters 与 gradients 移到 CPU。可大幅降低 VRAM，但每 step 会增加 H2D/D2H copy 成本。",
+  },
+  "Loads model to VRAM to save system RAM.": {
+    "zh-TW": "將模型載入 VRAM 以節省系統 RAM。",
+    "zh-CN": "将模型加载到 VRAM 以节省系统 RAM。",
+  },
+  "Train at each resolution sequentially (low → high) instead of mixing them. Requires at least 2 resolutions above. Works with both epochs and max steps.": {
+    "zh-TW": "依序訓練各解析度（低 → 高），而不是混合訓練。上方至少需要 2 個解析度，epochs 與 max steps 都可用。",
+    "zh-CN": "依序训练各分辨率（低 → 高），而不是混合训练。上方至少需要 2 个分辨率，epochs 与 max steps 都可用。",
+  },
+  "Each fraction is the portion of total steps for that resolution. Must sum to 1.0.": {
+    "zh-TW": "每個比例代表該解析度佔總 steps 的比例，總和必須為 1.0。",
+    "zh-CN": "每个比例代表该分辨率占总 steps 的比例，总和必须为 1.0。",
+  },
+  "Use image alpha channel as loss mask. Images without alpha train normally.": {
+    "zh-TW": "使用圖片 alpha channel 作為 loss mask。沒有 alpha 的圖片會正常訓練。",
+    "zh-CN": "使用图片 alpha channel 作为 loss mask。没有 alpha 的图片会正常训练。",
+  },
+  "Higher = more capacity, more VRAM.": {
+    "zh-TW": "數值越高容量越大，也會使用更多 VRAM。",
+    "zh-CN": "数值越高容量越大，也会使用更多 VRAM。",
+  },
+  "Scaling factor. Usually same as dim.": {
+    "zh-TW": "縮放係數，通常與 dim 相同。",
+    "zh-CN": "缩放系数，通常与 dim 相同。",
+  },
+  "Gradient tensors become views into the all-reduce communication buffer instead of copies. Reduces peak memory and eliminates one copy per step. Safe to always enable for DDP.": {
+    "zh-TW": "Gradient tensor 會成為 all-reduce 通訊 buffer 的 view，而不是複製。可降低記憶體峰值並省掉每 step 一次 copy。DDP 可放心開啟。",
+    "zh-CN": "Gradient tensor 会成为 all-reduce 通信 buffer 的 view，而不是复制。可降低内存峰值并省掉每 step 一次 copy。DDP 可放心开启。",
+  },
+  "Tells DDP the computation graph is identical every step (same layers, same order). Enables more aggressive comm/compute overlap. Safe for standard UNet/DiT architectures.": {
+    "zh-TW": "告訴 DDP 每個 step 的計算圖都相同（相同 layers、相同順序），可更積極重疊通訊與計算。標準 UNet/DiT 架構可安全使用。",
+    "zh-CN": "告诉 DDP 每个 step 的计算图都相同（相同 layers、相同顺序），可更积极重叠通信与计算。标准 UNet/DiT 架构可安全使用。",
+  },
+  "Keep the model loaded in VRAM for faster subsequent generations": {
+    "zh-TW": "將模型保留在 VRAM 中，讓後續生成更快",
+    "zh-CN": "将模型保留在 VRAM 中，让后续生成更快",
+  },
+  "TP/SP mode always runs tensor parallel and sequence parallel together.": {
+    "zh-TW": "TP/SP 模式固定一起執行 tensor parallel 與 sequence parallel。",
+    "zh-CN": "TP/SP 模式固定一起执行 tensor parallel 与 sequence parallel。",
+  },
+  "Throttles in-flight all-gather operations so they don't all queue up at once. Prevents excessive CUDA memory allocation retries caused by too many unsharded parameter buffers being live simultaneously. Recommended to leave enabled.": {
+    "zh-TW": "限制進行中的 all-gather，避免一次排隊太多。可避免太多 unsharded parameter buffers 同時存在造成 CUDA 記憶體配置重試。建議保持開啟。",
+    "zh-CN": "限制进行中的 all-gather，避免一次排队太多。可避免太多 unsharded parameter buffers 同时存在造成 CUDA 内存分配重试。建议保持开启。",
+  },
+  "While executing the forward pass through layer N, FSDP simultaneously all-gathers layer N+1's parameters. Reduces forward pass time by overlapping communication with computation. Only safe with static graphs (same layer execution order every step) â€” DiT/UNet architectures qualify.": {
+    "zh-TW": "執行第 N 層 forward 時，FSDP 會同時 all-gather 第 N+1 層 parameters。透過重疊通訊與計算縮短 forward 時間。只適用 static graphs（每 step 層順序相同），DiT/UNet 架構符合。",
+    "zh-CN": "执行第 N 层 forward 时，FSDP 会同时 all-gather 第 N+1 层 parameters。通过重叠通信与计算缩短 forward 时间。只适用 static graphs（每 step 层顺序相同），DiT/UNet 架构符合。",
+  },
+  "Overlaps all-gather communication with gradient computation during the backward pass. BACKWARD_PRE fetches the next layer's parameters while computing the current layer's gradients â€” best throughput but uses slightly more peak VRAM. BACKWARD_POST fetches after finishing gradients â€” less overlap but safer. None is sequential and slowest.": {
+    "zh-TW": "在 backward pass 中重疊 all-gather 通訊與 gradient 計算。BACKWARD_PRE 會在計算當前層 gradient 時抓下一層 parameters，吞吐最好但 VRAM 峰值略高。BACKWARD_POST 在 gradient 完成後再抓，重疊較少但較保守。None 則循序執行最慢。",
+    "zh-CN": "在 backward pass 中重叠 all-gather 通信与 gradient 计算。BACKWARD_PRE 会在计算当前层 gradient 时抓下一层 parameters，吞吐最好但 VRAM 峰值略高。BACKWARD_POST 在 gradient 完成后再抓，重叠较少但较保守。None 则顺序执行最慢。",
+  },
+  "Keeps references to the original model parameters instead of FSDP's internal flattened FlatParameter. Required when the same FSDP unit contains both frozen and trainable parameters (e.g. frozen UNet with LoRA hooks). Without this, the optimizer and gradient hooks can silently break on mixed requires_grad tensors.": {
+    "zh-TW": "保留原始模型 parameters 的 references，而不是使用 FSDP 內部 flatten 後的 FlatParameter。當同一個 FSDP unit 同時包含凍結與可訓練參數（例如 frozen UNet + LoRA hooks）時必須啟用。否則 optimizer 與 gradient hooks 可能在 mixed requires_grad tensors 下悄悄失效。",
+    "zh-CN": "保留原始模型 parameters 的 references，而不是使用 FSDP 内部 flatten 后的 FlatParameter。当同一个 FSDP unit 同时包含冻结与可训练参数（例如 frozen UNet + LoRA hooks）时必须启用。否则 optimizer 与 gradient hooks 可能在 mixed requires_grad tensors 下悄悄失效。",
+  },
+  "gives the best throughput by fetching the next layer while computing current gradients. Costs a small VRAM peak.": {
+    "zh-TW": "會在計算目前 gradients 時抓取下一層，因此吞吐最好，但 VRAM 峰值會稍微增加。",
+    "zh-CN": "会在计算当前 gradients 时抓取下一层，因此吞吐最好，但 VRAM 峰值会稍微增加。",
+  },
+});
+
+function getInitialLanguage() {
+  const saved = localStorage.getItem(I18N_STORAGE_KEY);
+  if (SUPPORTED_LANGUAGES.includes(saved)) return saved;
+  return "zh-TW";
+}
+
+let currentLanguage = getInitialLanguage();
+
+function translatePhrase(text) {
+  if (currentLanguage === "en") return text;
+  return UI_TRANSLATIONS[text]?.[currentLanguage] || text;
+}
+
+function applyI18nTextNode(node) {
+  const raw = node.nodeValue;
+  if (!raw || !raw.trim()) return;
+  if (!originalTextNodes.has(node)) originalTextNodes.set(node, raw);
+  const original = originalTextNodes.get(node);
+  const leading = original.match(/^\s*/)?.[0] || "";
+  const trailing = original.match(/\s*$/)?.[0] || "";
+  const core = original.trim();
+  node.nodeValue = leading + translatePhrase(core) + trailing;
+}
+
+function applyI18nAttributes(el) {
+  ["placeholder", "title"].forEach((attr) => {
+    if (!el.hasAttribute(attr)) return;
+    let attrMap = originalAttrs.get(el);
+    if (!attrMap) {
+      attrMap = {};
+      originalAttrs.set(el, attrMap);
+    }
+    if (!attrMap[attr]) attrMap[attr] = el.getAttribute(attr);
+    el.setAttribute(attr, translatePhrase(attrMap[attr]));
+  });
+}
+
+function applyI18n(root = document.body) {
+  document.documentElement.lang = currentLanguage;
+  const switcher = $("ui-language");
+  if (switcher) switcher.value = currentLanguage;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (["SCRIPT", "STYLE", "TEXTAREA"].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+      return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(applyI18nTextNode);
+  root.querySelectorAll?.("[placeholder], [title]").forEach(applyI18nAttributes);
+}
+
+function setLanguage(lang) {
+  currentLanguage = SUPPORTED_LANGUAGES.includes(lang) ? lang : "zh-TW";
+  localStorage.setItem(I18N_STORAGE_KEY, currentLanguage);
+  applyI18n();
+  updateGPUActivity();
+  updateGenGPULabel();
+  if (currentJob) checkTensorBoard();
+}
+
+function refreshI18n() {
+  if (currentLanguage !== "en") applyI18n();
+}
 // ==========================================
 //  API
 // ==========================================
@@ -248,7 +1051,8 @@ async function loadJobs() {
   if (jobs.length === 0) {
     jobListEl.innerHTML =
       '<div style="padding:20px;text-align:center;color:var(--text-muted)">No jobs yet</div>';
-    return;
+    refreshI18n();
+    return jobs;
   }
   jobs.forEach((job) => {
     const el = document.createElement("div");
@@ -260,6 +1064,21 @@ async function loadJobs() {
     el.addEventListener("click", () => selectJob(job.name));
     jobListEl.appendChild(el);
   });
+  refreshI18n();
+  return jobs;
+}
+function clearCurrentJobSelection() {
+  currentJob = null;
+  isDirty = false;
+  localStorage.removeItem("lastJob");
+  if (samplesPollTimer) {
+    clearInterval(samplesPollTimer);
+    samplesPollTimer = null;
+  }
+  $("btn-save").classList.add("hidden");
+  $("btn-discard").classList.add("hidden");
+  jobEditor.classList.add("hidden");
+  emptyState.classList.remove("hidden");
 }
 async function selectJob(name) {
   if (currentJob) savePromptTransientSettings();
@@ -313,10 +1132,7 @@ async function selectJob(name) {
   } catch (err) {
     console.error(`Failed to load job "${name}":`, err);
     showToast(`Failed to load job: ${err.message}`, "danger");
-    currentJob = null;
-    localStorage.removeItem("lastJob");
-    jobEditor.classList.add("hidden");
-    emptyState.classList.remove("hidden");
+    clearCurrentJobSelection();
   }
 }
 function updateRunningState(running) {
@@ -338,16 +1154,16 @@ function populateConfig(config) {
   const n = config.network_arguments || {};
   const a = config.anima_arguments || {};
   // Training
-  $("cfg-learning-rate").value = t.learning_rate || "5e-5";
-  $("cfg-text-encoder-lr").value = t.text_encoder_lr || "5e-5";
-  $("cfg-optimizer").value = t.optimizer_type || "AdamW8bit";
-  $("cfg-lr-scheduler").value = t.lr_scheduler || "cosine";
-  $("cfg-lr-warmup").value = t.lr_warmup_steps ?? 100;
+  $("cfg-learning-rate").value = t.learning_rate || "1e-4";
+  $("cfg-text-encoder-lr").value = t.text_encoder_lr ?? "0";
+  $("cfg-optimizer").value = t.optimizer_type || "library.came.CAME";
+  $("cfg-lr-scheduler").value = t.lr_scheduler || "constant_with_warmup";
+  $("cfg-lr-warmup").value = t.lr_warmup_steps ?? 0.1;
   $("cfg-lr-scheduler-cycles").value = t.lr_scheduler_num_cycles ?? 1;
   $("cfg-lr-min-ratio").value = t.lr_scheduler_min_lr_ratio ?? 0;
   $("cfg-seed").value = t.seed ?? 42;
   // Extract weight decay
-  let wdValue = "0";
+  let wdValue = "";
   let decoupleValue = true;
   if (t.optimizer_args && Array.isArray(t.optimizer_args)) {
     const wdArg = t.optimizer_args.find((arg) =>
@@ -376,19 +1192,28 @@ function populateConfig(config) {
   updateDurationUnit();
   $("cfg-max-epochs").value = t.max_train_epochs ?? 20;
   $("cfg-save-every").value = t.save_every_n_epochs ?? 1;
-  $("cfg-max-steps").value = t.max_train_steps ?? 1000;
-  $("cfg-save-every-steps").value = t.save_every_n_steps ?? 500;
+  $("cfg-max-steps").value = t.max_train_steps ?? 3000;
+  $("cfg-save-every-steps").value = t.save_every_n_steps ?? 200;
+  $("cfg-save-last-steps").value = t.save_last_n_steps ?? "";
+  $("cfg-save-last-epochs").value = t.save_last_n_epochs ?? "";
+  $("cfg-save-state").checked = t.save_state ?? false;
+  $("cfg-save-state-end").checked = t.save_state_on_train_end ?? false;
+  $("cfg-save-last-steps-state").value = t.save_last_n_steps_state ?? "";
+  $("cfg-save-last-epochs-state").value = t.save_last_n_epochs_state ?? "";
   $("cfg-output-name").value = t.output_name || "my_anima_lora";
   $("cfg-save-format").value = t.save_model_as || "safetensors";
   $("cfg-save-precision").value = t.save_precision || "bf16";
   $("cfg-mixed-precision").value = t.mixed_precision || "bf16";
-  $("cfg-workers").value = t.max_data_loader_n_workers ?? 4;
+  $("cfg-transformer-dtype").value = t.full_bf16 ? "bfloat16" : t.full_fp16 ? "float16" : "float32";
+  $("cfg-workers").value = t.max_data_loader_n_workers ?? 2;
   $("cfg-grad-acc").value = t.gradient_accumulation_steps ?? 1;
   $("cfg-gradient-checkpointing").checked = t.gradient_checkpointing ?? true;
-  $("cfg-flash-attn").checked = t.flash_attn ?? false;
+  $("cfg-flash-attn").checked = (t.flash_attn ?? false) || t.attn_mode === "flash";
   $("cfg-torch-compile").checked = t.torch_compile ?? false;
   $("cfg-lowram").checked = t.lowram ?? false;
   $("cfg-blocks-to-swap").value = t.blocks_to_swap ?? 0;
+  $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
+  $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
     $("cfg-activation-offload").value = "unsloth";
@@ -402,6 +1227,8 @@ function populateConfig(config) {
     t.persistent_data_loader_workers ?? true;
   $("cfg-cache-latents").checked = t.cache_latents_to_disk ?? true;
   $("cfg-vae-batch").value = t.vae_batch_size ?? 1;
+  $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
+  $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
   $("cfg-disable-bucket-shuffle").checked = t.disable_bucket_shuffle ?? false;
   // Progressive resolution schedule
@@ -493,8 +1320,9 @@ function populateConfig(config) {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s);
-  document.querySelectorAll('input[name="gpu-select"]').forEach((cb) => {
-    cb.checked = savedIds.length === 0 || savedIds.includes(cb.value);
+  const savedGpuId = savedIds[0] || null;
+  Array.from(document.querySelectorAll('input[name="gpu-select"]')).forEach((cb, index) => {
+    cb.checked = savedGpuId ? cb.value === savedGpuId : index === 0;
     // Also update card class if parent exists
     const card = cb.closest(".gpu-card");
     if (card) card.classList.toggle("selected", cb.checked);
@@ -502,16 +1330,25 @@ function populateConfig(config) {
   updateMultiGPUUI();
   const sampleInterval = t.sample_every_n_epochs;
   const sampleIntervalSteps = t.sample_every_n_steps;
+  const sampleArgs = config.sample_arguments || {};
   const enableSampling =
     (sampleInterval !== null && sampleInterval > 0) ||
     (sampleIntervalSteps !== null && sampleIntervalSteps > 0);
   $("cfg-enable-sampling").checked = enableSampling;
   $("cfg-sample-every").value = sampleInterval || 1;
   $("cfg-sample-every-steps").value = sampleIntervalSteps || 100;
+  $("cfg-sample-at-first").checked = t.sample_at_first ?? sampleArgs.sample_at_first ?? false;
   $("group-sample-every").classList.toggle("hidden", !enableSampling);
   // Anima
-  $("cfg-timestep-method").value = a.timestep_sample_method || "logit_normal";
-  $("cfg-flow-shift").value = a.discrete_flow_shift ?? 3.0;
+  $("cfg-timestep-method").value =
+    a.timestep_sampling ||
+    (a.timestep_sample_method === "logit_normal" ? "sigmoid" : a.timestep_sample_method) ||
+    "sigmoid";
+  $("cfg-flow-shift").value = a.discrete_flow_shift ?? 1.0;
+  $("cfg-weighting-scheme").value = a.weighting_scheme || "uniform";
+  $("cfg-sigmoid-scale").value = a.sigmoid_scale ?? 1.0;
+  $("cfg-qwen3-max-token-length").value = a.qwen3_max_token_length ?? 512;
+  $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
@@ -519,6 +1356,7 @@ function populateConfig(config) {
   $("cfg-network-module").value = n.network_module || "networks.lora_anima";
   $("cfg-network-dim").value = n.network_dim ?? 16;
   $("cfg-network-alpha").value = n.network_alpha ?? 16;
+  updateNetworkModuleUI();
   $("cfg-unet-only").checked = n.network_train_unet_only ?? true;
   $("cfg-network-weights").value = n.network_weights || "";
   $("cfg-freeze-llm-adapter").checked = t.freeze_llm_adapter ?? true;
@@ -538,8 +1376,8 @@ function populateDataset(dataset) {
   }
   if (dArray.length === 0) dArray = [{}];
 
-  const resArray = dArray.map(d => Array.isArray(d.resolution) ? d.resolution[0] : (d.resolution || 1536));
-  const batchArray = dArray.map(d => d.batch_size ?? 4);
+  const resArray = dArray.map(d => Array.isArray(d.resolution) ? d.resolution[0] : (d.resolution || 1024));
+  const batchArray = dArray.map(d => d.batch_size ?? 1);
 
   $("cfg-resolution").value = resArray.join(", ");
   $("cfg-batch-size").value = batchArray.join(", ");
@@ -549,7 +1387,7 @@ function populateDataset(dataset) {
   $("cfg-enable-bucket").checked = g.enable_bucket ?? true;
   $("cfg-bucket-no-upscale").checked = g.bucket_no_upscale ?? true;
   $("cfg-min-bucket").value = g.min_bucket_reso ?? 512;
-  $("cfg-max-bucket").value = g.max_bucket_reso ?? 1536;
+  $("cfg-max-bucket").value = g.max_bucket_reso ?? 2048;
   $("cfg-bucket-steps").value = g.bucket_reso_steps ?? 64;
   // Load Subsets into memory
   let subsetsRaw = d.subsets || [];
@@ -562,9 +1400,10 @@ function populateDataset(dataset) {
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
     caption_dropout_rate: s.caption_dropout_rate ?? 0.0,
-    caption_tag_dropout_rate: s.caption_tag_dropout_rate ?? 0.0,
+    caption_tag_dropout_rate: s.caption_tag_dropout_rate ?? 0.3,
     caption_dropout_every_n_epochs: s.caption_dropout_every_n_epochs ?? 0,
     shuffle_caption: s.shuffle_caption ?? true,
+    enable_wildcard: s.enable_wildcard ?? true,
     is_reg: s.is_reg ?? false,
   }));
   // Edge case: if empty, force at least 1
@@ -572,7 +1411,7 @@ function populateDataset(dataset) {
     addSubset(false);
   }
   // Alpha mask: check if any subset has it enabled
-  $("cfg-alpha-mask").checked = subsetsRaw.some((s) => s.alpha_mask === true);
+  $("cfg-alpha-mask").checked = subsetsRaw.length === 0 || subsetsRaw.some((s) => s.alpha_mask === true);
   renderSubsets();
   // Rebuild progressive phase rows now that resolution field is populated
   if ($("cfg-progressive-reso").checked) renderProgressivePhases();
@@ -618,14 +1457,19 @@ function safeFloat(val, fallback = 0.0) {
   const p = parseFloat(val);
   return isNaN(p) ? fallback : p;
 }
+function optionalPositiveInt(id) {
+  const raw = $(id).value;
+  if (raw === "" || raw === null || raw === undefined) return undefined;
+  const parsed = safeInt(raw);
+  return parsed > 0 ? parsed : undefined;
+}
 function gatherConfig() {
   const unit = document.querySelector(
     'input[name="duration-unit"]:checked',
   ).value;
   const isEpochs = unit === "epochs";
   const enableSampling = $("cfg-enable-sampling").checked;
-  const isMultiGpu =
-    document.querySelectorAll('input[name="gpu-select"]:checked').length > 1;
+  const isMultiGpu = false;
   const multiGpuMode = $("cfg-multigpu-mode").value;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
@@ -646,6 +1490,8 @@ function gatherConfig() {
       save_every_n_epochs: isEpochs
         ? safeInt($("cfg-save-every").value)
         : undefined,
+      save_last_n_epochs: optionalPositiveInt("cfg-save-last-epochs"),
+      save_last_n_epochs_state: optionalPositiveInt("cfg-save-last-epochs-state"),
       sample_every_n_epochs:
         isEpochs && enableSampling
           ? safeInt($("cfg-sample-every").value)
@@ -656,10 +1502,15 @@ function gatherConfig() {
       save_every_n_steps: !isEpochs
         ? safeInt($("cfg-save-every-steps").value)
         : undefined,
+      save_last_n_steps: optionalPositiveInt("cfg-save-last-steps"),
+      save_last_n_steps_state: optionalPositiveInt("cfg-save-last-steps-state"),
+      sample_at_first: $("cfg-sample-at-first").checked ? true : undefined,
       sample_every_n_steps:
         !isEpochs && enableSampling
           ? safeInt($("cfg-sample-every-steps").value)
           : undefined,
+      save_state: $("cfg-save-state").checked ? true : undefined,
+      save_state_on_train_end: $("cfg-save-state-end").checked ? true : undefined,
       log_with: "tensorboard",
       learning_rate: safeFloat($("cfg-learning-rate").value),
       text_encoder_lr: safeFloat($("cfg-text-encoder-lr").value),
@@ -674,13 +1525,18 @@ function gatherConfig() {
         $("cfg-lr-scheduler").value === "cosine_with_min_lr"
           ? safeFloat($("cfg-lr-min-ratio").value)
           : undefined,
-      lr_warmup_steps: safeInt($("cfg-lr-warmup").value),
+      lr_warmup_steps: safeFloat($("cfg-lr-warmup").value),
       // Hardware
       mixed_precision: $("cfg-mixed-precision").value,
       save_precision: $("cfg-save-precision").value || undefined,
+      ...($("cfg-transformer-dtype").value === "bfloat16" ? { full_bf16: true } : {}),
+      ...($("cfg-transformer-dtype").value === "float16" ? { full_fp16: true } : {}),
       max_data_loader_n_workers: safeInt($("cfg-workers").value),
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
+      train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
+      knn_noise_k: safeInt($("cfg-knn-noise-k").value),
+      cep_noise: safeFloat($("cfg-cep-noise").value),
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -694,8 +1550,11 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
+      cache_latents: $("cfg-cache-latents").checked,
       cache_latents_to_disk: $("cfg-cache-latents").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
+      vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
+      vae_disable_cache: $("cfg-vae-disable-cache").checked,
       cache_text_encoder_outputs_to_disk: $("cfg-cache-te").checked,
       ...($("cfg-disable-bucket-shuffle").checked && {
         disable_bucket_shuffle: true,
@@ -780,7 +1639,7 @@ function gatherConfig() {
       // Progressive resolution schedule
       ...(() => {
         if (!$("cfg-progressive-reso").checked) return {};
-        const resList = ($("cfg-resolution").value || "1536").split(",").map(r => parseInt(r.trim())).filter(Boolean);
+        const resList = ($("cfg-resolution").value || "1024").split(",").map(r => parseInt(r.trim())).filter(Boolean);
         const inputs = document.querySelectorAll(".prog-reso-frac");
         if (inputs.length === 0 || resList.length < 2) return {};
         const parts = resList.map((r, i) => {
@@ -811,17 +1670,17 @@ function gatherConfig() {
           }),
           auto_resume_last_state: $("cfg-auto-resume").checked,
           ...($("cfg-resume").value && !$("cfg-auto-resume").checked && { resume: $("cfg-resume").value }),
-        },
-    anima_arguments: {
-      timestep_sample_method: $("cfg-timestep-method").value,
-      discrete_flow_shift: safeFloat($("cfg-flow-shift").value),
-      weighting_scheme: "logit_normal",
     },
-    gpu_ids: Array.from(
-      document.querySelectorAll('input[name="gpu-select"]:checked'),
-    )
-      .map((cb) => cb.value)
-      .join(","),
+    anima_arguments: {
+      timestep_sampling: $("cfg-timestep-method").value,
+      discrete_flow_shift: safeFloat($("cfg-flow-shift").value),
+      sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value),
+      qwen3_max_token_length: safeInt($("cfg-qwen3-max-token-length").value),
+      t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
+      weighting_scheme: $("cfg-weighting-scheme").value,
+    },
+    gpu_ids:
+      Array.from(document.querySelectorAll('input[name="gpu-select"]:checked'))[0]?.value || "",
   };
   return config;
 }
@@ -836,8 +1695,8 @@ function gatherDataset() {
       bucket_reso_steps: safeInt($("cfg-bucket-steps").value),
     },
     datasets: (() => {
-      const resStr = $("cfg-resolution").value || "1536";
-      const batchStr = $("cfg-batch-size").value || "4";
+      const resStr = $("cfg-resolution").value || "1024";
+      const batchStr = $("cfg-batch-size").value || "1";
 
       const resList = resStr.split(",").map(r => safeInt(r.trim()));
       const batchListRaw = batchStr.split(",").map(b => safeInt(b.trim()));
@@ -861,6 +1720,7 @@ function gatherDataset() {
                 s.caption_dropout_every_n_epochs,
               ),
               shuffle_caption: s.shuffle_caption,
+              enable_wildcard: s.enable_wildcard,
             };
             if (s.is_reg) subset.is_reg = true;
             if ($("cfg-alpha-mask").checked) subset.alpha_mask = true;
@@ -882,9 +1742,10 @@ function addSubset(shouldRender = true) {
     flip_aug: false,
     caption_prefix: "",
     caption_dropout_rate: 0.0,
-    caption_tag_dropout_rate: 0.0,
+    caption_tag_dropout_rate: 0.3,
     caption_dropout_every_n_epochs: 0,
     shuffle_caption: true,
+    enable_wildcard: true,
     is_reg: false,
     collapsed: false,
   });
@@ -970,7 +1831,14 @@ function renderSubsets() {
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-shuffle-caption" ${subset.shuffle_caption ? "checked" : ""}> Shuffle Captions</label>
                     </div>
                     <div class="form-group">
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-enable-wildcard" ${subset.enable_wildcard ? "checked" : ""}> Enable Wildcard</label>
+                    </div>
+                </div>
+                <div class="form-row" style="margin-top: 10px;">
+                    <div class="form-group">
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-flip-aug" ${subset.flip_aug ? "checked" : ""}> Flip Augmentations</label>
+                    </div>
+                    <div class="form-group">
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
@@ -1006,6 +1874,9 @@ function renderSubsets() {
         );
         subset.shuffle_caption = card.querySelector(
           ".sub-shuffle-caption",
+        ).checked;
+        subset.enable_wildcard = card.querySelector(
+          ".sub-enable-wildcard",
         ).checked;
         subset.flip_aug = card.querySelector(".sub-flip-aug").checked;
         subset.is_reg = card.querySelector(".sub-is-reg").checked;
@@ -1044,6 +1915,7 @@ function renderSubsets() {
     }
     container.appendChild(card);
   });
+  refreshI18n();
 }
 // ==========================================
 //  Save
@@ -1131,8 +2003,16 @@ function updateTrainingTypeUI(type) {
   $("lora-config-section").classList.toggle("hidden", !isLora);
   $("fft-config-section").classList.toggle("hidden", isLora);
 }
+function updateNetworkModuleUI() {
+  const isCdka = $("cfg-network-module").value === "networks.cdka";
+  $("network-rank-alpha-row").classList.toggle("hidden", isCdka);
+}
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
+  checkDirty();
+});
+$("cfg-network-module").addEventListener("change", () => {
+  updateNetworkModuleUI();
   checkDirty();
 });
 
@@ -1215,6 +2095,7 @@ function renderPrompts() {
   if (currentPrompts.length === 0) {
     list.classList.add("hidden");
     empty.classList.remove("hidden");
+    refreshI18n();
     return;
   }
   empty.classList.add("hidden");
@@ -1282,6 +2163,7 @@ function renderPrompts() {
       .addEventListener("click", () => deletePrompt(idx));
     list.appendChild(card);
   });
+  refreshI18n();
 }
 function deletePrompt(idx) {
   currentPrompts.splice(idx, 1);
@@ -2102,8 +2984,8 @@ function updateTbState(running, url) {
   $("btn-tb-stop").classList.toggle("hidden", !running);
   $("btn-tb-open").classList.toggle("hidden", !running);
   $("tb-status").textContent = running
-    ? `Running on port ${new URL(url).port}`
-    : "Not running";
+    ? `${translatePhrase("Running on port")} ${new URL(url).port}`
+    : translatePhrase("Not running");
   $("tb-status").style.color = running ? "var(--success)" : "var(--text-muted)";
   if (running && url) {
     tbUrl = url;
@@ -2123,21 +3005,21 @@ function updateTbState(running, url) {
 async function launchTensorBoard() {
   if (!currentJob) return;
   $("btn-tb-launch").disabled = true;
-  $("btn-tb-launch").textContent = "Starting...";
+  $("btn-tb-launch").textContent = translatePhrase("Starting...");
   const result = await api(`/api/jobs/${currentJob}/tensorboard`, {
     method: "POST",
   });
   if (result.error) {
     alert(result.error);
     $("btn-tb-launch").disabled = false;
-    $("btn-tb-launch").textContent = "\uD83D\uDE80 Launch";
+    $("btn-tb-launch").textContent = `\uD83D\uDE80 ${translatePhrase("Launch")}`;
     return;
   }
   // Give TensorBoard a moment to start
   setTimeout(() => {
     updateTbState(true, result.url);
     $("btn-tb-launch").disabled = false;
-    $("btn-tb-launch").textContent = "\uD83D\uDE80 Launch";
+    $("btn-tb-launch").textContent = `\uD83D\uDE80 ${translatePhrase("Launch")}`;
     showToast("TensorBoard launched");
   }, 2000);
 }
@@ -2162,6 +3044,10 @@ function buildGlobalSettingsTabs(registry) {
   // Clear old dynamic tabs (keep the static Application tab)
   nav.innerHTML = "";
   content.querySelectorAll(".gtab-pane-dynamic").forEach((el) => el.remove());
+  content.querySelectorAll(".gtab-pane").forEach((pane) => {
+    pane.classList.remove("active");
+    pane.classList.add("hidden");
+  });
   const archs = registry.architectures;
   let isFirst = true;
   for (const [archId, arch] of Object.entries(archs)) {
@@ -2184,6 +3070,17 @@ function buildGlobalSettingsTabs(registry) {
                 <input type="text" id="cfg-global-${configKey}" placeholder="${pathDef.placeholder}">
             `;
       pane.appendChild(group);
+    }
+    if (isFirst) {
+      const outputGroup = document.createElement("div");
+      outputGroup.className = "form-group";
+      outputGroup.style.marginTop = "15px";
+      outputGroup.innerHTML = `
+                <label>LoRA Output Location</label>
+                <input type="text" id="cfg-global-jobs-dir" placeholder="E:\\Anima-LoRA-Outputs">
+                <small>Folder where UI jobs, configs, LoRA outputs, and logs are stored.</small>
+            `;
+      pane.appendChild(outputGroup);
     }
     // All-in-One sync button
     if (arch.all_in_one && arch.all_in_one_source_key) {
@@ -2240,6 +3137,19 @@ function buildGlobalSettingsTabs(registry) {
       }
     }
   }
+  refreshI18n();
+}
+function isDefaultGlobalPathValue(value) {
+  return !String(value || "").trim();
+}
+function shouldPromptForGlobalSettings(config) {
+  if (!archRegistry) return false;
+  const firstArch = Object.values(archRegistry.architectures)[0];
+  if (!firstArch) return false;
+  const firstPagePathsAreDefault = Object.keys(firstArch.global_paths).every((configKey) =>
+    isDefaultGlobalPathValue(config.model_paths?.[configKey]),
+  );
+  return firstPagePathsAreDefault && isDefaultGlobalPathValue(config.jobs_dir);
 }
 async function loadGlobalSettings() {
   // Fetch registry if not cached
@@ -2256,6 +3166,8 @@ async function loadGlobalSettings() {
     }
   }
   $("cfg-global-venv").value = config.venv_path || "";
+  const jobsDirInput = $("cfg-global-jobs-dir");
+  if (jobsDirInput) jobsDirInput.value = config.jobs_dir || "";
   // Theme
   const theme = config.ui?.theme || "github-dark";
   $("cfg-theme").value = theme;
@@ -2292,6 +3204,18 @@ async function loadGlobalSettings() {
 async function saveGlobalSettings() {
   // Read existing config first to preserve bg settings
   const existingConfig = await api("/api/global-config");
+  const previousJobsDir = (existingConfig.jobs_dir || "").trim();
+  const jobsDirInput = $("cfg-global-jobs-dir");
+  const nextJobsDir = (jobsDirInput?.value || "").trim();
+  const jobsDirChanged = previousJobsDir !== nextJobsDir;
+  if (
+    jobsDirChanged &&
+    currentJob &&
+    isDirty &&
+    !confirm("Current job has unsaved changes. Change LoRA Output Location and discard those editor changes?")
+  ) {
+    return;
+  }
   // Build model_paths dynamically from registry
   const model_paths = {};
   if (archRegistry) {
@@ -2305,6 +3229,7 @@ async function saveGlobalSettings() {
   const config = {
     model_paths,
     venv_path: $("cfg-global-venv").value,
+    jobs_dir: jobsDirInput?.value || "",
     ui: {
       ...(existingConfig.ui || {}),
       theme: $("cfg-theme").value,
@@ -2329,6 +3254,16 @@ async function saveGlobalSettings() {
     );
   }
   await api("/api/global-config", { method: "PUT", body: config });
+  if (jobsDirChanged) {
+    const previousJob = currentJob;
+    isDirty = false;
+    const jobs = await loadJobs();
+    if (previousJob && jobs.some((job) => job.name === previousJob)) {
+      await selectJob(previousJob);
+    } else {
+      clearCurrentJobSelection();
+    }
+  }
   closeModal("modal-global-settings");
   showToast("Global settings saved");
 }
@@ -2488,17 +3423,17 @@ function closeModal(id) {
   $(id).classList.add("hidden");
 }
 function showConfirm(title, message, onConfirm) {
-  $("confirm-title").textContent = title;
-  $("confirm-message").textContent = message;
+  $("confirm-title").textContent = translatePhrase(title);
+  $("confirm-message").textContent = translatePhrase(message);
   const actions = $("confirm-actions");
   actions.innerHTML = "";
   const cancelBtn = document.createElement("button");
   cancelBtn.className = "btn btn-ghost";
-  cancelBtn.textContent = "Cancel";
+  cancelBtn.textContent = translatePhrase("Cancel");
   cancelBtn.onclick = () => closeModal("modal-confirm");
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "btn btn-danger";
-  confirmBtn.textContent = "Confirm";
+  confirmBtn.textContent = translatePhrase("Confirm");
   confirmBtn.onclick = () => {
     closeModal("modal-confirm");
     onConfirm();
@@ -2516,7 +3451,7 @@ function showToast(msg) {
         color: var(--text-primary); font-size: 0.9rem;
         box-shadow: var(--shadow); animation: fadeIn 0.2s;
     `;
-  toast.textContent = msg;
+  toast.textContent = translatePhrase(msg);
   document.body.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = "0";
@@ -2616,11 +3551,12 @@ async function loadGPUs() {
     if (gpus.length === 0) {
       container.innerHTML =
         "<small>No NVIDIA GPUs detected (CPU only).</small>";
+      refreshI18n();
       return;
     }
-    gpus.forEach((gpu) => {
+    gpus.forEach((gpu, i) => {
       const card = document.createElement("div");
-      card.className = "gpu-card selected"; // Default to all selected
+      card.className = "gpu-card" + (i === 0 ? " selected" : "");
       card.dataset.index = gpu.index;
       card.id = `gpu-card-${gpu.index}`;
       card.innerHTML = `
@@ -2631,18 +3567,20 @@ async function loadGPUs() {
                     <div class="status-dot"></div>
                     <span class="gpu-status-text">Idle</span>
                 </div>
-                <input type="checkbox" name="gpu-select" value="${gpu.index}" checked id="gpu-${gpu.index}">
+                <input type="checkbox" name="gpu-select" value="${gpu.index}" ${i === 0 ? "checked" : ""} id="gpu-${gpu.index}">
             `;
-      card.addEventListener("click", (e) => {
+      const selectOnlyThisGpu = () => {
+        document.querySelectorAll('input[name="gpu-select"]').forEach((other) => {
+          other.checked = false;
+          const otherCard = other.closest(".gpu-card");
+          if (otherCard) otherCard.classList.remove("selected");
+        });
         const checkbox = card.querySelector("input");
-        if (e.target.tagName === "INPUT") {
-          card.classList.toggle("selected", e.target.checked);
-          updateMultiGPUUI();
-          checkDirty();
-          return;
-        }
-        checkbox.checked = !checkbox.checked;
-        card.classList.toggle("selected", checkbox.checked);
+        checkbox.checked = true;
+        card.classList.add("selected");
+      };
+      card.addEventListener("click", (e) => {
+        selectOnlyThisGpu();
         updateMultiGPUUI();
         checkDirty();
       });
@@ -2650,9 +3588,11 @@ async function loadGPUs() {
     });
     updateGPUActivity();
     updateMultiGPUUI();
+    refreshI18n();
   } catch (err) {
     console.error("Failed to load GPUs:", err);
     container.innerHTML = `<small style="color:red">Error: ${err.message}</small>`;
+    refreshI18n();
   }
 }
 // Show the correct mode panel, hide the others.
@@ -2896,6 +3836,7 @@ async function loadGenGPUs() {
     container.innerHTML = "";
     if (gpus.length === 0) {
       container.innerHTML = "<small>No NVIDIA GPUs detected.</small>";
+      refreshI18n();
       return;
     }
     gpus.forEach((gpu, i) => {
@@ -2911,36 +3852,36 @@ async function loadGenGPUs() {
             `;
       const cb = card.querySelector("input[type=checkbox]");
       card.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT") {
-          card.classList.toggle("selected", e.target.checked);
-          updateGenGPULabel();
-          return;
-        }
-        cb.checked = !cb.checked;
-        card.classList.toggle("selected", cb.checked);
+        document.querySelectorAll('input[name="gen-gpu-select"]').forEach((other) => {
+          other.checked = false;
+          const otherCard = other.closest(".gpu-card");
+          if (otherCard) otherCard.classList.remove("selected");
+        });
+        cb.checked = true;
+        card.classList.add("selected");
         updateGenGPULabel();
       });
       container.appendChild(card);
     });
     updateGenGPULabel();
+    refreshI18n();
   } catch (err) {
     console.error("Failed to load gen GPUs:", err);
     container.innerHTML = `<small style="color:red">Error: ${err.message}</small>`;
+    refreshI18n();
   }
 }
 function getSelectedGenGPUs() {
   const checked = document.querySelectorAll(
     'input[name="gen-gpu-select"]:checked',
   );
-  return Array.from(checked)
-    .map((c) => c.value)
-    .join(",");
+  return Array.from(checked)[0]?.value || "";
 }
 function restoreGenGPUSelection(gpuIds) {
   if (!gpuIds) return;
-  const ids = gpuIds.split(",").map((s) => s.trim());
+  const id = gpuIds.split(",").map((s) => s.trim()).filter(Boolean)[0];
   document.querySelectorAll('input[name="gen-gpu-select"]').forEach((cb) => {
-    cb.checked = ids.includes(cb.value);
+    cb.checked = cb.value === id;
     const card = cb.closest(".gpu-card");
     if (card) card.classList.toggle("selected", cb.checked);
   });
@@ -2953,15 +3894,9 @@ function updateGenGPULabel() {
   const selected = document.querySelectorAll(
     'input[name="gen-gpu-select"]:checked',
   );
-  if (selected.length > 1) {
-    label.textContent = "— Multi-GPU";
-    label.style.color = "var(--success)";
-    if (optionsDiv) optionsDiv.style.display = "block";
-  } else {
-    label.textContent = "";
-    label.style.color = "";
-    if (optionsDiv) optionsDiv.style.display = "none";
-  }
+  label.textContent = selected.length === 1 ? `— ${translatePhrase("Single GPU")}` : "";
+  label.style.color = "";
+  if (optionsDiv) optionsDiv.style.display = "none";
 }
 async function updateGPUActivity() {
   try {
@@ -2975,12 +3910,12 @@ async function updateGPUActivity() {
       card.classList.remove("active-training", "active-sampling");
       if (status === "training") {
         card.classList.add("active-training");
-        textEl.textContent = "Training";
+        textEl.textContent = translatePhrase("Training");
       } else if (status === "sampling") {
         card.classList.add("active-sampling");
-        textEl.textContent = "Sampling";
+        textEl.textContent = translatePhrase("Sampling");
       } else {
-        textEl.textContent = "Idle";
+        textEl.textContent = translatePhrase("Idle");
       }
     });
   } catch (err) {
@@ -3063,13 +3998,7 @@ $("btn-delete").addEventListener("click", () => {
       // Clean up all localStorage keys for the deleted job
       localStorage.removeItem(`prompt_transient_${deletedJob}`);
       localStorage.removeItem(`sample_order_${deletedJob}`);
-      localStorage.removeItem("lastJob");
-      currentJob = null;
-      isDirty = false;
-      $("btn-save").classList.add("hidden");
-      $("btn-discard").classList.add("hidden");
-      emptyState.classList.remove("hidden");
-      jobEditor.classList.add("hidden");
+      clearCurrentJobSelection();
       await loadJobs();
       showToast("Job deleted");
     },
@@ -3080,7 +4009,7 @@ $("btn-run").addEventListener("click", async () => {
   if (!currentJob) return;
   let warningMsg = "";
   // Check sampling Logic
-  if ($("cfg-enable-sampling").checked && currentPrompts.length === 0) {
+  if (($("cfg-enable-sampling").checked || $("cfg-sample-at-first").checked) && currentPrompts.length === 0) {
     warningMsg =
       "Sampling is enabled but no prompts are defined.\n\nContinue training without generating samples...\n\n";
   }
@@ -3186,6 +4115,9 @@ $("btn-tb-open").addEventListener("click", () => {
   if (tbUrl) window.open(tbUrl, "_blank");
 });
 // Global Settings
+$("ui-language").addEventListener("change", (e) => {
+  setLanguage(e.target.value);
+});
 $("btn-global-settings").addEventListener("click", () => {
   loadGlobalSettings();
   openModal("modal-global-settings");
@@ -3380,6 +4312,7 @@ async function init() {
   }
   // 2. Normal Init
   connectWS();
+  applyI18n();
   await loadJobs();
   // Start status polling
   setInterval(updateGPUActivity, 3000);
@@ -3438,6 +4371,10 @@ async function init() {
     if (tabEl) tabEl.click();
   }
   // 3. Sync Settings: Load from server and refresh cache
+  if (!archRegistry) {
+    archRegistry = await api("/api/architectures");
+    buildGlobalSettingsTabs(archRegistry);
+  }
   const globalConfig = await api("/api/global-config");
   if (globalConfig?.ui?.theme) {
     applyTheme(globalConfig.ui.theme);
@@ -3454,6 +4391,10 @@ async function init() {
     );
   } else {
     applyBackground("none");
+  }
+  if (shouldPromptForGlobalSettings(globalConfig)) {
+    await loadGlobalSettings();
+    openModal("modal-global-settings");
   }
 }
 init();

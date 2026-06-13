@@ -4,27 +4,34 @@
 [training_arguments]
 output_name = "my_anima_lora"
 save_model_as = "safetensors"
-max_train_epochs = 15
-save_every_n_epochs = 1
+max_train_steps = 3000
+save_every_n_steps = 200
 log_with = "tensorboard"
 learning_rate = 1e-4
 text_encoder_lr = 0
-optimizer_type = "pytorch_optimizer.CAME"
-optimizer_args = [ "weight_decay=0.1",]
-lr_scheduler = "cosine"
-lr_warmup_steps = 0
+optimizer_type = "library.came.CAME"
+lr_scheduler = "constant_with_warmup"
+lr_warmup_steps = 0.1
 mixed_precision = "bf16"
 save_precision = "bf16"
+full_bf16 = true
 gradient_checkpointing = true
 gradient_accumulation_steps = 1
-flash_attn = false
+attn_mode = "torch"
 torch_compile = false
-max_data_loader_n_workers = 4
+max_data_loader_n_workers = 2
 persistent_data_loader_workers = true
 seed = 42
+train_batch_size = 1
+max_grad_norm = 1.0
+knn_noise_k = 2
+cep_noise = 0.05
+cache_latents = true
 cache_latents_to_disk = true
+vae_batch_size = 1
+vae_chunk_size = 64
+vae_disable_cache = false
 cache_text_encoder_outputs_to_disk = false
-sample_every_n_epochs = 1
 
 [network_arguments]
 network_module = "networks.cdka"
@@ -33,11 +40,14 @@ network_alpha = 16
 network_train_unet_only = true
 network_args = [
   'exclude_patterns=[".*"]',
-  'include_patterns=["blocks\\.1[2-8]\\.(self_attn|cross_attn)\\.(v_proj|output_proj)"]',
+  'include_patterns=[".*(self_attn|cross_attn)\\.(v_proj|output_proj)"]',
   'allora=True'
 ]
 
 [anima_arguments]
-timestep_sample_method = "logit_normal"
+timestep_sampling = "sigmoid"
 discrete_flow_shift = 1.0
-weighting_scheme = "logit_normal"
+sigmoid_scale = 1.0
+qwen3_max_token_length = 512
+t5_max_token_length = 512
+weighting_scheme = "uniform"

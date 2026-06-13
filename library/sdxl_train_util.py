@@ -12,7 +12,6 @@ from accelerate import init_empty_weights
 from tqdm import tqdm
 from transformers import CLIPTokenizer
 from library import model_util, sdxl_model_util, train_util, sdxl_original_unet
-from library import save_utils
 from .utils import setup_logging
 
 setup_logging()
@@ -49,6 +48,15 @@ def load_target_model(args, accelerator, model_version: str, weight_dtype):
                 model_dtype,
                 args.disable_mmap_load_safetensors,
             )
+
+            # Expand 4-channel conv_in to 9 channels when training inpainting from a
+            # standard (non-inpainting) checkpoint.
+            if getattr(args, "train_inpainting", False) and getattr(unet, "in_channels", 4) == 4:
+                logger.info(
+                    "train_inpainting: expanding UNet conv_in from 4 to 9 channels "
+                    "(standard checkpoint → inpainting training from scratch)"
+                )
+                model_util.expand_unet_to_inpainting(unet)
 
             # work on low-ram device
             if args.lowram:
@@ -118,8 +126,9 @@ def _load_target_model(
 
         # Diffusers U-Net to original U-Net
         state_dict = sdxl_model_util.convert_diffusers_unet_state_dict_to_sdxl(unet.state_dict())
+        actual_in_channels = state_dict["input_blocks.0.0.weight"].shape[1]
         with init_empty_weights():
-            unet = sdxl_original_unet.SdxlUNet2DConditionModel()  # overwrite unet
+            unet = sdxl_original_unet.SdxlUNet2DConditionModel(in_channels=actual_in_channels)  # overwrite unet
         sdxl_model_util._load_state_dict_on_device(unet, state_dict, device=device, dtype=model_dtype)
         logger.info("U-Net converted to original U-Net")
 
@@ -219,7 +228,6 @@ def get_size_embeddings(orig_size, crop_size, target_size, device):
 
 def save_sd_model_on_train_end(
     args: argparse.Namespace,
-    accelerator,
     src_path: str,
     save_stable_diffusion_format: bool,
     use_safetensors: bool,
@@ -232,70 +240,34 @@ def save_sd_model_on_train_end(
     vae,
     logit_scale,
     ckpt_info,
-    text_encoder1_for_save=None,
-    text_encoder2_for_save=None,
-    unet_for_save=None,
-    vae_for_save=None,
 ):
-    export_specs = [
-        save_utils.StateDictModelSpec(
-            model=text_encoder1 if text_encoder1_for_save is None else text_encoder1_for_save,
-            target_model=text_encoder1,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=text_encoder1_for_save is None,
-        ),
-        save_utils.StateDictModelSpec(
-            model=text_encoder2 if text_encoder2_for_save is None else text_encoder2_for_save,
-            target_model=text_encoder2,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=text_encoder2_for_save is None,
-        ),
-        save_utils.StateDictModelSpec(
-            model=unet if unet_for_save is None else unet_for_save,
-            target_model=unet,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=unet_for_save is None,
-        ),
-    ]
-    if vae is not None:
-        export_specs.append(
-            save_utils.StateDictModelSpec(
-                model=vae if vae_for_save is None else vae_for_save,
-                target_model=vae,
-                save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-                unwrap_model=vae_for_save is None,
-            )
-        )
-
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
-        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
-            sdxl_model_util.save_stable_diffusion_checkpoint(
-                ckpt_file,
-                text_encoder1,
-                text_encoder2,
-                unet,
-                epoch_no,
-                global_step,
-                ckpt_info,
-                vae,
-                logit_scale,
-                sai_metadata,
-                save_dtype,
-            )
+        sdxl_model_util.save_stable_diffusion_checkpoint(
+            ckpt_file,
+            text_encoder1,
+            text_encoder2,
+            unet,
+            epoch_no,
+            global_step,
+            ckpt_info,
+            vae,
+            logit_scale,
+            sai_metadata,
+            save_dtype,
+        )
 
     def diffusers_saver(out_dir):
-        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
-            sdxl_model_util.save_diffusers_checkpoint(
-                out_dir,
-                text_encoder1,
-                text_encoder2,
-                unet,
-                src_path,
-                vae,
-                use_safetensors=use_safetensors,
-                save_dtype=save_dtype,
-            )
+        sdxl_model_util.save_diffusers_checkpoint(
+            out_dir,
+            text_encoder1,
+            text_encoder2,
+            unet,
+            src_path,
+            vae,
+            use_safetensors=use_safetensors,
+            save_dtype=save_dtype,
+        )
 
     train_util.save_sd_model_on_train_end_common(
         args, save_stable_diffusion_format, use_safetensors, epoch, global_step, sd_saver, diffusers_saver
@@ -321,70 +293,34 @@ def save_sd_model_on_epoch_end_or_stepwise(
     vae,
     logit_scale,
     ckpt_info,
-    text_encoder1_for_save=None,
-    text_encoder2_for_save=None,
-    unet_for_save=None,
-    vae_for_save=None,
 ):
-    export_specs = [
-        save_utils.StateDictModelSpec(
-            model=text_encoder1 if text_encoder1_for_save is None else text_encoder1_for_save,
-            target_model=text_encoder1,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=text_encoder1_for_save is None,
-        ),
-        save_utils.StateDictModelSpec(
-            model=text_encoder2 if text_encoder2_for_save is None else text_encoder2_for_save,
-            target_model=text_encoder2,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=text_encoder2_for_save is None,
-        ),
-        save_utils.StateDictModelSpec(
-            model=unet if unet_for_save is None else unet_for_save,
-            target_model=unet,
-            save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model=unet_for_save is None,
-        ),
-    ]
-    if vae is not None:
-        export_specs.append(
-            save_utils.StateDictModelSpec(
-                model=vae if vae_for_save is None else vae_for_save,
-                target_model=vae,
-                save_intent=save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-                unwrap_model=vae_for_save is None,
-            )
-        )
-
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
-        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
-            sdxl_model_util.save_stable_diffusion_checkpoint(
-                ckpt_file,
-                text_encoder1,
-                text_encoder2,
-                unet,
-                epoch_no,
-                global_step,
-                ckpt_info,
-                vae,
-                logit_scale,
-                sai_metadata,
-                save_dtype,
-            )
+        sdxl_model_util.save_stable_diffusion_checkpoint(
+            ckpt_file,
+            text_encoder1,
+            text_encoder2,
+            unet,
+            epoch_no,
+            global_step,
+            ckpt_info,
+            vae,
+            logit_scale,
+            sai_metadata,
+            save_dtype,
+        )
 
     def diffusers_saver(out_dir):
-        with save_utils.override_model_state_dicts_for_save(accelerator, export_specs):
-            sdxl_model_util.save_diffusers_checkpoint(
-                out_dir,
-                text_encoder1,
-                text_encoder2,
-                unet,
-                src_path,
-                vae,
-                use_safetensors=use_safetensors,
-                save_dtype=save_dtype,
-            )
+        sdxl_model_util.save_diffusers_checkpoint(
+            out_dir,
+            text_encoder1,
+            text_encoder2,
+            unet,
+            src_path,
+            vae,
+            use_safetensors=use_safetensors,
+            save_dtype=save_dtype,
+        )
 
     train_util.save_sd_model_on_epoch_end_or_stepwise_common(
         args,

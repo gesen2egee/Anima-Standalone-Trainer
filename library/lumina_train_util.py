@@ -14,7 +14,7 @@ from tqdm import tqdm
 from PIL import Image
 from safetensors.torch import save_file
 
-from library import lumina_models, save_utils, strategy_base, strategy_lumina, train_util
+from library import lumina_models, strategy_base, strategy_lumina, train_util
 from library.flux_models import AutoEncoder
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
@@ -110,7 +110,6 @@ def sample_images(
     sample_prompts_gemma2_outputs: dict[str, Tuple[Tensor, Tensor, Tensor]],
     prompt_replacement: Optional[Tuple[str, str]] = None,
     controlnet=None,
-    dit_secondary: lumina_models.NextDiT = None,
 ):
     """
     Generate sample images using the NextDiT model.
@@ -211,7 +210,6 @@ def sample_images(
                 sample_prompts_gemma2_outputs,
                 prompt_replacement,
                 controlnet,
-                dit_secondary,
             )
     else:
         # Creating list with N elements, where each element is a list of prompt_dicts, and N is the number of processes available (number of devices available)
@@ -238,7 +236,6 @@ def sample_images(
                     sample_prompts_gemma2_outputs,
                     prompt_replacement,
                     controlnet,
-                    dit_secondary,
                 )
 
     torch.set_rng_state(rng_state)
@@ -262,7 +259,6 @@ def sample_image_inference(
     sample_prompts_gemma2_outputs: dict[str, Tuple[Tensor, Tensor, Tensor]],
     prompt_replacement: Optional[Tuple[str, str]] = None,
     controlnet=None,
-    dit_secondary: lumina_models.NextDiT = None,
 ):
     """
     Generates sample images
@@ -288,8 +284,8 @@ def sample_image_inference(
     tokenize_strategy = strategy_base.TokenizeStrategy.get_strategy()
     encoding_strategy = strategy_base.TextEncodingStrategy.get_strategy()
 
-    assert tokenize_strategy is not None and tokenize_strategy.__class__.__name__ == "LuminaTokenizeStrategy"
-    assert encoding_strategy is not None and encoding_strategy.__class__.__name__ == "LuminaTextEncodingStrategy"
+    assert isinstance(tokenize_strategy, strategy_lumina.LuminaTokenizeStrategy)
+    assert isinstance(encoding_strategy, strategy_lumina.LuminaTextEncodingStrategy)
 
     text_conds = []
 
@@ -338,31 +334,34 @@ def sample_image_inference(
 
         # No need to add system prompt here, as it has been handled in the tokenize_strategy
 
-        # Get sample prompts from cache
+        # Get sample prompts from cache, fallback to live encoding
+        gemma2_conds = None
+        neg_gemma2_conds = None
+
         if sample_prompts_gemma2_outputs and prompt in sample_prompts_gemma2_outputs:
             gemma2_conds = sample_prompts_gemma2_outputs[prompt]
             logger.info(f"Using cached Gemma2 outputs for prompt: {prompt}")
 
-        if (
-            sample_prompts_gemma2_outputs
-            and negative_prompt in sample_prompts_gemma2_outputs
-        ):
+        if sample_prompts_gemma2_outputs and negative_prompt in sample_prompts_gemma2_outputs:
             neg_gemma2_conds = sample_prompts_gemma2_outputs[negative_prompt]
-            logger.info(
-                f"Using cached Gemma2 outputs for negative prompt: {negative_prompt}"
-            )
+            logger.info(f"Using cached Gemma2 outputs for negative prompt: {negative_prompt}")
 
-        # Load sample prompts from Gemma 2
-        if gemma2_model is not None:
+        # Only encode if not found in cache
+        if gemma2_conds is None and gemma2_model is not None:
             tokens_and_masks = tokenize_strategy.tokenize(prompt)
             gemma2_conds = encoding_strategy.encode_tokens(
-                tokenize_strategy, [gemma2_model], tokens_and_masks
+                tokenize_strategy, gemma2_model, tokens_and_masks
             )
 
+        if neg_gemma2_conds is None and gemma2_model is not None:
             tokens_and_masks = tokenize_strategy.tokenize(negative_prompt, is_negative=True)
             neg_gemma2_conds = encoding_strategy.encode_tokens(
-                tokenize_strategy, [gemma2_model], tokens_and_masks
+                tokenize_strategy, gemma2_model, tokens_and_masks
             )
+
+        if gemma2_conds is None or neg_gemma2_conds is None:
+            logger.error(f"Cannot generate sample: no cached outputs and no text encoder available for prompt: {prompt}")
+            continue
 
         # Unpack Gemma2 outputs
         gemma2_hidden_states, _, gemma2_attn_mask = gemma2_conds
@@ -418,83 +417,20 @@ def sample_image_inference(
     #     controlnet_image = torch.from_numpy((np.array(controlnet_image) / 127.5) - 1)
     #     controlnet_image = controlnet_image.permute(2, 0, 1).unsqueeze(0).to(weight_dtype).to(accelerator.device)
 
-    original_blocks_to_swap = getattr(nextdit, "blocks_to_swap", 0)
-
-    try:
-        if original_blocks_to_swap and original_blocks_to_swap > 0:
-            logger.info("Temporarily disabling block swap for faster sampling")
-            from library.custom_offloading_utils import weighs_to_device
-            for block in nextdit.layers:
-                weighs_to_device(block, accelerator.device)
-            if dit_secondary is not None:
-                sec_device = next(dit_secondary.parameters()).device
-                for block in dit_secondary.layers:
-                    weighs_to_device(block, sec_device)
-            torch.cuda.synchronize()
-            nextdit.blocks_to_swap = 0
-            if dit_secondary is not None:
-                dit_secondary.blocks_to_swap = 0
-
-        clean_memory_on_device(accelerator.device)
-        with accelerator.autocast():
-            x = denoise(
-                scheduler,
-                nextdit,
-                noise,
-                cond_hidden_states,
-                cond_attn_masks,
-                uncond_hidden_states,
-                uncond_attn_masks,
-                timesteps=timesteps,
-                guidance_scale=guidance_scale,
-                cfg_trunc_ratio=cfg_trunc_ratio,
-                renorm_cfg=renorm_cfg,
-                model_secondary=dit_secondary,
-            )
-
-    except torch.cuda.OutOfMemoryError as e:
-        if original_blocks_to_swap and original_blocks_to_swap > 0:
-            logger.warning("OOM. Falling back to block swapping")
-            clean_memory_on_device(accelerator.device)
-            
-            # Restore block swap early
-            nextdit.blocks_to_swap = original_blocks_to_swap
-            nextdit.prepare_block_swap_before_forward()  # Move blocks back to CPU
-            
-            if dit_secondary is not None:
-                dit_secondary.blocks_to_swap = original_blocks_to_swap
-                dit_secondary.prepare_block_swap_before_forward()
-
-            clean_memory_on_device(accelerator.device)
-            
-            with accelerator.autocast():
-                x = denoise(
-                    scheduler,
-                    nextdit,
-                    noise,
-                    cond_hidden_states,
-                    cond_attn_masks,
-                    uncond_hidden_states,
-                    uncond_attn_masks,
-                    timesteps=timesteps,
-                    guidance_scale=guidance_scale,
-                    cfg_trunc_ratio=cfg_trunc_ratio,
-                    renorm_cfg=renorm_cfg,
-                    model_secondary=dit_secondary,
-                )
-        else:
-            raise e
-
-    finally:
-        if original_blocks_to_swap and original_blocks_to_swap > 0:
-            if getattr(nextdit, "blocks_to_swap", 0) == 0:
-                logger.info("Restoring block swap after sampling")
-                nextdit.blocks_to_swap = original_blocks_to_swap
-                nextdit.prepare_block_swap_before_forward()
-            if dit_secondary is not None and getattr(dit_secondary, "blocks_to_swap", 0) == 0:
-                dit_secondary.blocks_to_swap = original_blocks_to_swap
-                dit_secondary.prepare_block_swap_before_forward()
-            clean_memory_on_device(accelerator.device)
+    with accelerator.autocast():
+        x = denoise(
+            scheduler,
+            nextdit,
+            noise,
+            cond_hidden_states,
+            cond_attn_masks,
+            uncond_hidden_states,
+            uncond_attn_masks,
+            timesteps=timesteps,
+            guidance_scale=guidance_scale,
+            cfg_trunc_ratio=cfg_trunc_ratio,
+            renorm_cfg=renorm_cfg,
+        )
 
     # Latent to image
     clean_memory_on_device(accelerator.device)
@@ -502,9 +438,8 @@ def sample_image_inference(
     vae.to(accelerator.device)  # distributed_state.device is same as accelerator.device
     for img, prompt_dict in zip(x, prompt_dicts):
 
-        # NOTE: Do NOT manually un-scale here.
-        # AutoEncoder.decode() already performs: z = z / scale_factor + shift_factor
-        # Doing it twice produces corrupted (pixelated) output.
+        img = (img / vae.scale_factor) + vae.shift_factor
+
         with accelerator.autocast():
             # Add a single batch image for the VAE to decode
             img = vae.decode(img.unsqueeze(0))
@@ -543,6 +478,7 @@ def sample_image_inference(
 
 
 def time_shift(mu: float, sigma: float, t: torch.Tensor):
+    """Apply time shifting to timesteps."""
     t = math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
     return t
 
@@ -551,7 +487,7 @@ def get_lin_function(
     x1: float = 256, x2: float = 4096, y1: float = 0.5, y2: float = 1.15
 ) -> Callable[[float], float]:
     """
-    Get linear function
+    Get linear function for resolution-dependent shifting.
 
     Args:
         image_seq_len,
@@ -596,6 +532,7 @@ def get_schedule(
         mu = get_lin_function(y1=base_shift, y2=max_shift, x1=256, x2=4096)(
             image_seq_len
         )
+        timesteps = torch.clamp(timesteps, min=1e-7).to(timesteps.device)
         timesteps = time_shift(mu, 1.0, timesteps)
 
     return timesteps.tolist()
@@ -666,49 +603,6 @@ def retrieve_timesteps(
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
 
-def linear_quadratic_schedule(steps: int, threshold_noise: float = 0.025, linear_steps: int = None) -> list[float]:
-    """
-    Generate a linear-quadratic timestep schedule.
-    Ported from ComfyUI's comfy/samplers.py.
-
-    Moves slower at the noisy start and clean end, faster in the middle.
-
-    Args:
-        steps: Number of denoising steps.
-        threshold_noise: Noise threshold for the linear/quadratic transition.
-        linear_steps: Number of steps to use for the linear portion (default: steps // 2).
-
-    Returns:
-        List of sigma values from 1.0 (noise) down to 0.0 (image).
-        Length is exactly `steps + 1`.
-    """
-    if steps <= 1:
-        return [1.0, 0.0]
-
-    if linear_steps is None:
-        linear_steps = steps // 2
-
-    # Linear part (low noise end): 0.0 to threshold_noise
-    linear_sigma_schedule = [i * threshold_noise / linear_steps for i in range(linear_steps)]
-    
-    threshold_noise_step_diff = linear_steps - threshold_noise * steps
-    quadratic_steps = steps - linear_steps
-    quadratic_coef = threshold_noise_step_diff / (linear_steps * quadratic_steps ** 2)
-    linear_coef = threshold_noise / linear_steps - 2 * threshold_noise_step_diff / (quadratic_steps ** 2)
-    const = quadratic_coef * (linear_steps ** 2)
-    
-    # Quadratic part: threshold_noise upwards
-    quadratic_sigma_schedule = [
-        quadratic_coef * (i ** 2) + linear_coef * i + const
-        for i in range(linear_steps, steps)
-    ]
-    
-    sigma_schedule = linear_sigma_schedule + quadratic_sigma_schedule + [1.0]
-
-    # Invert to go from 1.0 down to 0.0
-    return [1.0 - x for x in sigma_schedule]
-
-
 def denoise(
     scheduler,
     model: lumina_models.NextDiT,
@@ -721,116 +615,93 @@ def denoise(
     guidance_scale: float = 4.0,
     cfg_trunc_ratio: float = 0.25,
     renorm_cfg: float = 1.0,
-    model_secondary: lumina_models.NextDiT = None,
 ):
     """
-    Denoise an image using the NextDiT model with a RES Multistep solver.
+    Denoise an image using the NextDiT model.
 
-    Uses a second-order Refined Exponential Solver (RES) adapted for flow-matching,
-    using the linear_quadratic timestep schedule.
+    Args:
+        scheduler ():
+            Noise scheduler
+        model (lumina_models.NextDiT): The NextDiT model instance.
+        img (Tensor):
+            The input image latent tensor.
+        txt (Tensor):
+            The input text tensor.
+        txt_mask (Tensor):
+            The input text mask tensor.
+        neg_txt (Tensor):
+            The negative input txt tensor
+        neg_txt_mask (Tensor):
+            The negative input text mask tensor.
+        timesteps (List[Union[float, torch.FloatTensor]]):
+            A list of timesteps for the denoising process.
+        guidance_scale (float, optional):
+            The guidance scale for the denoising process. Defaults to 4.0.
+        cfg_trunc_ratio (float, optional):
+            The ratio of the timestep interval to apply normalization-based guidance scale.
+        renorm_cfg (float, optional):
+            The factor to limit the maximum norm after guidance. Default: 1.0
+    Returns:
+        img (Tensor): Denoised latent tensor
     """
-    
-    # Generate the schedule: len(timesteps) number of steps -> list of len+1
-    sigmas = torch.FloatTensor(linear_quadratic_schedule(len(timesteps))).to(img.device)
 
-    # Helper functions for the exponentially integrated solver (RES Multistep)
-    def phi1_fn(h):
-        return torch.where(h.abs() < 1e-6, torch.ones_like(h), torch.expm1(h) / h)
-
-    def phi2_fn(h):
-        p1 = phi1_fn(h)
-        return torch.where(h.abs() < 1e-6, 0.5 * torch.ones_like(h), (p1 - 1.0) / h)
-
-    def t_fn(sigma):
-        return sigma.clamp(min=1e-10).log().neg()
-
-    old_denoised = None
-    old_sigma = None
-
-    for i in tqdm(range(len(sigmas) - 1)):
-        sigma_cur = sigmas[i]
-        sigma_next = sigmas[i + 1]
-
+    for i, t in enumerate(tqdm(timesteps)):
         model.prepare_block_swap_before_forward()
 
-        # In Lumina training, timestep t=0 is noise, t=1 is image.
-        # sigma goes from 1.0 (noise) to 0.0 (clean), so we compute t = 1.0 - sigma
-        current_timestep = 1.0 - sigma_cur
-        current_timestep_t = current_timestep * torch.ones(img.shape[0], device=img.device)
+        # reverse the timestep since Lumina uses t=0 as the noise and t=1 as the image
+        current_timestep = 1 - t / scheduler.config.num_train_timesteps
+        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+        current_timestep = current_timestep * torch.ones(
+            img.shape[0], device=img.device
+        )
 
         noise_pred_cond = model(
             img,
-            current_timestep_t,
-            cap_feats=txt,
-            cap_mask=txt_mask.to(dtype=torch.int32),
+            current_timestep,
+            cap_feats=txt,  # Gemma2的hidden states作为caption features
+            cap_mask=txt_mask.to(dtype=torch.int32),  # Gemma2的attention mask
         )
 
-        if model_secondary is not None:
-            sec_device = next(model_secondary.parameters()).device
-            noise_pred_uncond = model_secondary(
-                img.to(sec_device),
-                current_timestep_t.to(sec_device),
-                cap_feats=neg_txt.to(sec_device),
-                cap_mask=neg_txt_mask.to(dtype=torch.int32, device=sec_device),
-            )
-            noise_pred_uncond = noise_pred_uncond.to(noise_pred_cond.device)
-        else:
+        # compute whether to apply classifier-free guidance based on current timestep
+        if current_timestep[0] < cfg_trunc_ratio:
             model.prepare_block_swap_before_forward()
             noise_pred_uncond = model(
                 img,
-                current_timestep_t,
-                cap_feats=neg_txt,
-                cap_mask=neg_txt_mask.to(dtype=torch.int32),
+                current_timestep,
+                cap_feats=neg_txt,  # Gemma2的hidden states作为caption features
+                cap_mask=neg_txt_mask.to(dtype=torch.int32),  # Gemma2的attention mask
             )
-
-        noise_pred = noise_pred_uncond + guidance_scale * (
-            noise_pred_cond - noise_pred_uncond
-        )
-
-        if float(renorm_cfg) > 0.0:
-            cond_norm = torch.linalg.vector_norm(
-                noise_pred_cond,
-                dim=tuple(range(1, len(noise_pred_cond.shape))),
-                keepdim=True,
+            noise_pred = noise_pred_uncond + guidance_scale * (
+                noise_pred_cond - noise_pred_uncond
             )
-            max_new_norms = cond_norm * float(renorm_cfg)
-            noise_norms = torch.linalg.vector_norm(
-                noise_pred, dim=tuple(range(1, len(noise_pred.shape))), keepdim=True
-            )
-            for b_idx, (noise_norm, max_new_norm) in enumerate(zip(noise_norms, max_new_norms)):
-                if noise_norm >= max_new_norm:
-                    noise_pred[b_idx] = noise_pred[b_idx] * (max_new_norm / noise_norm)
-
-        # noise_pred represents the velocity (data - noise).
-        # We need the predicted fully denoised image (x0) at this step:
-        denoised = img + sigma_cur * noise_pred
-
-        # Solver Step
-        if sigma_next == 0 or old_denoised is None:
-            # Euler step for the first and last step
-            d = (img - denoised) / sigma_cur.clamp(min=1e-10)
-            dt = sigma_next - sigma_cur
-            img = img + d * dt
+            # apply normalization after classifier-free guidance
+            if float(renorm_cfg) > 0.0:
+                cond_norm = torch.linalg.vector_norm(
+                    noise_pred_cond,
+                    dim=tuple(range(1, len(noise_pred_cond.shape))),
+                    keepdim=True,
+                )
+                max_new_norms = cond_norm * float(renorm_cfg)
+                noise_norms = torch.linalg.vector_norm(
+                    noise_pred, dim=tuple(range(1, len(noise_pred.shape))), keepdim=True
+                )
+                # Iterate through batch
+                for i, (noise_norm, max_new_norm) in enumerate(zip(noise_norms, max_new_norms)):
+                    if noise_norm >= max_new_norm:
+                        noise_pred[i] = noise_pred[i] * (max_new_norm / noise_norm)
         else:
-            # Second-order RES multistep
-            t_cur = t_fn(sigma_cur)
-            t_next = t_fn(sigma_next)
-            t_old = t_fn(old_sigma)
+            noise_pred = noise_pred_cond
 
-            h = t_next - t_cur
-            # CRITICAL FIX: t_old - t_cur is negative, properly scaling the backwards-looking history
-            c2 = (t_old - t_cur) / h
+        img_dtype = img.dtype
 
-            phi1_val = phi1_fn(-h)
-            phi2_val = phi2_fn(-h)
+        # compute the previous noisy sample x_t -> x_t-1
+        noise_pred = -noise_pred
+        img = scheduler.step(noise_pred, t, img, return_dict=False)[0]
 
-            b1 = torch.nan_to_num(phi1_val - phi2_val / c2, nan=0.0)
-            b2 = torch.nan_to_num(phi2_val / c2, nan=0.0)
-
-            img = (-h).exp() * img + h * (b1 * denoised + b2 * old_denoised)
-
-        old_denoised = denoised
-        old_sigma = sigma_cur
+        # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
+        if img.dtype != img_dtype:
+            if torch.backends.mps.is_available():
+                img = img.to(img_dtype)
 
     model.prepare_block_swap_before_forward()
     return img
@@ -957,6 +828,7 @@ def get_noisy_model_input_and_timesteps(
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "nextdit_shift":
         sigmas = torch.rand((bsz,), device=device)
+        sigmas = torch.clamp(sigmas, min=1e-7).to(device)
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
         sigmas = time_shift(mu, 1.0, sigmas)
 
@@ -965,6 +837,7 @@ def get_noisy_model_input_and_timesteps(
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
+        sigmas = torch.clamp(sigmas, min=1e-7).to(device)
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
         timesteps = sigmas * num_timesteps
@@ -1040,7 +913,6 @@ def save_models(
     sai_metadata: Dict[str, Any],
     save_dtype: Optional[torch.dtype] = None,
     use_mem_eff_save: bool = False,
-    state_dict: Optional[Dict[str, torch.Tensor]] = None,
 ):
     """
     Save the model to the checkpoint path.
@@ -1054,30 +926,29 @@ def save_models(
     Return:
         None
     """
-    output_state_dict = {}
+    state_dict = {}
 
     def update_sd(prefix, sd):
         for k, v in sd.items():
             key = prefix + k
             if save_dtype is not None and v.dtype != save_dtype:
                 v = v.detach().clone().to("cpu").to(save_dtype)
-            output_state_dict[key] = v
+            state_dict[key] = v
 
-    update_sd("", lumina.state_dict() if state_dict is None else state_dict)
+    update_sd("", lumina.state_dict())
 
     if not use_mem_eff_save:
-        save_file(output_state_dict, ckpt_path, metadata=sai_metadata)
+        save_file(state_dict, ckpt_path, metadata=sai_metadata)
     else:
-        mem_eff_save_file(output_state_dict, ckpt_path, metadata=sai_metadata)
+        mem_eff_save_file(state_dict, ckpt_path, metadata=sai_metadata)
 
 
 def save_lumina_model_on_train_end(
     args: argparse.Namespace,
-    accelerator: Accelerator,
     save_dtype: torch.dtype,
     epoch: int,
     global_step: int,
-    lumina,
+    lumina: lumina_models.NextDiT,
 ):
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(
@@ -1089,14 +960,7 @@ def save_lumina_model_on_train_end(
             is_stable_diffusion_ckpt=True,
             lumina="lumina2",
         )
-        lumina_sd = save_utils.get_model_state_dict_for_save(
-            accelerator,
-            lumina,
-            save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model_for_non_fsdp=True,
-            keep_torch_compile=False,
-        )
-        save_models(ckpt_file, lumina, sai_metadata, save_dtype, args.mem_eff_save, state_dict=lumina_sd)
+        save_models(ckpt_file, lumina, sai_metadata, save_dtype, args.mem_eff_save)
 
     train_util.save_sd_model_on_train_end_common(
         args, True, True, epoch, global_step, sd_saver, None
@@ -1113,7 +977,7 @@ def save_lumina_model_on_epoch_end_or_stepwise(
     epoch: int,
     num_train_epochs: int,
     global_step: int,
-    lumina,
+    lumina: lumina_models.NextDiT,
 ):
     """
     Save the model to the checkpoint path.
@@ -1139,14 +1003,7 @@ def save_lumina_model_on_epoch_end_or_stepwise(
             is_stable_diffusion_ckpt=True,
             lumina="lumina2",
         )
-        lumina_sd = save_utils.get_model_state_dict_for_save(
-            accelerator,
-            lumina,
-            save_utils.SAVE_INTENT_FULL_MODEL_EXPORT,
-            unwrap_model_for_non_fsdp=True,
-            keep_torch_compile=False,
-        )
-        save_models(ckpt_file, lumina, sai_metadata, save_dtype, args.mem_eff_save, state_dict=lumina_sd)
+        save_models(ckpt_file, lumina, sai_metadata, save_dtype, args.mem_eff_save)
 
     train_util.save_sd_model_on_epoch_end_or_stepwise_common(
         args,
@@ -1166,11 +1023,6 @@ def save_lumina_model_on_epoch_end_or_stepwise(
 
 
 def add_lumina_train_arguments(parser: argparse.ArgumentParser):
-    parser.add_argument(
-        "--dit_path",
-        type=str,
-        help="path to Lumina DiT model (*.sft or *.safetensors) / Lumina DiTモデルのパス（*.sftまたは*.safetensors）",
-    )
     parser.add_argument(
         "--gemma2",
         type=str,

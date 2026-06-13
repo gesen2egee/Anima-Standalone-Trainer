@@ -4,7 +4,6 @@
 import argparse
 import math
 import os
-from library.profiler import StepProfiler
 from multiprocessing import Value
 import toml
 
@@ -106,6 +105,7 @@ def train(args):
     train_dataset_group.verify_bucket_reso_steps(64)
 
     if args.debug_dataset:
+        train_dataset_group.set_current_strategies()  # dataset needs to know the strategies explicitly
         train_util.debug_dataset(train_dataset_group)
         return
     if len(train_dataset_group) == 0:
@@ -242,7 +242,7 @@ def train(args):
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset_group,
         batch_size=1,
-        shuffle=not getattr(args, 'disable_bucket_shuffle', False),
+        shuffle=True,
         collate_fn=collator,
         num_workers=n_workers,
         persistent_workers=args.persistent_data_loader_workers,
@@ -347,7 +347,6 @@ def train(args):
         accelerator.log({}, step=0)
 
     loss_recorder = train_util.LossRecorder()
-    profiler = StepProfiler(accelerator, args.step_profile, getattr(args, "profile_microbatch", False))
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
@@ -358,8 +357,6 @@ def train(args):
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
             with accelerator.accumulate(*training_models):
-                profiler.on_batch_start()
-
                 with torch.no_grad():
                     if "latents" in batch and batch["latents"] is not None:
                         latents = batch["latents"].to(accelerator.device).to(dtype=weight_dtype)
@@ -367,6 +364,17 @@ def train(args):
                         # latentに変換
                         latents = vae.encode(batch["images"].to(dtype=vae_dtype)).latent_dist.sample().to(weight_dtype)
                     latents = latents * 0.18215
+                    
+                    if batch["masks"] is not None:
+                        masked_latents = vae.encode(
+                            batch["masked_images"].to(dtype=vae_dtype)
+                        ).latent_dist.sample().to(weight_dtype)
+                        masked_latents = masked_latents * 0.18215
+                        # Resize the mask to latents shape as we concatenate the mask to the latents
+                        mask = torch.nn.functional.interpolate(
+                            batch["masks"].to(weight_dtype), size=latents.shape[2:]
+                        )
+
                 b_size = latents.shape[0]
 
                 with torch.set_grad_enabled(args.train_text_encoder):
@@ -388,6 +396,10 @@ def train(args):
                 # with noise offset and/or multires noise if specified
                 noise, noisy_latents, timesteps = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
 
+                if batch["masks"] is not None:
+                    # Concatenate the noised latents with the mask and the masked latents
+                    noisy_latents = torch.cat([noisy_latents, mask, masked_latents], dim=1)
+ 
                 # Predict the noise residual
                 with accelerator.autocast():
                     noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
@@ -415,22 +427,16 @@ def train(args):
                 else:
                     loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "mean", huber_c)
 
-                profiler.on_fwd_done()
                 accelerator.backward(loss)
-
                 if accelerator.sync_gradients and args.max_grad_norm != 0.0:
                     params_to_clip = []
                     for m in training_models:
                         params_to_clip.extend(m.parameters())
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
-                profiler.on_bwd_done()
-
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
-
-                profiler.on_step_done(global_step)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -460,8 +466,6 @@ def train(args):
                             accelerator.unwrap_model(text_encoder),
                             accelerator.unwrap_model(unet),
                             vae,
-                            text_encoder_for_save=text_encoder,
-                            unet_for_save=unet,
                         )
 
             current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
@@ -501,8 +505,6 @@ def train(args):
                     accelerator.unwrap_model(text_encoder),
                     accelerator.unwrap_model(unet),
                     vae,
-                    text_encoder_for_save=text_encoder,
-                    unet_for_save=unet,
                 )
 
         train_util.sample_images(
@@ -511,39 +513,22 @@ def train(args):
 
     is_main_process = accelerator.is_main_process
     if is_main_process:
-        export_unet = accelerator.unwrap_model(unet)
-        export_text_encoder = accelerator.unwrap_model(text_encoder)
-    else:
-        export_unet = None
-        export_text_encoder = None
+        unet = accelerator.unwrap_model(unet)
+        text_encoder = accelerator.unwrap_model(text_encoder)
+
+    accelerator.end_training()
 
     if is_main_process and (args.save_state or args.save_state_on_train_end):
         train_util.save_state_on_train_end(args, accelerator)
-
-    save_accelerator = accelerator
 
     del accelerator  # この後メモリを使うのでこれは消す
 
     if is_main_process:
         src_path = src_stable_diffusion_ckpt if save_stable_diffusion_format else src_diffusers_model_path
         train_util.save_sd_model_on_train_end(
-            args,
-            save_accelerator,
-            src_path,
-            save_stable_diffusion_format,
-            use_safetensors,
-            save_dtype,
-            epoch,
-            global_step,
-            export_text_encoder,
-            export_unet,
-            vae,
-            text_encoder_for_save=text_encoder,
-            unet_for_save=unet,
+            args, src_path, save_stable_diffusion_format, use_safetensors, save_dtype, epoch, global_step, text_encoder, unet, vae
         )
         logger.info("model saved.")
-
-    save_accelerator.end_training()
 
 
 def setup_parser() -> argparse.ArgumentParser:

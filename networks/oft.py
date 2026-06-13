@@ -95,18 +95,19 @@ class OFTModule(torch.nn.Module):
         R = self.get_weight().to(torch.float32)
         W = org_module.weight.to(torch.float32)
 
+        bias = org_module.bias.to(org_dtype) if org_module.bias is not None else None
         if len(W.shape) == 4:  # Conv2d
             W_reshaped = einops.rearrange(W, "(k n) ... -> k n ...", k=self.num_blocks, n=self.block_size)
             RW = torch.einsum("k n m, k n ... -> k m ...", R, W_reshaped)
             RW = einops.rearrange(RW, "k m ... -> (k m) ...")
             result = F.conv2d(
-                x, RW.to(org_dtype), org_module.bias, org_module.stride, org_module.padding, org_module.dilation, org_module.groups
+                x, RW.to(org_dtype), bias, org_module.stride, org_module.padding, org_module.dilation, org_module.groups
             )
         else:  # Linear
             W_reshaped = einops.rearrange(W, "(k n) m -> k n m", k=self.num_blocks, n=self.block_size)
             RW = torch.einsum("k n m, k n p -> k m p", R, W_reshaped)
             RW = einops.rearrange(RW, "k m p -> (k m) p")
-            result = F.linear(x, RW.to(org_dtype), org_module.bias)
+            result = F.linear(x, RW.to(org_dtype), bias)
         return result
 
 

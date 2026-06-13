@@ -1,520 +1,225 @@
-# LoRA network module for Anima 
+# LoRA network module for Anima
+import ast
 import math
 import os
+import re
 from typing import Dict, List, Optional, Tuple, Type, Union
-import numpy as np
 import torch
 from library.utils import setup_logging
 
-setup_logging()
 import logging
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
-from networks.lora_flux import LoRAModule, LoRAInfModule
 
-
-# ---------------------------------------------------------------------------
-#  TP-aware LoRA modules
-#  These subclasses handle the extra communication that Tensor Parallel and
-#  Sequence Parallel layers inject into the forward path.  The base LoRAModule
-#  only sees the *post-communication* output from org_forward, but the LoRA
-#  path (lora_down → lora_up) operates on the *pre-communication* input `x`.
-#  Without correction the shapes or semantics would mismatch.
-# ---------------------------------------------------------------------------
-
-# Lazy-import flag — set True once wd_parallel is confirmed importable.
-_WDP_AVAILABLE: Optional[bool] = None
-
-
-def _try_import_wdp():
-    global _WDP_AVAILABLE
-    if _WDP_AVAILABLE is not None:
-        return _WDP_AVAILABLE
-    try:
-        import wd_parallel  # noqa: F401
-        _WDP_AVAILABLE = True
-    except ImportError:
-        _WDP_AVAILABLE = False
-    return _WDP_AVAILABLE
-
-
-def _is_tp_linear(module: torch.nn.Module) -> bool:
-    """Return True if *module* is a wd_parallel Column/RowParallelLinear."""
-    name = module.__class__.__name__
-    return name in ("ColumnParallelLinear", "RowParallelLinear")
-
-
-class _ColumnLoRAFwdBwd(torch.autograd.Function):
-    """Simple fused async TP+SP column LoRA path.
-
-    This intentionally only handles the clean case:
-      - plain ColumnParallelLoRAModule
-      - sequence_parallel=True
-      - no module / neuron / rank dropout
-
-    Other LoRA cases keep using the existing implementation.
+class LoRAModule(torch.nn.Module):
+    """
+    replaces forward method of the original Linear, instead of replacing the original Linear module.
     """
 
-    @staticmethod
-    def forward(
-        ctx,
-        input_,
-        base_weight,
-        bias,
-        lora_down_weight,
-        lora_up_weight,
-        lora_scale,
-        group,
-        seq_dim,
+    def __init__(
+        self,
+        lora_name,
+        org_module: torch.nn.Module,
+        multiplier=1.0,
+        lora_dim=4,
+        alpha=1,
+        dropout=None,
+        rank_dropout=None,
+        module_dropout=None,
     ):
-        from wd_parallel.collectives import _gather_along_dim
+        """
+        if alpha == 0 or None, alpha is rank (no scaling).
+        """
+        super().__init__()
+        self.lora_name = lora_name
 
-        ctx.group = group
-        ctx.seq_dim = seq_dim
-        ctx.use_bias = bias is not None
-        ctx.base_weight_requires_grad = base_weight.requires_grad
-        ctx.lora_down_requires_grad = lora_down_weight.requires_grad
-        ctx.lora_up_requires_grad = lora_up_weight.requires_grad
-        ctx.lora_scale = float(lora_scale)
-
-        gathered = (
-            _gather_along_dim(input_, group, seq_dim, buf_name="col_lora_fwd_gather")
-            if group is not None and group.size() > 1
-            else input_
-        )
-        lora_mid = torch.nn.functional.linear(gathered, lora_down_weight, None)
-        output = torch.nn.functional.linear(gathered, base_weight, bias)
-        output = output + torch.nn.functional.linear(lora_mid, lora_up_weight, None) * ctx.lora_scale
-
-        ctx.save_for_backward(input_, base_weight, lora_down_weight, lora_up_weight, lora_mid)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        from wd_parallel.collectives import _async_all_gather_seq_dim, _async_reduce_scatter_seq_dim
-
-        input_, base_weight, lora_down_weight, lora_up_weight, lora_mid = ctx.saved_tensors
-        group = ctx.group
-        seq_dim = ctx.seq_dim
-        do_async = group is not None and group.size() > 1
-
-        need_grad_input = ctx.needs_input_grad[0]
-        need_grad_base_weight = ctx.needs_input_grad[1] and ctx.base_weight_requires_grad
-        need_grad_bias = ctx.needs_input_grad[2] and ctx.use_bias
-        need_grad_lora_down = ctx.needs_input_grad[3] and ctx.lora_down_requires_grad
-        need_grad_lora_up = ctx.needs_input_grad[4] and ctx.lora_up_requires_grad
-        need_full_input = need_grad_base_weight or need_grad_lora_down
-
-        if grad_output.dtype != base_weight.dtype:
-            grad_output = grad_output.to(base_weight.dtype)
-
-        if do_async and need_full_input:
-            ag_buf, ag_handle, ag_transpose = _async_all_gather_seq_dim(input_, group, seq_dim)
+        if org_module.__class__.__name__ == "Conv2d":
+            in_dim = org_module.in_channels
+            out_dim = org_module.out_channels
         else:
-            ag_buf = ag_handle = ag_transpose = None
+            in_dim = org_module.in_features
+            out_dim = org_module.out_features
 
-        grad_lora_mid = grad_output.matmul(lora_up_weight) * ctx.lora_scale
+        self.lora_dim = lora_dim
 
-        if need_grad_input:
-            grad_input_full = grad_output.matmul(base_weight) + grad_lora_mid.matmul(lora_down_weight)
+        if org_module.__class__.__name__ == "Conv2d":
+            kernel_size = org_module.kernel_size
+            stride = org_module.stride
+            padding = org_module.padding
+            self.lora_down = torch.nn.Conv2d(in_dim, self.lora_dim, kernel_size, stride, padding, bias=False)
+            self.lora_up = torch.nn.Conv2d(self.lora_dim, out_dim, (1, 1), (1, 1), bias=False)
         else:
-            grad_input_full = None
+            self.lora_down = torch.nn.Linear(in_dim, self.lora_dim, bias=False)
+            self.lora_up = torch.nn.Linear(self.lora_dim, out_dim, bias=False)
 
-        if do_async and need_grad_input:
-            rs_buf, rs_handle, rs_transpose = _async_reduce_scatter_seq_dim(grad_input_full, group, seq_dim)
-        else:
-            rs_buf = rs_handle = rs_transpose = None
+        torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
+        torch.nn.init.zeros_(self.lora_up.weight)
 
-        if need_grad_lora_up:
-            grad_weight_lora_up = (
-                (grad_output * ctx.lora_scale).reshape(-1, grad_output.shape[-1]).t().matmul(
-                    lora_mid.reshape(-1, lora_mid.shape[-1])
-                )
-            )
-        else:
-            grad_weight_lora_up = None
+        if type(alpha) == torch.Tensor:
+            alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
+        alpha = self.lora_dim if alpha is None or alpha == 0 else alpha
+        self.scale = alpha / self.lora_dim
+        self.register_buffer("alpha", torch.tensor(alpha))  # 定数として扱える
 
-        if ag_handle is not None:
-            ag_handle.wait()
-            gathered = ag_buf.transpose(0, seq_dim).contiguous() if ag_transpose else ag_buf
-        elif need_full_input:
-            gathered = input_
-        else:
-            gathered = None
-
-        if gathered is not None and gathered.dtype != base_weight.dtype:
-            gathered = gathered.to(base_weight.dtype)
-
-        if need_grad_base_weight:
-            grad_weight_base = grad_output.reshape(-1, grad_output.shape[-1]).t().matmul(
-                gathered.reshape(-1, gathered.shape[-1])
-            )
-        else:
-            grad_weight_base = None
-
-        if need_grad_lora_down:
-            grad_weight_lora_down = grad_lora_mid.reshape(-1, grad_lora_mid.shape[-1]).t().matmul(
-                gathered.reshape(-1, gathered.shape[-1])
-            )
-        else:
-            grad_weight_lora_down = None
-
-        if rs_handle is not None:
-            rs_handle.wait()
-            grad_input = rs_buf.transpose(0, seq_dim).contiguous() if rs_transpose else rs_buf
-        else:
-            grad_input = grad_input_full
-
-        grad_bias = (
-            grad_output.sum(list(range(grad_output.ndim - 1))) if need_grad_bias else None
-        )
-
-        return (
-            grad_input,
-            grad_weight_base,
-            grad_bias,
-            grad_weight_lora_down,
-            grad_weight_lora_up,
-            None,
-            None,
-            None,
-        )
-
-
-class ColumnParallelLoRAModule(LoRAModule):
-    """LoRA adapter for ColumnParallelLinear.
-
-    Column-parallel forward:
-      TP-only:  copy-to-TP (identity fwd) → F.linear
-      SP:       all-gather along seq_dim   → F.linear
-
-    The LoRA path must apply the same input transform so that lora_down
-    sees the same tensor shape that the base weight sees.
-    For TP-only the input is already replicated — nothing to do.
-    For SP the input is (…, S/tp, …) and we must all-gather before lora_down.
-    """
-
-    def __init__(self, *args, tp_group=None, seq_dim=1, use_sp=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.org_module_ref = [self.org_module]  # save before apply_to() deletes it
-        self._tp_group = tp_group
-        self._seq_dim = seq_dim
-        self._use_sp = use_sp
+        # same as microsoft's
+        self.multiplier = multiplier
+        self.org_module = org_module  # remove in applying
+        self.dropout = dropout
+        self.rank_dropout = rank_dropout
+        self.module_dropout = module_dropout
 
     def apply_to(self):
-        org_module = self.org_module
-        super().apply_to()
-        org_module._tp_lora_adapter = self
+        self.org_forward = self.org_module.forward
+        self.org_module.forward = self.forward
 
-    def _prepare_tp_input(self, x: torch.Tensor) -> torch.Tensor:
-        if self._tp_group is None or self._tp_group.size() <= 1:
-            return x
-        if self._use_sp:
-            from wd_parallel import gather_from_sp_region
-            return gather_from_sp_region(x, self._tp_group, self._seq_dim)
-        if getattr(self.org_module_ref[0], "skip_input_grad", False):
-            from wd_parallel import copy_to_tp_region_no_input_grad
-            return copy_to_tp_region_no_input_grad(x, self._tp_group)
-        from wd_parallel import copy_to_tp_region
-        return copy_to_tp_region(x, self._tp_group)
+        del self.org_module
 
-    def _apply_lora_path(self, x: torch.Tensor) -> tuple[torch.Tensor, float]:
+    def forward(self, x):
+        org_forwarded = self.org_forward(x)
+
+        # module dropout
+        if self.module_dropout is not None and self.training:
+            if torch.rand(1) < self.module_dropout:
+                return org_forwarded
+
         lx = self.lora_down(x)
+
+        # normal dropout
         if self.dropout is not None and self.training:
             lx = torch.nn.functional.dropout(lx, p=self.dropout)
+
+        # rank dropout
         if self.rank_dropout is not None and self.training:
             mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
-            if len(lx.size()) == 3:
-                mask = mask.unsqueeze(1)
-            lx = lx * mask
-            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
-        else:
-            scale = self.scale
-        return self.lora_up(lx), scale
-
-    def forward_from_prepared_input(self, shared_x: torch.Tensor) -> torch.Tensor:
-        org_module = self.org_module_ref[0]
-        org_forwarded = torch.nn.functional.linear(shared_x, org_module.weight, org_module.bias)
-
-        if self.module_dropout is not None and self.training:
-            if torch.rand(1) < self.module_dropout:
-                return org_forwarded
-
-        lx, scale = self._apply_lora_path(shared_x)
-        output = org_forwarded + lx * self.multiplier * scale
-
-        if self.training and not getattr(ColumnParallelLoRAModule, '_hooks_registered', False):
-            ColumnParallelLoRAModule._hooks_registered = True
-            name = self.lora_name
-
-            def _hook_output(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG ColPar] A(output grad): {status}  {_n}  nan={torch.isnan(grad).sum().item()}  shape={tuple(grad.shape)}")
-                return grad
-            if output.requires_grad:
-                output.register_hook(_hook_output)
-
-            def _hook_lx(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG ColPar] B(lx grad, after lora_up): {status}  nan={torch.isnan(grad).sum().item()}")
-                return grad
-            if lx.requires_grad:
-                lx.register_hook(_hook_lx)
-
-            def _hook_shared_x(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG ColPar] C(shared_x grad, after TP/SP input bwd): {status}  nan={torch.isnan(grad).sum().item()}")
-                return grad
-            if shared_x.requires_grad:
-                shared_x.register_hook(_hook_shared_x)
-
-        return output
-
-    def forward(self, x):
-        # Future AI-agent follow-up:
-        # extend this async TP+SP LoRA path to cover packed column LoRA and
-        # dropout-enabled cases, but keep the design as small and local as
-        # possible instead of reworking wd_parallel.
-        if (
-            self._tp_group is not None
-            and self._tp_group.size() > 1
-            and self._use_sp
-            and self.dropout is None
-            and self.rank_dropout is None
-            and self.module_dropout is None
-        ):
-            org_module = self.org_module_ref[0]
-            return _ColumnLoRAFwdBwd.apply(
-                x,
-                org_module.weight,
-                org_module.bias,
-                self.lora_down.weight,
-                self.lora_up.weight,
-                float(self.multiplier) * float(self.scale),
-                self._tp_group,
-                self._seq_dim,
-            )
-        shared_x = self._prepare_tp_input(x)
-        return self.forward_from_prepared_input(shared_x)
-
-
-class PackedColumnParallelLoRAModule(LoRAModule):
-    """LoRA adapter for packed ColumnParallelLinear (qkv_proj / kv_proj)."""
-
-    def __init__(self, *args, tp_group=None, seq_dim=1, use_sp=False, logical_part_names=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.org_module_ref = [self.org_module]
-        self._tp_group = tp_group
-        self._seq_dim = seq_dim
-        self._use_sp = use_sp
-        self._packed_parts = int(getattr(self.org_module, "packed_parts", 0) or 0)
-        if self._packed_parts < 2:
-            raise ValueError("PackedColumnParallelLoRAModule requires org_module.packed_parts >= 2")
-
-        local_part = int(getattr(self.org_module, "local_part_size", self.org_module.out_features // self._packed_parts))
-        in_dim = self.org_module.in_features
-        if logical_part_names is None:
-            if self.lora_name.endswith("_qkv_proj"):
-                logical_part_names = ["q_proj", "k_proj", "v_proj"]
-            elif self.lora_name.endswith("_kv_proj"):
-                logical_part_names = ["k_proj", "v_proj"]
+            if isinstance(self.lora_down, torch.nn.Conv2d):
+                # Conv2d: lora_dim is at dim 1 → [B, dim, 1, 1]
+                mask = mask.unsqueeze(-1).unsqueeze(-1)
             else:
-                logical_part_names = [f"part{i}" for i in range(self._packed_parts)]
-        self.logical_part_names = list(logical_part_names)
-
-        self.lora_down = torch.nn.ModuleList(
-            [torch.nn.Linear(in_dim, self.lora_dim, bias=False) for _ in range(self._packed_parts)]
-        )
-        self.lora_up = torch.nn.ModuleList(
-            [torch.nn.Linear(self.lora_dim, local_part, bias=False) for _ in range(self._packed_parts)]
-        )
-        for down in self.lora_down:
-            torch.nn.init.kaiming_uniform_(down.weight, a=math.sqrt(5))
-        for up in self.lora_up:
-            torch.nn.init.zeros_(up.weight)
-
-    def apply_to(self):
-        org_module = self.org_module
-        super().apply_to()
-        org_module._tp_lora_adapter = self
-
-    def _prepare_tp_input(self, x: torch.Tensor) -> torch.Tensor:
-        if self._tp_group is None or self._tp_group.size() <= 1:
-            return x
-        if self._use_sp:
-            from wd_parallel import gather_from_sp_region
-            return gather_from_sp_region(x, self._tp_group, self._seq_dim)
-        if getattr(self.org_module_ref[0], "skip_input_grad", False):
-            from wd_parallel import copy_to_tp_region_no_input_grad
-            return copy_to_tp_region_no_input_grad(x, self._tp_group)
-        from wd_parallel import copy_to_tp_region
-        return copy_to_tp_region(x, self._tp_group)
-
-    def forward_from_prepared_input(self, shared_x: torch.Tensor) -> torch.Tensor:
-        org_module = self.org_module_ref[0]
-        org_forwarded = torch.nn.functional.linear(shared_x, org_module.weight, org_module.bias)
-
-        if self.module_dropout is not None and self.training:
-            if torch.rand(1) < self.module_dropout:
-                return org_forwarded
-
-        # Execute packed LoRA as a single down projection plus a single batched
-        # up projection while preserving the existing per-part parameter layout.
-        down_weight = torch.cat([down.weight for down in self.lora_down], dim=0)
-        lx = torch.nn.functional.linear(shared_x, down_weight)
-        lx = lx.view(*shared_x.shape[:-1], self._packed_parts, self.lora_dim)
-
-        if self.dropout is not None and self.training:
-            lx = torch.nn.functional.dropout(lx, p=self.dropout)
-
-        if self.rank_dropout is not None and self.training:
-            mask = torch.rand((lx.size(0), self._packed_parts, self.lora_dim), device=lx.device) > self.rank_dropout
-            if lx.dim() == 4:
-                mask = mask.unsqueeze(1)
+                # Linear: lora_dim is at last dim → [B, 1, ..., 1, dim]
+                for _ in range(len(lx.size()) - 2):
+                    mask = mask.unsqueeze(1)
             lx = lx * mask
-            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+
+            # scaling for rank dropout: treat as if the rank is changed
+            # maskから計算することも考えられるが、augmentation的な効果を期待してrank_dropoutを用いる
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))  # redundant for readability
         else:
             scale = self.scale
 
-        up_weight = torch.stack([up.weight for up in self.lora_up], dim=0)
-        outs = torch.einsum("...pr,por->...po", lx, up_weight)
-        outs = outs.reshape(*shared_x.shape[:-1], -1)
+        lx = self.lora_up(lx)
 
-        return org_forwarded + outs * (self.multiplier * scale)
+        return org_forwarded + lx * self.multiplier * scale
 
-    def forward(self, x):
-        shared_x = self._prepare_tp_input(x)
-        return self.forward_from_prepared_input(shared_x)
+    @property
+    def device(self):
+        return next(self.parameters()).device
 
-
-class RowParallelLoRAModule(LoRAModule):
-    """LoRA adapter for RowParallelLinear.
-
-    Row-parallel forward:
-      TP-only:  F.linear → all-reduce
-      SP:       F.linear → reduce-scatter along seq_dim
-
-    The LoRA path operates on the same sharded input and must apply the
-    same output reduction so its contribution matches org_forwarded.
-    """
-
-    def __init__(self, *args, tp_group=None, seq_dim=1, use_sp=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.org_module_ref = [self.org_module]  # save before apply_to() deletes it
-        self._tp_group = tp_group
-        self._seq_dim = seq_dim
-        self._use_sp = use_sp
-
-    def _reduce_tp_output(self, x: torch.Tensor) -> torch.Tensor:
-        if self._tp_group is None or self._tp_group.size() <= 1:
-            return x
-        if self._use_sp:
-            from wd_parallel import reduce_scatter_to_sp_region
-            return reduce_scatter_to_sp_region(x, self._tp_group, self._seq_dim)
-        import torch.distributed as dist
-        x = x.contiguous()
-        dist.all_reduce(x, group=self._tp_group)
-        return x
-
-    def forward(self, x):
-        org_module = self.org_module_ref[0]
-        x_local = x
-        if x_local.size(-1) < org_module.in_features:
-            x_local = torch.nn.functional.pad(x_local, (0, org_module.in_features - x_local.size(-1)))
-        org_local = torch.nn.functional.linear(x_local, org_module.weight, None)
-
-        if self.module_dropout is not None and self.training:
-            if torch.rand(1) < self.module_dropout:
-                output = self._reduce_tp_output(org_local)
-                if org_module.bias is not None:
-                    output = output + org_module.bias
-                return output
-
-        lx = self.lora_down(x_local)
-
-        if self.dropout is not None and self.training:
-            lx = torch.nn.functional.dropout(lx, p=self.dropout)
-
-        if self.rank_dropout is not None and self.training:
-            mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
-            if len(lx.size()) == 3:
-                mask = mask.unsqueeze(1)
-            lx = lx * mask
-            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
-        else:
-            scale = self.scale
-
-        lx = self.lora_up(lx) * self.multiplier * scale
-        combined_local = org_local + lx
-        lx_pre_scatter = combined_local  # save ref for hook before scatter changes the node
-        output = self._reduce_tp_output(combined_local)
-        if org_module.bias is not None:
-            output = output + org_module.bias
-
-        # Only register hooks for the very first RowPar module.
-        # Hooks fire in backward order: A (output) → B (lx post-scatter) → C (lx pre-scatter).
-        # Reading the output:
-        #   A NaN only        → upstream (base model backward) is already NaN
-        #   A+B NaN, C finite → reduce_scatter backward (all_gather) introduces NaN
-        #   A+B+C NaN         → NaN from lora_up backward or upstream
-        if self.training and not getattr(RowParallelLoRAModule, '_hooks_registered', False):
-            RowParallelLoRAModule._hooks_registered = True
-            name = self.lora_name
-
-            def _hook_output(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG RowPar] A(output grad): {status}  {_n}  nan={torch.isnan(grad).sum().item()}  shape={tuple(grad.shape)}")
-                return grad
-            if output.requires_grad:
-                output.register_hook(_hook_output)
-
-            def _hook_lx_post(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG RowPar] B(combined post-scatter grad): {status}  nan={torch.isnan(grad).sum().item()}")
-                return grad
-            if lx.requires_grad:
-                lx.register_hook(_hook_lx_post)
-
-            def _hook_lx_pre(grad, _n=name):
-                from tqdm import tqdm
-                status = "NaN" if not torch.isfinite(grad).all() else "ok"
-                tqdm.write(f"[NaN DIAG RowPar] C(combined pre-scatter grad): {status}  nan={torch.isnan(grad).sum().item()}")
-                return grad
-            if lx_pre_scatter.requires_grad:
-                lx_pre_scatter.register_hook(_hook_lx_pre)
-
-        return output
+    @property
+    def dtype(self):
+        return next(self.parameters()).dtype
 
 
-def _select_lora_class(child_module, tp_group=None, use_sp=False, seq_dim=1):
-    """Pick the right LoRAModule class based on the target layer type.
+class LoRAInfModule(LoRAModule):
+    def __init__(
+        self,
+        lora_name,
+        org_module: torch.nn.Module,
+        multiplier=1.0,
+        lora_dim=4,
+        alpha=1,
+        **kwargs,
+    ):
+        # no dropout for inference
+        super().__init__(lora_name, org_module, multiplier, lora_dim, alpha)
 
-    Returns (module_class, extra_kwargs) where extra_kwargs are passed
-    to the LoRAModule constructor in addition to the standard args.
-    """
-    cls_name = child_module.__class__.__name__
-    if cls_name == "ColumnParallelLinear":
-        packed_parts = int(getattr(child_module, "packed_parts", 0) or 0)
-        if packed_parts:
-            return PackedColumnParallelLoRAModule, dict(
-                tp_group=tp_group,
-                seq_dim=seq_dim,
-                use_sp=getattr(child_module, 'sequence_parallel', use_sp),
-                logical_part_names=None,
+        self.org_module_ref = [org_module]  # 後から参照できるように
+        self.enabled = True
+        self.network: LoRANetwork = None
+
+    def set_network(self, network):
+        self.network = network
+
+    # freezeしてマージする
+    def merge_to(self, sd, dtype, device):
+        # extract weight from org_module
+        org_sd = self.org_module.state_dict()
+        weight = org_sd["weight"]
+        org_dtype = weight.dtype
+        org_device = weight.device
+
+        if dtype is None:
+            dtype = org_dtype
+        if device is None:
+            device = org_device
+
+        # get up/down weight
+        down_weight = sd["lora_down.weight"].to(torch.float).to(device)
+        up_weight = sd["lora_up.weight"].to(torch.float).to(device)
+
+        # weight
+        weight = weight.to(torch.float).to(device)  # calc in float
+
+        # merge weight
+        if len(weight.size()) == 2:
+            # linear
+            weight = weight + self.multiplier * (up_weight @ down_weight) * self.scale
+        elif down_weight.size()[2:4] == (1, 1):
+            # conv2d 1x1
+            weight = (
+                weight
+                + self.multiplier
+                * (up_weight.squeeze(3).squeeze(2) @ down_weight.squeeze(3).squeeze(2)).unsqueeze(2).unsqueeze(3)
+                * self.scale
             )
-        return ColumnParallelLoRAModule, dict(tp_group=tp_group, seq_dim=seq_dim,
-                                               use_sp=getattr(child_module, 'sequence_parallel', use_sp))
-    elif cls_name == "RowParallelLinear":
-        return RowParallelLoRAModule, dict(tp_group=tp_group, seq_dim=seq_dim,
-                                            use_sp=getattr(child_module, 'sequence_parallel', use_sp))
-    else:
-        return None, {}  # use the default module_class
+        else:
+            # conv2d 3x3
+            conved = torch.nn.functional.conv2d(down_weight.permute(1, 0, 2, 3), up_weight).permute(1, 0, 2, 3)
+            # logger.info(conved.size(), weight.size(), module.stride, module.padding)
+            weight = weight + self.multiplier * conved * self.scale
+
+        # set weight to org_module
+        org_sd["weight"] = weight.to(dtype)
+        self.org_module.load_state_dict(org_sd)
+
+    # 復元できるマージのため、このモジュールのweightを返す
+    def get_weight(self, multiplier=None):
+        if multiplier is None:
+            multiplier = self.multiplier
+
+        # get up/down weight from module
+        up_weight = self.lora_up.weight.to(torch.float)
+        down_weight = self.lora_down.weight.to(torch.float)
+
+        # pre-calculated weight
+        if len(down_weight.size()) == 2:
+            # linear
+            weight = self.multiplier * (up_weight @ down_weight) * self.scale
+        elif down_weight.size()[2:4] == (1, 1):
+            # conv2d 1x1
+            weight = (
+                self.multiplier
+                * (up_weight.squeeze(3).squeeze(2) @ down_weight.squeeze(3).squeeze(2)).unsqueeze(2).unsqueeze(3)
+                * self.scale
+            )
+        else:
+            # conv2d 3x3
+            conved = torch.nn.functional.conv2d(down_weight.permute(1, 0, 2, 3), up_weight).permute(1, 0, 2, 3)
+            weight = self.multiplier * conved * self.scale
+
+        return weight
+
+    def default_forward(self, x):
+        # logger.info(f"default_forward {self.lora_name} {x.size()}")
+        lx = self.lora_down(x)
+        lx = self.lora_up(lx)
+        return self.org_forward(x) + lx * self.multiplier * self.scale
+
+    def forward(self, x):
+        if not self.enabled:
+            return self.org_forward(x)
+        return self.default_forward(x)
 
 
 def create_network(
@@ -532,68 +237,28 @@ def create_network(
     if network_alpha is None:
         network_alpha = 1.0
 
-    # type_dims: [self_attn_dim, cross_attn_dim, mlp_dim, mod_dim, llm_adapter_dim]
-    self_attn_dim = kwargs.get("self_attn_dim", None)
-    cross_attn_dim = kwargs.get("cross_attn_dim", None)
-    mlp_dim = kwargs.get("mlp_dim", None)
-    mod_dim = kwargs.get("mod_dim", None)
-    llm_adapter_dim = kwargs.get("llm_adapter_dim", None)
-
-    if self_attn_dim is not None:
-        self_attn_dim = int(self_attn_dim)
-    if cross_attn_dim is not None:
-        cross_attn_dim = int(cross_attn_dim)
-    if mlp_dim is not None:
-        mlp_dim = int(mlp_dim)
-    if mod_dim is not None:
-        mod_dim = int(mod_dim)
-    if llm_adapter_dim is not None:
-        llm_adapter_dim = int(llm_adapter_dim)
-
-    type_dims = [self_attn_dim, cross_attn_dim, mlp_dim, mod_dim, llm_adapter_dim]
-    if all([d is None for d in type_dims]):
-        type_dims = None
-
-    # emb_dims: [x_embedder, t_embedder, final_layer]
-    emb_dims = kwargs.get("emb_dims", None)
-    if emb_dims is not None:
-        emb_dims = emb_dims.strip()
-        if emb_dims.startswith("[") and emb_dims.endswith("]"):
-            emb_dims = emb_dims[1:-1]
-        emb_dims = [int(d) for d in emb_dims.split(",")]
-        assert len(emb_dims) == 3, f"invalid emb_dims: {emb_dims}, must be 3 dimensions (x_embedder, t_embedder, final_layer)"
-
-    # block selection
-    def parse_block_selection(selection: str, total_blocks: int) -> List[bool]:
-        if selection == "all":
-            return [True] * total_blocks
-        if selection == "none" or selection == "":
-            return [False] * total_blocks
-
-        selected = [False] * total_blocks
-        ranges = selection.split(",")
-        for r in ranges:
-            if "-" in r:
-                start, end = map(str.strip, r.split("-"))
-                start, end = int(start), int(end)
-                assert 0 <= start < total_blocks and 0 <= end < total_blocks and start <= end
-                for i in range(start, end + 1):
-                    selected[i] = True
-            else:
-                index = int(r)
-                assert 0 <= index < total_blocks
-                selected[index] = True
-        return selected
-
-    train_block_indices = kwargs.get("train_block_indices", None)
-    if train_block_indices is not None:
-        num_blocks = len(unet.blocks) if hasattr(unet, 'blocks') else 999
-        train_block_indices = parse_block_selection(train_block_indices, num_blocks)
-
     # train LLM adapter
-    train_llm_adapter = kwargs.get("train_llm_adapter", False)
+    train_llm_adapter = kwargs.get("train_llm_adapter", "false")
     if train_llm_adapter is not None:
-        train_llm_adapter = True if train_llm_adapter == "True" else False
+        train_llm_adapter = True if train_llm_adapter.lower() == "true" else False
+
+    exclude_patterns = kwargs.get("exclude_patterns", None)
+    if exclude_patterns is None:
+        exclude_patterns = []
+    else:
+        exclude_patterns = ast.literal_eval(exclude_patterns)
+        if not isinstance(exclude_patterns, list):
+            exclude_patterns = [exclude_patterns]
+
+    # add default exclude patterns
+    exclude_patterns.append(r".*(_modulation|_norm|_embedder|final_layer).*")
+
+    # regular expression for module selection: exclude and include
+    include_patterns = kwargs.get("include_patterns", None)
+    if include_patterns is not None:
+        include_patterns = ast.literal_eval(include_patterns)
+        if not isinstance(include_patterns, list):
+            include_patterns = [include_patterns]
 
     # rank/module dropout
     rank_dropout = kwargs.get("rank_dropout", None)
@@ -604,9 +269,43 @@ def create_network(
         module_dropout = float(module_dropout)
 
     # verbose
-    verbose = kwargs.get("verbose", False)
+    verbose = kwargs.get("verbose", "false")
     if verbose is not None:
-        verbose = True if verbose == "True" else False
+        verbose = True if verbose.lower() == "true" else False
+
+    # regex-specific learning rates / dimensions
+    def parse_kv_pairs(kv_pair_str: str, is_int: bool) -> Dict[str, float]:
+        """
+        Parse a string of key-value pairs separated by commas.
+        """
+        pairs = {}
+        for pair in kv_pair_str.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            if "=" not in pair:
+                logger.warning(f"Invalid format: {pair}, expected 'key=value'")
+                continue
+            key, value = pair.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            try:
+                pairs[key] = int(value) if is_int else float(value)
+            except ValueError:
+                logger.warning(f"Invalid value for {key}: {value}")
+        return pairs
+
+    network_reg_lrs = kwargs.get("network_reg_lrs", None)
+    if network_reg_lrs is not None:
+        reg_lrs = parse_kv_pairs(network_reg_lrs, is_int=False)
+    else:
+        reg_lrs = None
+
+    network_reg_dims = kwargs.get("network_reg_dims", None)
+    if network_reg_dims is not None:
+        reg_dims = parse_kv_pairs(network_reg_dims, is_int=True)
+    else:
+        reg_dims = None
 
     network = LoRANetwork(
         text_encoders,
@@ -618,9 +317,10 @@ def create_network(
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
         train_llm_adapter=train_llm_adapter,
-        type_dims=type_dims,
-        emb_dims=emb_dims,
-        train_block_indices=train_block_indices,
+        exclude_patterns=exclude_patterns,
+        include_patterns=include_patterns,
+        reg_dims=reg_dims,
+        reg_lrs=reg_lrs,
         verbose=verbose,
     )
 
@@ -640,6 +340,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
     if weights_sd is None:
         if os.path.splitext(file)[1] == ".safetensors":
             from safetensors.torch import load_file
+
             weights_sd = load_file(file)
         else:
             weights_sd = torch.load(file, map_location="cpu")
@@ -661,20 +362,6 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         if "llm_adapter" in lora_name:
             train_llm_adapter = True
 
-    # TP/SP fused-QKV training exposes qkv_proj/kv_proj internally, but saved
-    # LoRAs keep standard q_proj/k_proj/v_proj names.  Mirror those dimensions
-    # onto the packed internal names so dim-from-weights works after fusion.
-    for lora_name, dim in list(modules_dim.items()):
-        packed_name = None
-        if lora_name.endswith("_self_attn_q_proj") or lora_name.endswith("_self_attn_k_proj") or lora_name.endswith("_self_attn_v_proj"):
-            packed_name = lora_name.rsplit("_", 2)[0] + "_qkv_proj"
-        elif lora_name.endswith("_cross_attn_k_proj") or lora_name.endswith("_cross_attn_v_proj"):
-            packed_name = lora_name.rsplit("_", 2)[0] + "_kv_proj"
-        if packed_name is not None:
-            modules_dim.setdefault(packed_name, dim)
-            if lora_name in modules_alpha:
-                modules_alpha.setdefault(packed_name, modules_alpha[lora_name])
-
     module_class = LoRAInfModule if for_inference else LoRAModule
 
     network = LoRANetwork(
@@ -690,15 +377,15 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
 
 
 class LoRANetwork(torch.nn.Module):
-    # Target modules: DiT blocks
-    ANIMA_TARGET_REPLACE_MODULE = ["Block"]
+    # Target modules: DiT blocks, embedders, final layer. embedders and final layer are excluded by default.
+    ANIMA_TARGET_REPLACE_MODULE = ["Block", "PatchEmbed", "TimestepEmbedding", "FinalLayer"]
     # Target modules: LLM Adapter blocks
     ANIMA_ADAPTER_TARGET_REPLACE_MODULE = ["LLMAdapterTransformerBlock"]
     # Target modules for text encoder (Qwen3)
     TEXT_ENCODER_TARGET_REPLACE_MODULE = ["Qwen3Attention", "Qwen3MLP", "Qwen3SdpaAttention", "Qwen3FlashAttention2"]
 
     LORA_PREFIX_ANIMA = "lora_unet"  # ComfyUI compatible
-    LORA_PREFIX_TEXT_ENCODER = "lora_te1"  # Qwen3
+    LORA_PREFIX_TEXT_ENCODER = "lora_te"  # Qwen3
 
     def __init__(
         self,
@@ -714,9 +401,10 @@ class LoRANetwork(torch.nn.Module):
         modules_dim: Optional[Dict[str, int]] = None,
         modules_alpha: Optional[Dict[str, int]] = None,
         train_llm_adapter: bool = False,
-        type_dims: Optional[List[int]] = None,
-        emb_dims: Optional[List[int]] = None,
-        train_block_indices: Optional[List[bool]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
+        reg_dims: Optional[Dict[str, int]] = None,
+        reg_lrs: Optional[Dict[str, float]] = None,
         verbose: Optional[bool] = False,
     ) -> None:
         super().__init__()
@@ -727,21 +415,36 @@ class LoRANetwork(torch.nn.Module):
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
         self.train_llm_adapter = train_llm_adapter
-        self.type_dims = type_dims
-        self.emb_dims = emb_dims
-        self.train_block_indices = train_block_indices
+        self.reg_dims = reg_dims
+        self.reg_lrs = reg_lrs
 
         self.loraplus_lr_ratio = None
         self.loraplus_unet_lr_ratio = None
         self.loraplus_text_encoder_lr_ratio = None
 
         if modules_dim is not None:
-            logger.info(f"create LoRA network from weights")
-            if self.emb_dims is None:
-                self.emb_dims = [0] * 3
+            logger.info("create LoRA network from weights")
         else:
             logger.info(f"create LoRA network. base dim (rank): {lora_dim}, alpha: {alpha}")
-            logger.info(f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}")
+            logger.info(
+                f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}"
+            )
+
+        # compile regular expression if specified
+        def str_to_re_patterns(patterns: Optional[List[str]]) -> List[re.Pattern]:
+            re_patterns = []
+            if patterns is not None:
+                for pattern in patterns:
+                    try:
+                        re_pattern = re.compile(pattern)
+                    except re.error as e:
+                        logger.error(f"Invalid pattern '{pattern}': {e}")
+                        continue
+                    re_patterns.append(re_pattern)
+            return re_patterns
+
+        exclude_re_patterns = str_to_re_patterns(exclude_patterns)
+        include_re_patterns = str_to_re_patterns(include_patterns)
 
         # create module instances
         def create_modules(
@@ -749,15 +452,9 @@ class LoRANetwork(torch.nn.Module):
             text_encoder_idx: Optional[int],
             root_module: torch.nn.Module,
             target_replace_modules: List[str],
-            filter: Optional[str] = None,
             default_dim: Optional[int] = None,
-            include_conv2d_if_filter: bool = False,
         ) -> Tuple[List[LoRAModule], List[str]]:
-            prefix = (
-                self.LORA_PREFIX_ANIMA
-                if is_unet
-                else self.LORA_PREFIX_TEXT_ENCODER
-            )
+            prefix = self.LORA_PREFIX_ANIMA if is_unet else self.LORA_PREFIX_TEXT_ENCODER
 
             loras = []
             skipped = []
@@ -767,20 +464,21 @@ class LoRANetwork(torch.nn.Module):
                         module = root_module
 
                     for child_name, child_module in module.named_modules():
-                        _cls_name = child_module.__class__.__name__
-                        is_linear = _cls_name in ("Linear", "ColumnParallelLinear", "RowParallelLinear")
-                        is_conv2d = _cls_name == "Conv2d"
+                        is_linear = child_module.__class__.__name__ == "Linear"
+                        is_conv2d = child_module.__class__.__name__ == "Conv2d"
                         is_conv2d_1x1 = is_conv2d and child_module.kernel_size == (1, 1)
 
                         if is_linear or is_conv2d:
-                            lora_name = prefix + "." + (name + "." if name else "") + child_name
-                            lora_name = lora_name.replace(".", "_")
+                            original_name = (name + "." if name else "") + child_name
+                            lora_name = f"{prefix}.{original_name}".replace(".", "_")
 
-                            force_incl_conv2d = False
-                            if filter is not None:
-                                if filter not in lora_name:
-                                    continue
-                                force_incl_conv2d = include_conv2d_if_filter
+                            # exclude/include filter (fullmatch: pattern must match the entire original_name)
+                            excluded = any(pattern.fullmatch(original_name) for pattern in exclude_re_patterns)
+                            included = any(pattern.fullmatch(original_name) for pattern in include_re_patterns)
+                            if excluded and not included:
+                                if verbose:
+                                    logger.info(f"exclude: {original_name}")
+                                continue
 
                             dim = None
                             alpha_val = None
@@ -790,59 +488,25 @@ class LoRANetwork(torch.nn.Module):
                                     dim = modules_dim[lora_name]
                                     alpha_val = modules_alpha[lora_name]
                             else:
-                                if is_linear or is_conv2d_1x1:
-                                    dim = default_dim if default_dim is not None else self.lora_dim
-                                    alpha_val = self.alpha
-
-                                    if is_unet and type_dims is not None:
-                                        # type_dims = [self_attn_dim, cross_attn_dim, mlp_dim, mod_dim, llm_adapter_dim]
-                                        # Order matters: check most specific identifiers first to avoid mismatches.
-                                        identifier_order = [
-                                            (4, ("llm_adapter",)),         
-                                            (3, ("adaln_modulation",)),   
-                                            (0, ("self_attn",)),
-                                            (1, ("cross_attn",)),
-                                            (2, ("mlp",)),
-                                        ]
-                                        for idx, ids in identifier_order:
-                                            d = type_dims[idx]
-                                            if d is not None and all(id_str in lora_name for id_str in ids):
-                                                dim = d  # 0 means skip
-                                                break
-
-                                    # block index filtering
-                                    if is_unet and dim and self.train_block_indices is not None and "blocks_" in lora_name:
-                                        # Extract block index from lora_name: "lora_unet_blocks_0_self_attn..."
-                                        parts = lora_name.split("_")
-                                        for pi, part in enumerate(parts):
-                                            if part == "blocks" and pi + 1 < len(parts):
-                                                try:
-                                                    block_index = int(parts[pi + 1])
-                                                    if not self.train_block_indices[block_index]:
-                                                        dim = 0
-                                                except (ValueError, IndexError):
-                                                    pass
-                                                break
-
-                                elif force_incl_conv2d:
-                                    dim = default_dim if default_dim is not None else self.lora_dim
-                                    alpha_val = self.alpha
+                                if self.reg_dims is not None:
+                                    for reg, d in self.reg_dims.items():
+                                        if re.fullmatch(reg, original_name):
+                                            dim = d
+                                            alpha_val = self.alpha
+                                            logger.info(f"Module {original_name} matched with regex '{reg}' -> dim: {dim}")
+                                            break
+                                # fallback to default dim if not matched by reg_dims or reg_dims is not specified
+                                if dim is None:
+                                    if is_linear or is_conv2d_1x1:
+                                        dim = default_dim if default_dim is not None else self.lora_dim
+                                        alpha_val = self.alpha
 
                             if dim is None or dim == 0:
                                 if is_linear or is_conv2d_1x1:
                                     skipped.append(lora_name)
                                 continue
 
-                            # Check if this is a TP parallel layer — use TP-aware LoRA class
-                            tp_cls, tp_kwargs = _select_lora_class(
-                                child_module,
-                                tp_group=getattr(root_module, '_wdp_groups', None) and getattr(root_module, '_wdp_groups').tp,
-                                use_sp=False,  # read from child_module attribute
-                                seq_dim=1,     # Anima uses batch-first (B, S, D)
-                            )
-                            actual_class = tp_cls if tp_cls is not None else module_class
-
-                            lora = actual_class(
+                            lora = module_class(
                                 lora_name,
                                 child_module,
                                 self.multiplier,
@@ -851,8 +515,8 @@ class LoRANetwork(torch.nn.Module):
                                 dropout=dropout,
                                 rank_dropout=rank_dropout,
                                 module_dropout=module_dropout,
-                                **tp_kwargs,
                             )
+                            lora.original_name = original_name
                             loras.append(lora)
 
                     if target_replace_modules is None:
@@ -867,9 +531,7 @@ class LoRANetwork(torch.nn.Module):
                 if text_encoder is None:
                     continue
                 logger.info(f"create LoRA for Text Encoder {i+1}:")
-                te_loras, te_skipped = create_modules(
-                    False, i, text_encoder, LoRANetwork.TEXT_ENCODER_TARGET_REPLACE_MODULE
-                )
+                te_loras, te_skipped = create_modules(False, i, text_encoder, LoRANetwork.TEXT_ENCODER_TARGET_REPLACE_MODULE)
                 logger.info(f"create LoRA for Text Encoder {i+1}: {len(te_loras)} modules.")
                 self.text_encoder_loras.extend(te_loras)
                 skipped_te += te_skipped
@@ -881,19 +543,6 @@ class LoRANetwork(torch.nn.Module):
 
         self.unet_loras: List[Union[LoRAModule, LoRAInfModule]]
         self.unet_loras, skipped_un = create_modules(True, None, unet, target_modules)
-
-        # emb_dims: [x_embedder, t_embedder, final_layer]
-        if self.emb_dims:
-            for filter_name, in_dim in zip(
-                ["x_embedder", "t_embedder", "final_layer"],
-                self.emb_dims,
-            ):
-                loras, _ = create_modules(
-                    True, None, unet, None,
-                    filter=filter_name, default_dim=in_dim,
-                    include_conv2d_if_filter=(filter_name == "x_embedder"),
-                )
-                self.unet_loras.extend(loras)
 
         logger.info(f"create LoRA for Anima DiT: {len(self.unet_loras)} modules.")
         if verbose:
@@ -921,69 +570,14 @@ class LoRANetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             lora.enabled = is_enabled
 
-    @staticmethod
-    def _packed_lora_standard_name(lora_name: str, logical_name: str) -> str:
-        if lora_name.endswith("_qkv_proj"):
-            return lora_name[: -len("_qkv_proj")] + f"_{logical_name}"
-        if lora_name.endswith("_kv_proj"):
-            return lora_name[: -len("_kv_proj")] + f"_{logical_name}"
-        return f"{lora_name}_{logical_name}"
-
-    def _state_dict_to_standard_packed_lora_keys(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        converted = dict(state_dict)
-        for lora in self.text_encoder_loras + self.unet_loras:
-            if not isinstance(lora, PackedColumnParallelLoRAModule):
-                continue
-            prefix = lora.lora_name
-            alpha_key = f"{prefix}.alpha"
-            alpha = converted.get(alpha_key, lora.alpha.detach())
-            for idx, logical_name in enumerate(lora.logical_part_names):
-                std_prefix = self._packed_lora_standard_name(prefix, logical_name)
-                down_key = f"{prefix}.lora_down.{idx}.weight"
-                up_key = f"{prefix}.lora_up.{idx}.weight"
-                if down_key in converted:
-                    converted[f"{std_prefix}.lora_down.weight"] = converted[down_key]
-                if up_key in converted:
-                    converted[f"{std_prefix}.lora_up.weight"] = converted[up_key]
-                converted[f"{std_prefix}.alpha"] = alpha
-            for key in list(converted.keys()):
-                if key == alpha_key or key.startswith(f"{prefix}.lora_down.") or key.startswith(f"{prefix}.lora_up."):
-                    del converted[key]
-        return converted
-
-    def _state_dict_from_standard_packed_lora_keys(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        converted = dict(state_dict)
-        for lora in self.text_encoder_loras + self.unet_loras:
-            if not isinstance(lora, PackedColumnParallelLoRAModule):
-                continue
-            prefix = lora.lora_name
-            found_alpha = None
-            for idx, logical_name in enumerate(lora.logical_part_names):
-                std_prefix = self._packed_lora_standard_name(prefix, logical_name)
-                std_down = f"{std_prefix}.lora_down.weight"
-                std_up = f"{std_prefix}.lora_up.weight"
-                std_alpha = f"{std_prefix}.alpha"
-                if std_down in converted:
-                    converted[f"{prefix}.lora_down.{idx}.weight"] = converted[std_down]
-                    del converted[std_down]
-                if std_up in converted:
-                    converted[f"{prefix}.lora_up.{idx}.weight"] = converted[std_up]
-                    del converted[std_up]
-                if std_alpha in converted:
-                    found_alpha = converted[std_alpha]
-                    del converted[std_alpha]
-            if found_alpha is not None:
-                converted[f"{prefix}.alpha"] = found_alpha
-        return converted
-
     def load_weights(self, file):
         if os.path.splitext(file)[1] == ".safetensors":
             from safetensors.torch import load_file
+
             weights_sd = load_file(file)
         else:
             weights_sd = torch.load(file, map_location="cpu")
 
-        weights_sd = self._state_dict_from_standard_packed_lora_keys(weights_sd)
         info = self.load_state_dict(weights_sd, False)
         return info
 
@@ -1006,7 +600,6 @@ class LoRANetwork(torch.nn.Module):
         return True
 
     def merge_to(self, text_encoders, unet, weights_sd, dtype=None, device=None):
-        weights_sd = self._state_dict_from_standard_packed_lora_keys(weights_sd)
         apply_text_encoder = apply_unet = False
         for key in weights_sd.keys():
             if key.startswith(LoRANetwork.LORA_PREFIX_TEXT_ENCODER):
@@ -1028,10 +621,10 @@ class LoRANetwork(torch.nn.Module):
             sd_for_lora = {}
             for key in weights_sd.keys():
                 if key.startswith(lora.lora_name):
-                    sd_for_lora[key[len(lora.lora_name) + 1:]] = weights_sd[key]
+                    sd_for_lora[key[len(lora.lora_name) + 1 :]] = weights_sd[key]
             lora.merge_to(sd_for_lora, dtype, device)
 
-        logger.info(f"weights are merged")
+        logger.info("weights are merged")
 
     def set_loraplus_lr_ratio(self, loraplus_lr_ratio, loraplus_unet_lr_ratio, loraplus_text_encoder_lr_ratio):
         self.loraplus_lr_ratio = loraplus_lr_ratio
@@ -1047,7 +640,7 @@ class LoRANetwork(torch.nn.Module):
         elif isinstance(text_encoder_lr, float) or isinstance(text_encoder_lr, int):
             text_encoder_lr = [float(text_encoder_lr)]
         elif len(text_encoder_lr) == 1:
-            pass
+            pass  # already a list with one element
 
         self.requires_grad_(True)
 
@@ -1056,8 +649,29 @@ class LoRANetwork(torch.nn.Module):
 
         def assemble_params(loras, lr, loraplus_ratio):
             param_groups = {"lora": {}, "plus": {}}
+            reg_groups = {}
+            reg_lrs_list = list(self.reg_lrs.items()) if self.reg_lrs is not None else []
+
             for lora in loras:
+                matched_reg_lr = None
+                for i, (regex_str, reg_lr) in enumerate(reg_lrs_list):
+                    if re.fullmatch(regex_str, lora.original_name):
+                        matched_reg_lr = (i, reg_lr)
+                        logger.info(f"Module {lora.original_name} matched regex '{regex_str}' -> LR {reg_lr}")
+                        break
+
                 for name, param in lora.named_parameters():
+                    if matched_reg_lr is not None:
+                        reg_idx, reg_lr = matched_reg_lr
+                        group_key = f"reg_lr_{reg_idx}"
+                        if group_key not in reg_groups:
+                            reg_groups[group_key] = {"lora": {}, "plus": {}, "lr": reg_lr}
+                        if loraplus_ratio is not None and "lora_up" in name:
+                            reg_groups[group_key]["plus"][f"{lora.lora_name}.{name}"] = param
+                        else:
+                            reg_groups[group_key]["lora"][f"{lora.lora_name}.{name}"] = param
+                        continue
+
                     if loraplus_ratio is not None and "lora_up" in name:
                         param_groups["plus"][f"{lora.lora_name}.{name}"] = param
                     else:
@@ -1065,6 +679,23 @@ class LoRANetwork(torch.nn.Module):
 
             params = []
             descriptions = []
+            for group_key, group in reg_groups.items():
+                reg_lr = group["lr"]
+                for key in ("lora", "plus"):
+                    param_data = {"params": group[key].values()}
+                    if len(param_data["params"]) == 0:
+                        continue
+                    if key == "plus":
+                        param_data["lr"] = reg_lr * loraplus_ratio if loraplus_ratio is not None else reg_lr
+                    else:
+                        param_data["lr"] = reg_lr
+                    if param_data.get("lr", None) == 0 or param_data.get("lr", None) is None:
+                        logger.info("NO LR skipping!")
+                        continue
+                    params.append(param_data)
+                    desc = f"reg_lr_{group_key.split('_')[-1]}"
+                    descriptions.append(desc + (" plus" if key == "plus" else ""))
+
             for key in param_groups.keys():
                 param_data = {"params": param_groups[key].values()}
                 if len(param_data["params"]) == 0:
@@ -1083,10 +714,7 @@ class LoRANetwork(torch.nn.Module):
 
         if self.text_encoder_loras:
             loraplus_ratio = self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio
-            te1_loras = [
-                lora for lora in self.text_encoder_loras
-                if lora.lora_name.startswith(self.LORA_PREFIX_TEXT_ENCODER)
-            ]
+            te1_loras = [lora for lora in self.text_encoder_loras if lora.lora_name.startswith(self.LORA_PREFIX_TEXT_ENCODER)]
             if len(te1_loras) > 0:
                 logger.info(f"Text Encoder 1 (Qwen3): {len(te1_loras)} modules, LR {text_encoder_lr[0]}")
                 params, descriptions = assemble_params(te1_loras, text_encoder_lr[0], loraplus_ratio)
@@ -1116,138 +744,11 @@ class LoRANetwork(torch.nn.Module):
     def get_trainable_params(self):
         return self.parameters()
 
-    @staticmethod
-    def _pad_tensor_dim(tensor: torch.Tensor, dim: int, padded_size: int) -> torch.Tensor:
-        dim = dim % tensor.ndim
-        if tensor.size(dim) == padded_size:
-            return tensor
-        if tensor.size(dim) > padded_size:
-            raise ValueError(
-                f"cannot pad dim {dim} from {tensor.size(dim)} down to {padded_size}"
-            )
-        out_shape = list(tensor.shape)
-        out_shape[dim] = padded_size
-        out = tensor.new_zeros(out_shape)
-        index = [slice(None)] * tensor.ndim
-        index[dim] = slice(0, tensor.size(dim))
-        out[tuple(index)] = tensor
-        return out
-
-    @staticmethod
-    def _trim_tensor_dim(tensor: torch.Tensor, dim: int, original_size: int) -> torch.Tensor:
-        dim = dim % tensor.ndim
-        if tensor.size(dim) < original_size:
-            raise ValueError(
-                f"cannot trim dim {dim} of size {tensor.size(dim)} to original_size={original_size}"
-            )
-        index = [slice(None)] * tensor.ndim
-        index[dim] = slice(0, original_size)
-        return tensor[tuple(index)].contiguous()
-
-    def gather_tp_lora_weights(self, trim_padding: bool = False) -> None:
-        """Gather sharded LoRA weights from all TP ranks so rank 0 holds the full LoRA.
-
-        Column-parallel LoRA: lora_up is sharded on dim 0 (out_features/tp) → gather dim 0
-        Row-parallel LoRA:    lora_down is sharded on dim 1 (in_features/tp) → gather dim 1
-                              (lora_down.weight shape is (rank, in_features/tp))
-
-        When trim_padding=True, gathered padded shards are trimmed to the
-        original unpadded base-module shape for standard LoRA checkpoint saving.
-        scatter_tp_lora_weights() accepts either trimmed or padded full weights.
-        """
-        import torch.distributed as dist
-
-        for lora in self.text_encoder_loras + self.unet_loras:
-            if isinstance(lora, PackedColumnParallelLoRAModule) and lora._tp_group is not None:
-                org_module = lora.org_module_ref[0]
-                original_part = int(getattr(org_module, "original_part_size", 0) or 0)
-                for up in lora.lora_up:
-                    w = up.weight.data
-                    orig_device = w.device
-                    w_c = w.contiguous().cuda()
-                    gathered = [torch.zeros_like(w_c) for _ in range(lora._tp_group.size())]
-                    dist.all_gather(gathered, w_c, group=lora._tp_group)
-                    full = torch.cat(gathered, dim=0).to(orig_device)
-                    if trim_padding and original_part:
-                        full = self._trim_tensor_dim(full, 0, original_part)
-                    up.weight.data = full
-
-            elif isinstance(lora, ColumnParallelLoRAModule) and lora._tp_group is not None:
-                # lora_up.weight: (out_features/tp, lora_dim) → gather dim 0
-                w = lora.lora_up.weight.data
-                orig_device = w.device
-                # cuda_direct requires CUDA tensors; weights may be on CPU before
-                # the network moves to GPU (e.g. during verify checks).
-                w_c = w.contiguous().cuda()
-                gathered = [torch.zeros_like(w_c) for _ in range(lora._tp_group.size())]
-                dist.all_gather(gathered, w_c, group=lora._tp_group)
-                full = torch.cat(gathered, dim=0).to(orig_device)
-                org_module = lora.org_module_ref[0]
-                if trim_padding and hasattr(org_module, "original_out_features"):
-                    full = self._trim_tensor_dim(full, 0, int(org_module.original_out_features))
-                lora.lora_up.weight.data = full
-
-            elif isinstance(lora, RowParallelLoRAModule) and lora._tp_group is not None:
-                # lora_down.weight: (lora_dim, in_features/tp) → gather dim 1
-                w = lora.lora_down.weight.data
-                orig_device = w.device
-                w_c = w.contiguous().cuda()
-                gathered = [torch.zeros_like(w_c) for _ in range(lora._tp_group.size())]
-                dist.all_gather(gathered, w_c, group=lora._tp_group)
-                full = torch.cat(gathered, dim=1).to(orig_device)
-                org_module = lora.org_module_ref[0]
-                if trim_padding and hasattr(org_module, "original_in_features"):
-                    full = self._trim_tensor_dim(full, 1, int(org_module.original_in_features))
-                lora.lora_down.weight.data = full
-
-    def scatter_tp_lora_weights(self) -> None:
-        """Re-shard LoRA weights back to per-rank slices after gather_tp_lora_weights().
-
-        Column-parallel LoRA: lora_up.weight (D_out, lora_dim) → slice dim 0 → (D_out/tp, lora_dim)
-        Row-parallel LoRA:    lora_down.weight (lora_dim, D_in) → slice dim 1 → (lora_dim, D_in/tp)
-        """
-        import torch.distributed as dist
-
-        for lora in self.text_encoder_loras + self.unet_loras:
-            if isinstance(lora, PackedColumnParallelLoRAModule) and lora._tp_group is not None:
-                tp = lora._tp_group.size()
-                rank = dist.get_rank(group=lora._tp_group)
-                org_module = lora.org_module_ref[0]
-                padded_part = int(getattr(org_module, "padded_part_size", 0) or 0)
-                for up in lora.lora_up:
-                    w = up.weight.data
-                    if padded_part and w.shape[0] < padded_part:
-                        w = self._pad_tensor_dim(w, 0, padded_part)
-                    chunk = w.shape[0] // tp
-                    up.weight.data = w[rank * chunk:(rank + 1) * chunk].contiguous()
-
-            elif isinstance(lora, ColumnParallelLoRAModule) and lora._tp_group is not None:
-                tp = lora._tp_group.size()
-                rank = dist.get_rank(group=lora._tp_group)
-                w = lora.lora_up.weight.data          # (D_out, lora_dim) after gather
-                org_module = lora.org_module_ref[0]
-                padded_out = int(getattr(org_module, "padded_out_features", w.shape[0]))
-                if w.shape[0] < padded_out:
-                    w = self._pad_tensor_dim(w, 0, padded_out)
-                chunk = padded_out // tp
-                lora.lora_up.weight.data = w[rank * chunk:(rank + 1) * chunk].contiguous()
-
-            elif isinstance(lora, RowParallelLoRAModule) and lora._tp_group is not None:
-                tp = lora._tp_group.size()
-                rank = dist.get_rank(group=lora._tp_group)
-                w = lora.lora_down.weight.data        # (lora_dim, D_in) after gather
-                org_module = lora.org_module_ref[0]
-                padded_in = int(getattr(org_module, "padded_in_features", w.shape[1]))
-                if w.shape[1] < padded_in:
-                    w = self._pad_tensor_dim(w, 1, padded_in)
-                chunk = padded_in // tp
-                lora.lora_down.weight.data = w[:, rank * chunk:(rank + 1) * chunk].contiguous()
-
     def save_weights(self, file, dtype, metadata):
         if metadata is not None and len(metadata) == 0:
             metadata = None
 
-        state_dict = self._state_dict_to_standard_packed_lora_keys(self.state_dict())
+        state_dict = self.state_dict()
 
         if dtype is not None:
             for key in list(state_dict.keys()):

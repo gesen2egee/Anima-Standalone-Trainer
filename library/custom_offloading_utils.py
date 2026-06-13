@@ -5,17 +5,6 @@ from typing import Any, Optional, Union, Callable, Tuple
 import torch
 import torch.nn as nn
 
-try:
-    import torch.compiler
-    disable_compiler = torch.compiler.disable
-except (ImportError, AttributeError):
-    try:
-        import torch._dynamo
-        disable_compiler = torch._dynamo.disable
-    except (ImportError, AttributeError):
-        def disable_compiler(fn):
-            return fn
-
 
 # Keep these functions here for portability, and private to avoid confusion with the ones in device_utils.py
 def _clean_memory_on_device(device: torch.device):
@@ -138,7 +127,6 @@ class Offloader:
         else:
             swap_weight_devices_no_cuda(self.device, block_to_cpu, block_to_cuda)
 
-    @disable_compiler
     def _submit_move_blocks(self, blocks, block_idx_to_cpu, block_idx_to_cuda):
         def move_blocks(bidx_to_cpu, block_to_cpu, bidx_to_cuda, block_to_cuda):
             if self.debug:
@@ -158,7 +146,6 @@ class Offloader:
             move_blocks, block_idx_to_cpu, block_to_cpu, block_idx_to_cuda, block_to_cuda
         )
 
-    @disable_compiler
     def _wait_blocks_move(self, block_idx):
         if block_idx not in self.futures:
             return
@@ -208,6 +195,9 @@ class ModelOffloader(Offloader):
                     self.remove_handles.append(handle)
 
     def set_forward_only(self, forward_only: bool):
+        # switching must wait for all pending transfers
+        for block_idx in list(self.futures.keys()):
+            self._wait_blocks_move(block_idx)
         self.forward_only = forward_only
 
     def __del__(self):
@@ -249,6 +239,10 @@ class ModelOffloader(Offloader):
 
         if self.debug:
             print(f"Prepare block devices before forward")
+
+        # wait for all pending transfers
+        for block_idx in list(self.futures.keys()):
+            self._wait_blocks_move(block_idx)
 
         for b in blocks[0 : self.num_blocks - self.blocks_to_swap]:
             b.to(self.device)

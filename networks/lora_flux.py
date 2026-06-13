@@ -141,10 +141,13 @@ class LoRAModule(torch.nn.Module):
             # rank dropout
             if self.rank_dropout is not None and self.training:
                 mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
-                if len(lx.size()) == 3:
-                    mask = mask.unsqueeze(1)  # for Text Encoder
-                elif len(lx.size()) == 4:
-                    mask = mask.unsqueeze(-1).unsqueeze(-1)  # for Conv2d
+                if isinstance(self.lora_down, torch.nn.Conv2d):
+                    # Conv2d: lora_dim is at dim 1 → [B, dim, 1, 1]
+                    mask = mask.unsqueeze(-1).unsqueeze(-1)
+                else:
+                    # Linear: lora_dim is at last dim → [B, 1, ..., 1, dim]
+                    for _ in range(len(lx.size()) - 2):
+                        mask = mask.unsqueeze(1)
                 lx = lx * mask
 
                 # scaling for rank dropout: treat as if the rank is changed
@@ -337,16 +340,18 @@ class LoRAInfModule(LoRAModule):
         weight = org_sd["weight"]
         org_dtype = weight.dtype
         org_device = weight.device
-        weight = weight.to(torch.float)  # calc in float
 
         if dtype is None:
             dtype = org_dtype
-        compute_device = org_device
+        if device is None:
+            device = org_device
+
+        weight = weight.to(torch.float).to(device)  # calc in float
 
         if self.split_dims is None:
             # get up/down weight
-            down_weight = sd["lora_down.weight"].to(torch.float).to(compute_device)
-            up_weight = sd["lora_up.weight"].to(torch.float).to(compute_device)
+            down_weight = sd["lora_down.weight"].to(torch.float).to(device)
+            up_weight = sd["lora_up.weight"].to(torch.float).to(device)
 
             # merge weight
             if len(weight.size()) == 2:
@@ -374,11 +379,11 @@ class LoRAInfModule(LoRAModule):
             total_dims = sum(self.split_dims)
             for i in range(len(self.split_dims)):
                 # get up/down weight
-                down_weight = sd[f"lora_down.{i}.weight"].to(torch.float).to(compute_device)  # (rank, in_dim)
-                up_weight = sd[f"lora_up.{i}.weight"].to(torch.float).to(compute_device)  # (split dim, rank)
+                down_weight = sd[f"lora_down.{i}.weight"].to(torch.float).to(device)  # (rank, in_dim)
+                up_weight = sd[f"lora_up.{i}.weight"].to(torch.float).to(device)  # (split dim, rank)
 
                 # pad up_weight -> (total_dims, rank)
-                padded_up_weight = torch.zeros((total_dims, up_weight.size(0)), device=compute_device, dtype=torch.float)
+                padded_up_weight = torch.zeros((total_dims, up_weight.size(0)), device=device, dtype=torch.float)
                 padded_up_weight[sum(self.split_dims[:i]) : sum(self.split_dims[: i + 1])] = up_weight
 
                 # merge weight

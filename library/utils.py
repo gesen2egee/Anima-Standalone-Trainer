@@ -1,8 +1,6 @@
 import logging
-import os
 import sys
 import threading
-import warnings
 from typing import *
 
 import torch
@@ -14,10 +12,6 @@ from diffusers.schedulers.scheduling_euler_ancestral_discrete import EulerAncest
 import cv2
 from PIL import Image
 import numpy as np
-
-# Disable PIL image size limit and ignore the decompression bomb warning
-Image.MAX_IMAGE_PIXELS = None
-warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 
 
 def fire_in_thread(f, *args, **kwargs):
@@ -53,21 +47,12 @@ def setup_logging(args=None, log_level=None, reset=False):
         else:
             return
 
-    # log_level can be set by the caller or by the args, the caller has priority. If not set, use environment variable or INFO
+    # log_level can be set by the caller or by the args, the caller has priority. If not set, use INFO
     if log_level is None and args is not None:
         log_level = args.console_log_level
     if log_level is None:
-        log_level = os.environ.get("LOG_LEVEL")
-    if log_level is None:
         log_level = "INFO"
-    log_level = getattr(logging, log_level.upper())
-
-    # In multi-GPU setup, only setup logging on the main process to avoid duplicate logs
-    # We check common environment variables for rank
-    rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")))
-    if rank != 0:
-        logging.root.setLevel(logging.ERROR) # suppress logs on other processes
-        return
+    log_level = getattr(logging, log_level)
 
     msg_init = None
     if args is not None and args.console_log_file:

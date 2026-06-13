@@ -1,9 +1,8 @@
 # Anima Model Architecture
 # Original code: NVIDIA CORPORATION & AFFILIATES, licensed under Apache-2.0
 
-import importlib
 import math
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -14,9 +13,7 @@ import torch.nn.functional as F
 
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from library import custom_offloading_utils
-from library.device_utils import clean_memory_on_device
-
+from library import custom_offloading_utils, attention
 
 
 def to_device(x, device):
@@ -40,11 +37,13 @@ def to_cpu(x):
     else:
         return x
 
+
 # Unsloth Offloaded Gradient Checkpointing
 # Based on Unsloth Zoo by Daniel Han-Chen & the Unsloth team
 try:
     from deepspeed.runtime.activation_checkpointing.checkpointing import detach_variable
 except ImportError:
+
     def detach_variable(inputs, device=None):
         """Detach tensors from computation graph, optionally moving to a device.
 
@@ -81,11 +80,11 @@ class UnslothOffloadedGradientCheckpointer(torch.autograd.Function):
     """
 
     @staticmethod
-    @torch.amp.custom_fwd(device_type='cuda')
+    @torch.amp.custom_fwd(device_type="cuda")
     def forward(ctx, forward_function, hidden_states, *args):
         # Remember the original device for backward pass (multi-GPU support)
         ctx.input_device = hidden_states.device
-        saved_hidden_states = hidden_states.to('cpu', non_blocking=True)
+        saved_hidden_states = hidden_states.to("cpu", non_blocking=True)
         with torch.no_grad():
             output = forward_function(hidden_states, *args)
         ctx.save_for_backward(saved_hidden_states)
@@ -97,7 +96,7 @@ class UnslothOffloadedGradientCheckpointer(torch.autograd.Function):
         return output
 
     @staticmethod
-    @torch.amp.custom_bwd(device_type='cuda')
+    @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, *grads):
         (hidden_states,) = ctx.saved_tensors
         hidden_states = hidden_states.to(ctx.input_device, non_blocking=True).detach()
@@ -109,8 +108,9 @@ class UnslothOffloadedGradientCheckpointer(torch.autograd.Function):
 
         output_tensors = []
         grad_tensors = []
-        for out, grad in zip(outputs if isinstance(outputs, tuple) else (outputs,),
-                             grads if isinstance(grads, tuple) else (grads,)):
+        for out, grad in zip(
+            outputs if isinstance(outputs, tuple) else (outputs,), grads if isinstance(grads, tuple) else (grads,)
+        ):
             if isinstance(out, torch.Tensor) and out.requires_grad:
                 output_tensors.append(out)
                 grad_tensors.append(grad)
@@ -122,77 +122,6 @@ class UnslothOffloadedGradientCheckpointer(torch.autograd.Function):
 def unsloth_checkpoint(function, *args):
     """Wrapper for UnslothOffloadedGradientCheckpointer."""
     return UnslothOffloadedGradientCheckpointer.apply(function, *args)
-
-
-# Flash Attention support
-#
-# Keep backend selection centralized here so the rest of the model only needs to
-# call one attention wrapper. We currently prefer FA3 when available, then fall
-# back to FA2. This keeps the integration easy to extend later if we decide to
-# add FA4 support here as well.
-def _load_flash_attn_backend():
-    try:
-        flash_attn_interface = importlib.import_module("flash_attn_interface")
-        return "fa3", flash_attn_interface.flash_attn_func
-    except ImportError:
-        pass
-
-    try:
-        from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_func
-
-        return "fa2", flash_attn_func
-    except ImportError:
-        return None, None
-
-
-FLASH_ATTN_BACKEND, _flash_attn_func = _load_flash_attn_backend()
-FLASH_ATTN_AVAILABLE = _flash_attn_func is not None
-
-# SageAttention support
-try:
-    from sageattention import sageattn as _sage_attn_func
-    SAGE_ATTN_AVAILABLE = True
-except ImportError:
-    _sage_attn_func = None
-    SAGE_ATTN_AVAILABLE = False
-
-
-def sage_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H_D: torch.Tensor) -> torch.Tensor:
-    """Computes multi-head attention using SageAttention.
-    
-    Input format: (batch, seq_len, n_heads, head_dim)
-    Output format: (batch, seq_len, n_heads * head_dim)
-    """
-    # SageAttention expects HND layout: (batch, n_heads, seq_len, head_dim)
-    q = q_B_S_H_D.permute(0, 2, 1, 3).contiguous()
-    k = k_B_S_H_D.permute(0, 2, 1, 3).contiguous()
-    v = v_B_S_H_D.permute(0, 2, 1, 3).contiguous()
-    
-    softmax_scale = 1.0 / math.sqrt(q.shape[-1])
-    
-    # Run SageAttention
-    out = _sage_attn_func(q, k, v, tensor_layout="HND", is_causal=False, sm_scale=softmax_scale)
-    
-    # Reshape back to (batch, seq_len, n_heads, head_dim)
-    out = out.permute(0, 2, 1, 3)
-    return rearrange(out, "b s h d -> b s (h d)")
-
-
-def flash_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H_D: torch.Tensor) -> torch.Tensor:
-    """Computes multi-head attention using Flash Attention, with automatic fallback ONLY on missing kernel.
-
-    Input format: (batch, seq_len, n_heads, head_dim)
-    Output format: (batch, seq_len, n_heads * head_dim) — matches torch_attention_op output.
-    """
-    try:
-        # The backend is selected once at import time.
-        out = _flash_attn_func(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D)
-        return rearrange(out, "b s h d -> b s (h d)")
-    except RuntimeError as e:
-        # Robust fallback if the Flash Attention kernel image is missing for this specific GPU
-        if "no kernel image is available" in str(e):
-            return torch_attention_op(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D)
-        raise e
 
 
 from .utils import setup_logging
@@ -226,14 +155,10 @@ def _apply_rotary_pos_emb_base(
 
     if start_positions is not None:
         max_offset = torch.max(start_positions)
-        assert (
-            max_offset + cur_seq_len <= max_seq_len
-        ), f"Rotary Embeddings only supported up to {max_seq_len} sequence length!"
+        assert max_offset + cur_seq_len <= max_seq_len, f"Rotary Embeddings only supported up to {max_seq_len} sequence length!"
         freqs = torch.concatenate([freqs[i : i + cur_seq_len] for i in start_positions], dim=1)
 
-    assert (
-        cur_seq_len <= max_seq_len
-    ), f"Rotary Embeddings only supported up to {max_seq_len} sequence length!"
+    assert cur_seq_len <= max_seq_len, f"Rotary Embeddings only supported up to {max_seq_len} sequence length!"
     freqs = freqs[:cur_seq_len]
 
     if tensor_format == "bshd":
@@ -257,13 +182,9 @@ def apply_rotary_pos_emb(
     cu_seqlens: Union[torch.Tensor, None] = None,
     cp_size: int = 1,
 ) -> torch.Tensor:
-    assert not (
-        cp_size > 1 and start_positions is not None
-    ), "start_positions != None with CP SIZE > 1 is not supported!"
+    assert not (cp_size > 1 and start_positions is not None), "start_positions != None with CP SIZE > 1 is not supported!"
 
-    assert (
-        tensor_format != "thd" or cu_seqlens is not None
-    ), "cu_seqlens must not be None when tensor_format is 'thd'."
+    assert tensor_format != "thd" or cu_seqlens is not None, "cu_seqlens must not be None when tensor_format is 'thd'."
 
     assert fused == False
 
@@ -275,9 +196,7 @@ def apply_rotary_pos_emb(
                 _apply_rotary_pos_emb_base(
                     x.unsqueeze(1),
                     freqs,
-                    start_positions=(
-                        start_positions[idx : idx + 1] if start_positions is not None else None
-                    ),
+                    start_positions=(start_positions[idx : idx + 1] if start_positions is not None else None),
                     interleaved=interleaved,
                 )
                 for idx, x in enumerate(torch.split(t, seqlens))
@@ -314,10 +233,10 @@ class RMSNorm(torch.nn.Module):
     def _norm(self, x: torch.Tensor) -> torch.Tensor:
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    @torch.amp.autocast(device_type='cuda', dtype=torch.float32)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32):
+            output = self._norm(x.float()).type_as(x)
+            return output * self.weight
 
 
 class GPT2FeedForward(nn.Module):
@@ -348,22 +267,6 @@ class GPT2FeedForward(nn.Module):
         x = self.activation(x)
         x = self.layer2(x)
         return x
-
-
-def torch_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H_D: torch.Tensor) -> torch.Tensor:
-    """Computes multi-head attention using PyTorch's native scaled_dot_product_attention.
-
-    Input/output format: (batch, seq_len, n_heads, head_dim)
-    """
-    in_q_shape = q_B_S_H_D.shape
-    in_k_shape = k_B_S_H_D.shape
-    q_B_H_S_D = rearrange(q_B_S_H_D, "b ... h k -> b h ... k").view(in_q_shape[0], in_q_shape[-2], -1, in_q_shape[-1])
-    k_B_H_S_D = rearrange(k_B_S_H_D, "b ... h v -> b h ... v").view(in_k_shape[0], in_k_shape[-2], -1, in_k_shape[-1])
-    v_B_H_S_D = rearrange(v_B_S_H_D, "b ... h v -> b h ... v").view(in_k_shape[0], in_k_shape[-2], -1, in_k_shape[-1])
-    result_B_S_HD = rearrange(
-        F.scaled_dot_product_attention(q_B_H_S_D, k_B_H_S_D, v_B_H_S_D), "b h ... l -> b ... (h l)"
-    )
-    return result_B_S_HD
 
 
 # Attention module for DiT
@@ -405,8 +308,6 @@ class Attention(nn.Module):
 
         self.output_proj = nn.Linear(inner_dim, query_dim, bias=False)
         self.output_dropout = nn.Dropout(dropout) if dropout > 1e-4 else nn.Identity()
-
-        self.attn_op = torch_attention_op
 
         self._query_dim = query_dim
         self._context_dim = context_dim
@@ -451,18 +352,25 @@ class Attention(nn.Module):
 
         return q, k, v
 
-    def compute_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        result = self.attn_op(q, k, v)  # [B, S, H, D]
-        return self.output_dropout(self.output_proj(result))
-
     def forward(
         self,
         x: torch.Tensor,
+        attn_params: attention.AttentionParams,
         context: Optional[torch.Tensor] = None,
         rope_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         q, k, v = self.compute_qkv(x, context, rope_emb=rope_emb)
-        return self.compute_attention(q, k, v)
+        if q.dtype != v.dtype:
+            if (not attn_params.supports_fp32 or attn_params.requires_same_dtype) and torch.is_autocast_enabled():
+                # FlashAttention requires fp16/bf16, xformers require same dtype; only cast when autocast is active.
+                target_dtype = v.dtype  # v has fp16/bf16 dtype
+                q = q.to(target_dtype)
+                k = k.to(target_dtype)
+        # return self.compute_attention(q, k, v)
+        qkv = [q, k, v]
+        del q, k, v
+        result = attention.attention(qkv, attn_params=attn_params)
+        return self.output_dropout(self.output_proj(result))
 
 
 # Positional Embeddings
@@ -536,12 +444,8 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
         dim_t = self._dim_t
 
         self.seq = torch.arange(max(self.max_h, self.max_w, self.max_t)).float().to(self.dim_spatial_range.device)
-        self.dim_spatial_range = (
-            torch.arange(0, dim_h, 2)[: (dim_h // 2)].float().to(self.dim_spatial_range.device) / dim_h
-        )
-        self.dim_temporal_range = (
-            torch.arange(0, dim_t, 2)[: (dim_t // 2)].float().to(self.dim_spatial_range.device) / dim_t
-        )
+        self.dim_spatial_range = torch.arange(0, dim_h, 2)[: (dim_h // 2)].float().to(self.dim_spatial_range.device) / dim_h
+        self.dim_temporal_range = torch.arange(0, dim_t, 2)[: (dim_t // 2)].float().to(self.dim_spatial_range.device) / dim_t
 
     def generate_embeddings(
         self,
@@ -716,31 +620,30 @@ class TimestepEmbedding(nn.Module):
         return emb_B_T_D, adaln_lora_B_T_3D
 
 
-class FourierFeatures(nn.Module):
-    """Fourier feature transform: [B] -> [B, D]."""
+# Commented out Fourier Features (not used in Anima). Kept for reference.
+# class FourierFeatures(nn.Module):
+#     """Fourier feature transform: [B] -> [B, D]."""
 
-    def __init__(self, num_channels: int, bandwidth: int = 1, normalize: bool = False):
-        super().__init__()
-        self.register_buffer("freqs", 2 * np.pi * bandwidth * torch.randn(num_channels), persistent=True)
-        self.register_buffer("phases", 2 * np.pi * torch.rand(num_channels), persistent=True)
-        self.gain = np.sqrt(2) if normalize else 1
-        self.bandwidth = bandwidth
-        self.num_channels = num_channels
-        self.reset_parameters()
+#     def __init__(self, num_channels: int, bandwidth: int = 1, normalize: bool = False):
+#         super().__init__()
+#         self.register_buffer("freqs", 2 * np.pi * bandwidth * torch.randn(num_channels), persistent=True)
+#         self.register_buffer("phases", 2 * np.pi * torch.rand(num_channels), persistent=True)
+#         self.gain = np.sqrt(2) if normalize else 1
+#         self.bandwidth = bandwidth
+#         self.num_channels = num_channels
+#         self.reset_parameters()
 
-    def reset_parameters(self) -> None:
-        generator = torch.Generator()
-        generator.manual_seed(0)
-        self.freqs = (
-            2 * np.pi * self.bandwidth * torch.randn(self.num_channels, generator=generator).to(self.freqs.device)
-        )
-        self.phases = 2 * np.pi * torch.rand(self.num_channels, generator=generator).to(self.freqs.device)
+#     def reset_parameters(self) -> None:
+#         generator = torch.Generator()
+#         generator.manual_seed(0)
+#         self.freqs = 2 * np.pi * self.bandwidth * torch.randn(self.num_channels, generator=generator).to(self.freqs.device)
+#         self.phases = 2 * np.pi * torch.rand(self.num_channels, generator=generator).to(self.freqs.device)
 
-    def forward(self, x: torch.Tensor, gain: float = 1.0) -> torch.Tensor:
-        in_dtype = x.dtype
-        x = x.to(torch.float32).ger(self.freqs.to(torch.float32)).add(self.phases.to(torch.float32))
-        x = x.cos().mul(self.gain * gain).to(in_dtype)
-        return x
+#     def forward(self, x: torch.Tensor, gain: float = 1.0) -> torch.Tensor:
+#         in_dtype = x.dtype
+#         x = x.to(torch.float32).ger(self.freqs.to(torch.float32)).add(self.phases.to(torch.float32))
+#         x = x.cos().mul(self.gain * gain).to(in_dtype)
+#         return x
 
 
 # Patch Embedding
@@ -765,9 +668,7 @@ class PatchEmbed(nn.Module):
                 m=spatial_patch_size,
                 n=spatial_patch_size,
             ),
-            nn.Linear(
-                in_channels * spatial_patch_size * spatial_patch_size * temporal_patch_size, out_channels, bias=False
-            ),
+            nn.Linear(in_channels * spatial_patch_size * spatial_patch_size * temporal_patch_size, out_channels, bias=False),
         )
         self.dim = in_channels * spatial_patch_size * spatial_patch_size * temporal_patch_size
 
@@ -788,7 +689,6 @@ class PatchEmbed(nn.Module):
         return x
 
 
-# torch>=2.4 added device_type arg; older builds only have zero-arg.
 try:
     torch.is_autocast_enabled("cuda")
     _is_autocast_enabled_for_device = torch.is_autocast_enabled
@@ -798,19 +698,12 @@ except TypeError:
 
 
 def _is_forward_patched(module: nn.Module) -> bool:
-    """True if module.forward is overridden (instance dict or subclass);
-    bypassing it with F.linear would drop e.g. LoRA deltas."""
     if "forward" in module.__dict__:
         return True
     return type(module).forward is not nn.Linear.forward
 
 
 def _run_adaln_modulation_fp32(modulation: nn.Sequential, x: torch.Tensor) -> torch.Tensor:
-    """Run an AdaLN modulation Sequential, returning fp32.
-
-    Stock Linears: F.linear with fp32 weights -> real fp32 matmul. Patched
-    Linears (LoRA): go through forward to keep the delta; matmul stays fp16.
-    """
     out = x
     for module in modulation:
         if isinstance(module, nn.Linear):
@@ -833,11 +726,6 @@ def _modulate_adaln(
     n_chunks: int,
     do_fp32: bool,
 ) -> Tuple[torch.Tensor, ...]:
-    """Run an AdaLN modulation, optionally in fp32, and chunk the result.
-
-    do_fp32 needs an outer autocast(fp16) to downcast back; lora_addend, if
-    given, must already match the modulation output dtype.
-    """
     if do_fp32:
         with torch.amp.autocast(device_type=emb.device.type, enabled=False):
             out = _run_adaln_modulation_fp32(modulation, emb)
@@ -879,9 +767,7 @@ class FinalLayer(nn.Module):
                 nn.Linear(adaln_lora_dim, self.n_adaln_chunks * hidden_size, bias=False),
             )
         else:
-            self.adaln_modulation = nn.Sequential(
-                nn.SiLU(), nn.Linear(hidden_size, self.n_adaln_chunks * hidden_size, bias=False)
-            )
+            self.adaln_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, self.n_adaln_chunks * hidden_size, bias=False))
 
         self.init_weights()
 
@@ -903,7 +789,6 @@ class FinalLayer(nn.Module):
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
         use_fp32: bool = False,
     ):
-        # Skip fp32 when no outer autocast; do_sample disables it and would crash.
         do_fp32 = use_fp32 and _is_autocast_enabled_for_device(x_B_T_H_W_D.device.type)
 
         if self.use_adaln_lora:
@@ -955,7 +840,11 @@ class Block(nn.Module):
 
         self.layer_norm_cross_attn = nn.LayerNorm(x_dim, elementwise_affine=False, eps=1e-6)
         self.cross_attn = Attention(
-            x_dim, context_dim, num_heads, x_dim // num_heads, qkv_format="bshd",
+            x_dim,
+            context_dim,
+            num_heads,
+            x_dim // num_heads,
+            qkv_format="bshd",
         )
 
         self.layer_norm_mlp = nn.LayerNorm(x_dim, elementwise_affine=False, eps=1e-6)
@@ -1026,13 +915,12 @@ class Block(nn.Module):
         x_B_T_H_W_D: torch.Tensor,
         emb_B_T_D: torch.Tensor,
         crossattn_emb: torch.Tensor,
+        attn_params: attention.AttentionParams,
+        use_fp32: bool = False,
         rope_emb_L_1_1_D: Optional[torch.Tensor] = None,
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
         extra_per_block_pos_emb: Optional[torch.Tensor] = None,
-        use_fp32: bool = False,
     ) -> torch.Tensor:
-        # fp32 promotion only when an outer autocast(fp16) is active to downcast
-        # back; do_sample disables autocast and would crash without this gate.
         do_fp32 = use_fp32 and _is_autocast_enabled_for_device(x_B_T_H_W_D.device.type)
 
         if do_fp32:
@@ -1080,11 +968,14 @@ class Block(nn.Module):
         result = rearrange(
             self.self_attn(
                 rearrange(normalized_x, "b t h w d -> b (t h w) d"),
+                attn_params,
                 None,
                 rope_emb=rope_emb_L_1_1_D,
             ),
             "b (t h w) d -> b t h w d",
-            t=T, h=H, w=W,
+            t=T,
+            h=H,
+            w=W,
         )
         x_B_T_H_W_D = x_B_T_H_W_D + gate_self_attn_B_T_1_1_D * result
 
@@ -1093,11 +984,14 @@ class Block(nn.Module):
         result = rearrange(
             self.cross_attn(
                 rearrange(normalized_x, "b t h w d -> b (t h w) d"),
+                attn_params,
                 crossattn_emb,
                 rope_emb=rope_emb_L_1_1_D,
             ),
             "b (t h w) d -> b t h w d",
-            t=T, h=H, w=W,
+            t=T,
+            h=H,
+            w=W,
         )
         x_B_T_H_W_D = result * gate_cross_attn_B_T_1_1_D + x_B_T_H_W_D
 
@@ -1113,63 +1007,85 @@ class Block(nn.Module):
         x_B_T_H_W_D: torch.Tensor,
         emb_B_T_D: torch.Tensor,
         crossattn_emb: torch.Tensor,
+        attn_params: attention.AttentionParams,
+        use_fp32: bool = False,
         rope_emb_L_1_1_D: Optional[torch.Tensor] = None,
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
         extra_per_block_pos_emb: Optional[torch.Tensor] = None,
-        use_fp32: bool = False,
     ) -> torch.Tensor:
         if self.training and self.gradient_checkpointing:
             if self.unsloth_offload_checkpointing:
                 # Unsloth: async non-blocking CPU RAM offload (fastest offload method)
                 return unsloth_checkpoint(
                     self._forward,
-                    x_B_T_H_W_D, emb_B_T_D, crossattn_emb,
-                    rope_emb_L_1_1_D, adaln_lora_B_T_3D, extra_per_block_pos_emb,
+                    x_B_T_H_W_D,
+                    emb_B_T_D,
+                    crossattn_emb,
+                    attn_params,
                     use_fp32,
+                    rope_emb_L_1_1_D,
+                    adaln_lora_B_T_3D,
+                    extra_per_block_pos_emb,
                 )
             elif self.cpu_offload_checkpointing:
                 # Standard cpu offload: blocking transfers
                 def create_custom_forward(func):
                     def custom_forward(*inputs):
-                        device = next(
-                            (t.device for t in inputs if isinstance(t, torch.Tensor) and t.device.type != 'cpu'),
-                            torch.device('cuda'),
-                        )
+                        # Determine original device from first tensor input
+                        device = next(t.device for t in inputs if isinstance(t, torch.Tensor))
                         device_inputs = to_device(inputs, device)
                         outputs = func(*device_inputs)
                         return to_cpu(outputs)
+
                     return custom_forward
 
                 return torch_checkpoint(
                     create_custom_forward(self._forward),
-                    x_B_T_H_W_D, emb_B_T_D, crossattn_emb,
-                    rope_emb_L_1_1_D, adaln_lora_B_T_3D, extra_per_block_pos_emb,
+                    x_B_T_H_W_D,
+                    emb_B_T_D,
+                    crossattn_emb,
+                    attn_params,
                     use_fp32,
+                    rope_emb_L_1_1_D,
+                    adaln_lora_B_T_3D,
+                    extra_per_block_pos_emb,
                     use_reentrant=False,
                 )
             else:
                 # Standard gradient checkpointing (no offload)
                 return torch_checkpoint(
                     self._forward,
-                    x_B_T_H_W_D, emb_B_T_D, crossattn_emb,
-                    rope_emb_L_1_1_D, adaln_lora_B_T_3D, extra_per_block_pos_emb,
-                    use_fp32=use_fp32,
+                    x_B_T_H_W_D,
+                    emb_B_T_D,
+                    crossattn_emb,
+                    attn_params,
+                    use_fp32,
+                    rope_emb_L_1_1_D,
+                    adaln_lora_B_T_3D,
+                    extra_per_block_pos_emb,
                     use_reentrant=False,
                 )
         else:
             return self._forward(
-                x_B_T_H_W_D, emb_B_T_D, crossattn_emb,
-                rope_emb_L_1_1_D, adaln_lora_B_T_3D, extra_per_block_pos_emb,
-                use_fp32=use_fp32,
+                x_B_T_H_W_D,
+                emb_B_T_D,
+                crossattn_emb,
+                attn_params,
+                use_fp32,
+                rope_emb_L_1_1_D,
+                adaln_lora_B_T_3D,
+                extra_per_block_pos_emb,
             )
 
 
-# Main DiT Model: MiniTrainDIT
-class MiniTrainDIT(nn.Module):
+# Main DiT Model: MiniTrainDIT (renamed to Anima)
+class Anima(nn.Module):
     """Cosmos-Predict2 DiT model for image/video generation.
 
     28 transformer blocks with AdaLN-LoRA modulation, 3D RoPE, and optional LLM Adapter.
     """
+
+    LATENT_CHANNELS = 16
 
     def __init__(
         self,
@@ -1202,6 +1118,8 @@ class MiniTrainDIT(nn.Module):
         extra_t_extrapolation_ratio: float = 1.0,
         rope_enable_fps_modulation: bool = True,
         use_llm_adapter: bool = False,
+        attn_mode: str = "torch",
+        split_attn: bool = False,
     ) -> None:
         super().__init__()
         self.max_img_h = max_img_h
@@ -1230,12 +1148,12 @@ class MiniTrainDIT(nn.Module):
         self.rope_enable_fps_modulation = rope_enable_fps_modulation
         self.use_llm_adapter = use_llm_adapter
 
+        self.attn_mode = attn_mode
+        self.split_attn = split_attn
+
         # Block swap support
         self.blocks_to_swap = None
         self.offloader: Optional[custom_offloading_utils.ModelOffloader] = None
-
-        # Multi-GPU sharding flag: set True only when blocks are distributed across GPUs
-        self._is_multi_gpu_sharded = False
 
         self.build_patch_embed()
         self.build_pos_embed()
@@ -1292,7 +1210,6 @@ class MiniTrainDIT(nn.Module):
         self.final_layer.init_weights()
         self.t_embedding_norm.reset_parameters()
 
-
     def enable_gradient_checkpointing(self, cpu_offload: bool = False, unsloth_offload: bool = False):
         for block in self.blocks:
             block.enable_gradient_checkpointing(cpu_offload=cpu_offload, unsloth_offload=unsloth_offload)
@@ -1305,26 +1222,9 @@ class MiniTrainDIT(nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-
-    def set_flash_attn(self, use_flash_attn: bool):
-        """Toggle flash attention for all DiT blocks."""
-        if use_flash_attn and not FLASH_ATTN_AVAILABLE:
-            raise ImportError("flash_attn package is required for --flash_attn but is not installed")
-        if use_flash_attn:
-            logger.info(f"Using Flash Attention backend: {FLASH_ATTN_BACKEND}")
-        attn_op = flash_attention_op if use_flash_attn else torch_attention_op
-        for block in self.blocks:
-            block.self_attn.attn_op = attn_op
-            block.cross_attn.attn_op = attn_op
-
-    def set_sage_attn(self, use_sage_attn: bool):
-        """Toggle sage attention for all DiT blocks."""
-        if use_sage_attn and not SAGE_ATTN_AVAILABLE:
-            raise ImportError("sageattention package is required for --sage_attn but is not installed")
-        attn_op = sage_attention_op if use_sage_attn else torch_attention_op
-        for block in self.blocks:
-            block.self_attn.attn_op = attn_op
-            block.cross_attn.attn_op = attn_op
+    @property
+    def dtype(self):
+        return next(self.parameters()).dtype
 
     def build_patch_embed(self) -> None:
         in_channels = self.in_channels + 1 if self.concat_padding_mask else self.in_channels
@@ -1376,9 +1276,7 @@ class MiniTrainDIT(nn.Module):
             padding_mask = transforms.functional.resize(
                 padding_mask, list(x_B_C_T_H_W.shape[-2:]), interpolation=transforms.InterpolationMode.NEAREST
             )
-            x_B_C_T_H_W = torch.cat(
-                [x_B_C_T_H_W, padding_mask.unsqueeze(1).repeat(1, 1, x_B_C_T_H_W.shape[2], 1, 1)], dim=1
-            )
+            x_B_C_T_H_W = torch.cat([x_B_C_T_H_W, padding_mask.unsqueeze(1).repeat(1, 1, x_B_C_T_H_W.shape[2], 1, 1)], dim=1)
         x_B_T_H_W_D = self.x_embedder(x_B_C_T_H_W)
 
         if self.extra_per_block_abs_pos_emb:
@@ -1402,7 +1300,6 @@ class MiniTrainDIT(nn.Module):
         )
         return x_B_C_Tt_Hp_Wp
 
-
     def enable_block_swap(self, num_blocks: int, device: torch.device):
         self.blocks_to_swap = num_blocks
 
@@ -1410,9 +1307,7 @@ class MiniTrainDIT(nn.Module):
             self.blocks_to_swap <= self.num_blocks - 2
         ), f"Cannot swap more than {self.num_blocks - 2} blocks. Requested: {self.blocks_to_swap} blocks."
 
-        self.offloader = custom_offloading_utils.ModelOffloader(
-            self.blocks, self.blocks_to_swap, device
-        )
+        self.offloader = custom_offloading_utils.ModelOffloader(self.blocks, self.blocks_to_swap, device)
         logger.info(f"Anima: Block swap enabled. Swapping {num_blocks} blocks, total blocks: {self.num_blocks}, device: {device}.")
 
     def move_to_device_except_swap_blocks(self, device: torch.device):
@@ -1426,12 +1321,26 @@ class MiniTrainDIT(nn.Module):
         if self.blocks_to_swap:
             self.blocks = save_blocks
 
+    def switch_block_swap_for_inference(self):
+        if self.blocks_to_swap is None or self.blocks_to_swap == 0:
+            return
+        self.offloader.set_forward_only(True)
+        self.prepare_block_swap_before_forward()
+        print(f"Anima: Block swap set to forward only.")
+
+    def switch_block_swap_for_training(self):
+        if self.blocks_to_swap is None or self.blocks_to_swap == 0:
+            return
+        self.offloader.set_forward_only(False)
+        self.prepare_block_swap_before_forward()
+        print(f"Anima: Block swap set to forward and backward.")
+
     def prepare_block_swap_before_forward(self):
         if self.blocks_to_swap is None or self.blocks_to_swap == 0:
             return
         self.offloader.prepare_block_devices_before_forward(self.blocks)
 
-    def forward(
+    def forward_mini_train_dit(
         self,
         x_B_C_T_H_W: torch.Tensor,
         timesteps_B_T: torch.Tensor,
@@ -1454,7 +1363,7 @@ class MiniTrainDIT(nn.Module):
             t5_attn_mask: Optional T5 attention mask
         """
         # Run LLM adapter inside forward for correct DDP gradient synchronization
-        if t5_input_ids is not None and self.use_llm_adapter and hasattr(self, 'llm_adapter'):
+        if t5_input_ids is not None and self.use_llm_adapter and hasattr(self, "llm_adapter"):
             crossattn_emb = self.llm_adapter(
                 source_hidden_states=crossattn_emb,
                 target_input_ids=t5_input_ids,
@@ -1481,94 +1390,53 @@ class MiniTrainDIT(nn.Module):
             "extra_per_block_pos_emb": extra_pos_emb,
         }
 
-        # SP: scatter x along H dim so each TP rank processes S/tp tokens per block.
-        # _tp_sp_group is set externally by the TP trainer after sharding.
-        # Not set in regular training → this block is completely skipped.
-        _sp_group = getattr(self, '_tp_sp_group', None)
-        _sp_h_pad = 0  # tracks how many H rows we padded for TP divisibility
-        if _sp_group is not None:
-            from wd_parallel.collectives import _split_along_dim
-            tp_size = _sp_group.size()
-            H_orig = x_B_T_H_W_D.shape[2]
-            if H_orig % tp_size != 0:
-                # Pad H to the next multiple of tp_size so the scatter produces
-                # equal-sized chunks on all ranks.  Without padding, floor/ceil
-                # split makes allgather inputs different sizes, causing
-                # cudaErrorInvalidValue from out-of-bounds SHM reads.
-                _sp_h_pad = tp_size - (H_orig % tp_size)
-                x_B_T_H_W_D = torch.nn.functional.pad(
-                    x_B_T_H_W_D, (0, 0, 0, 0, 0, _sp_h_pad))
-                if block_kwargs["extra_per_block_pos_emb"] is not None:
-                    block_kwargs["extra_per_block_pos_emb"] = torch.nn.functional.pad(
-                        block_kwargs["extra_per_block_pos_emb"], (0, 0, 0, 0, 0, _sp_h_pad))
-                # ColumnParallelLinear with SP all-gathers the sequence before the
-                # q/k/v matmuls, so RoPE sees the full padded length T*H_padded*W.
-                # Extend the RoPE table to cover the extra pad positions (zero-fill
-                # is fine — pad tokens are masked out / discarded after allgather).
-                if block_kwargs["rope_emb_L_1_1_D"] is not None:
-                    T_val = x_B_T_H_W_D.shape[1]
-                    W_val = x_B_T_H_W_D.shape[3]
-                    rope_extra = T_val * _sp_h_pad * W_val
-                    block_kwargs["rope_emb_L_1_1_D"] = torch.nn.functional.pad(
-                        block_kwargs["rope_emb_L_1_1_D"], (0, 0, 0, 0, 0, 0, 0, rope_extra))
-            x_B_T_H_W_D = _split_along_dim(x_B_T_H_W_D, _sp_group, seq_dim=2)
-            if block_kwargs["extra_per_block_pos_emb"] is not None:
-                block_kwargs["extra_per_block_pos_emb"] = _split_along_dim(
-                    block_kwargs["extra_per_block_pos_emb"], _sp_group, seq_dim=2
-                )
+        attn_params = attention.AttentionParams.create_attention_params(self.attn_mode, self.split_attn)
 
-        # Only promote fp16; bf16 has range.
+        # Determine whether to use float32 for block computations based on input dtype (use float32 for better stability when input is float16)
         use_fp32 = x_B_T_H_W_D.dtype == torch.float16
 
         for block_idx, block in enumerate(self.blocks):
             if self.blocks_to_swap:
                 self.offloader.wait_for_block(block_idx)
 
-            # Multi-GPU sharding: move tensors to block's device if needed
-            if self._is_multi_gpu_sharded:
-                block_device = next(block.parameters()).device
-                if x_B_T_H_W_D.device != block_device:
-                    x_B_T_H_W_D = x_B_T_H_W_D.to(block_device)
-                    t_embedding_B_T_D = t_embedding_B_T_D.to(block_device)
-                    crossattn_emb = crossattn_emb.to(block_device)
-                    if block_kwargs["rope_emb_L_1_1_D"] is not None:
-                        block_kwargs["rope_emb_L_1_1_D"] = block_kwargs["rope_emb_L_1_1_D"].to(block_device)
-                    if block_kwargs["adaln_lora_B_T_3D"] is not None:
-                        block_kwargs["adaln_lora_B_T_3D"] = block_kwargs["adaln_lora_B_T_3D"].to(block_device)
-                    if block_kwargs["extra_per_block_pos_emb"] is not None:
-                        block_kwargs["extra_per_block_pos_emb"] = block_kwargs["extra_per_block_pos_emb"].to(block_device)
-
-            x_B_T_H_W_D = block(
-                x_B_T_H_W_D,
-                t_embedding_B_T_D,
-                crossattn_emb,
-                use_fp32=use_fp32,
-                **block_kwargs,
-            )
+            x_B_T_H_W_D = block(x_B_T_H_W_D, t_embedding_B_T_D, crossattn_emb, attn_params, use_fp32, **block_kwargs)
 
             if self.blocks_to_swap:
                 self.offloader.submit_move_blocks(self.blocks, block_idx)
 
-        # SP: gather H dim back to full sequence before final_layer (which is replicated).
-        if _sp_group is not None:
-            from wd_parallel.collectives import gather_from_sp_region
-            x_B_T_H_W_D = gather_from_sp_region(x_B_T_H_W_D, _sp_group, seq_dim=2)
-            if _sp_h_pad > 0:
-                x_B_T_H_W_D = x_B_T_H_W_D[:, :, :H_orig, :, :]
-
-        # Move to final layer device if needed (multi-GPU sharding only)
-        if self._is_multi_gpu_sharded:
-            final_device = next(self.final_layer.parameters()).device
-            if x_B_T_H_W_D.device != final_device:
-                x_B_T_H_W_D = x_B_T_H_W_D.to(final_device)
-            if t_embedding_B_T_D.device != final_device:
-                t_embedding_B_T_D = t_embedding_B_T_D.to(final_device)
-            if adaln_lora_B_T_3D is not None and adaln_lora_B_T_3D.device != final_device:
-                adaln_lora_B_T_3D = adaln_lora_B_T_3D.to(final_device)
-
         x_B_T_H_W_O = self.final_layer(x_B_T_H_W_D, t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D, use_fp32=use_fp32)
         x_B_C_Tt_Hp_Wp = self.unpatchify(x_B_T_H_W_O)
         return x_B_C_Tt_Hp_Wp
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        context: Optional[torch.Tensor] = None,
+        fps: Optional[torch.Tensor] = None,
+        padding_mask: Optional[torch.Tensor] = None,
+        target_input_ids: Optional[torch.Tensor] = None,
+        target_attention_mask: Optional[torch.Tensor] = None,
+        source_attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        context = self._preprocess_text_embeds(context, target_input_ids, target_attention_mask, source_attention_mask)
+        return self.forward_mini_train_dit(x, timesteps, context, fps=fps, padding_mask=padding_mask, **kwargs)
+
+    def _preprocess_text_embeds(
+        self, source_hidden_states, target_input_ids, target_attention_mask=None, source_attention_mask=None
+    ):
+        if target_input_ids is not None:
+            context = self.llm_adapter(
+                source_hidden_states,
+                target_input_ids,
+                target_attention_mask=target_attention_mask,
+                source_attention_mask=source_attention_mask,
+            )
+            context[~target_attention_mask.bool()] = 0  # zero out padding tokens
+            return context
+        else:
+            return source_hidden_states
 
 
 # LLM Adapter: Bridges Qwen3 embeddings to T5-compatible space
@@ -1700,24 +1568,37 @@ class LLMAdapterTransformerBlock(nn.Module):
 
         self.norm_mlp = nn.LayerNorm(model_dim) if layer_norm else LLMAdapterRMSNorm(model_dim)
         self.mlp = nn.Sequential(
-            nn.Linear(model_dim, int(model_dim * mlp_ratio)),
-            nn.GELU(),
-            nn.Linear(int(model_dim * mlp_ratio), model_dim)
+            nn.Linear(model_dim, int(model_dim * mlp_ratio)), nn.GELU(), nn.Linear(int(model_dim * mlp_ratio), model_dim)
         )
 
-    def forward(self, x, context, target_attention_mask=None, source_attention_mask=None,
-                position_embeddings=None, position_embeddings_context=None):
+    def forward(
+        self,
+        x,
+        context,
+        target_attention_mask=None,
+        source_attention_mask=None,
+        position_embeddings=None,
+        position_embeddings_context=None,
+    ):
         if self.has_self_attn:
+            # Self-attention: target_attention_mask is not expected to be all zeros
             normed = self.norm_self_attn(x)
-            attn_out = self.self_attn(normed, mask=target_attention_mask,
-                                      position_embeddings=position_embeddings,
-                                      position_embeddings_context=position_embeddings)
+            attn_out = self.self_attn(
+                normed,
+                mask=target_attention_mask,
+                position_embeddings=position_embeddings,
+                position_embeddings_context=position_embeddings,
+            )
             x = x + attn_out
 
         normed = self.norm_cross_attn(x)
-        attn_out = self.cross_attn(normed, mask=source_attention_mask, context=context,
-                                   position_embeddings=position_embeddings,
-                                   position_embeddings_context=position_embeddings_context)
+        attn_out = self.cross_attn(
+            normed,
+            mask=source_attention_mask,
+            context=context,
+            position_embeddings=position_embeddings,
+            position_embeddings_context=position_embeddings_context,
+        )
         x = x + attn_out
 
         x = x + self.mlp(self.norm_mlp(x))
@@ -1733,8 +1614,9 @@ class LLMAdapter(nn.Module):
     Uses T5 token IDs as target input, embeds them, and cross-attends to Qwen3 hidden states.
     """
 
-    def __init__(self, source_dim, target_dim, model_dim, num_layers=6, num_heads=16,
-                 embed=None, self_attn=False, layer_norm=False):
+    def __init__(
+        self, source_dim, target_dim, model_dim, num_layers=6, num_heads=16, embed=None, self_attn=False, layer_norm=False
+    ):
         super().__init__()
         if embed is not None:
             self.embed = nn.Embedding.from_pretrained(embed.weight)
@@ -1745,11 +1627,12 @@ class LLMAdapter(nn.Module):
         else:
             self.in_proj = nn.Identity()
         self.rotary_emb = AdapterRotaryEmbedding(model_dim // num_heads)
-        self.blocks = nn.ModuleList([
-            LLMAdapterTransformerBlock(source_dim, model_dim, num_heads=num_heads,
-                                       self_attn=self_attn, layer_norm=layer_norm)
-            for _ in range(num_layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                LLMAdapterTransformerBlock(source_dim, model_dim, num_heads=num_heads, self_attn=self_attn, layer_norm=layer_norm)
+                for _ in range(num_layers)
+            ]
+        )
         self.out_proj = nn.Linear(model_dim, target_dim)
         self.norm = LLMAdapterRMSNorm(target_dim)
 
@@ -1771,75 +1654,67 @@ class LLMAdapter(nn.Module):
         position_embeddings = self.rotary_emb(x, position_ids)
         position_embeddings_context = self.rotary_emb(x, position_ids_context)
         for block in self.blocks:
-            x = block(x, context, target_attention_mask=target_attention_mask,
-                      source_attention_mask=source_attention_mask,
-                      position_embeddings=position_embeddings,
-                      position_embeddings_context=position_embeddings_context)
+            x = block(
+                x,
+                context,
+                target_attention_mask=target_attention_mask,
+                source_attention_mask=source_attention_mask,
+                position_embeddings=position_embeddings,
+                position_embeddings_context=position_embeddings_context,
+            )
         return self.norm(self.out_proj(x))
 
 
-# VAE Wrapper
+# Not used currently, but kept for reference
 
-# VAE normalization constants
-ANIMA_VAE_MEAN = [
-    -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
-    0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921
-]
-ANIMA_VAE_STD = [
-    2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743,
-    3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
-]
+# def get_dit_config(state_dict, key_prefix=""):
+#     """Derive DiT configuration from state_dict weight shapes."""
+#     dit_config = {}
+#     dit_config["max_img_h"] = 512
+#     dit_config["max_img_w"] = 512
+#     dit_config["max_frames"] = 128
+#     concat_padding_mask = True
+#     dit_config["in_channels"] = (state_dict["{}x_embedder.proj.1.weight".format(key_prefix)].shape[1] // 4) - int(
+#         concat_padding_mask
+#     )
+#     dit_config["out_channels"] = 16
+#     dit_config["patch_spatial"] = 2
+#     dit_config["patch_temporal"] = 1
+#     dit_config["model_channels"] = state_dict["{}x_embedder.proj.1.weight".format(key_prefix)].shape[0]
+#     dit_config["concat_padding_mask"] = concat_padding_mask
+#     dit_config["crossattn_emb_channels"] = 1024
+#     dit_config["pos_emb_cls"] = "rope3d"
+#     dit_config["pos_emb_learnable"] = True
+#     dit_config["pos_emb_interpolation"] = "crop"
+#     dit_config["min_fps"] = 1
+#     dit_config["max_fps"] = 30
 
-# DiT config detection from state_dict
-KEEP_IN_HIGH_PRECISION = ['x_embedder', 't_embedder', 't_embedding_norm', 'final_layer']
+#     dit_config["use_adaln_lora"] = True
+#     dit_config["adaln_lora_dim"] = 256
+#     if dit_config["model_channels"] == 2048:
+#         dit_config["num_blocks"] = 28
+#         dit_config["num_heads"] = 16
+#     elif dit_config["model_channels"] == 5120:
+#         dit_config["num_blocks"] = 36
+#         dit_config["num_heads"] = 40
+#     elif dit_config["model_channels"] == 1280:
+#         dit_config["num_blocks"] = 20
+#         dit_config["num_heads"] = 20
 
+#     if dit_config["in_channels"] == 16:
+#         dit_config["extra_per_block_abs_pos_emb"] = False
+#         dit_config["rope_h_extrapolation_ratio"] = 4.0
+#         dit_config["rope_w_extrapolation_ratio"] = 4.0
+#         dit_config["rope_t_extrapolation_ratio"] = 1.0
+#     elif dit_config["in_channels"] == 17:
+#         dit_config["extra_per_block_abs_pos_emb"] = False
+#         dit_config["rope_h_extrapolation_ratio"] = 3.0
+#         dit_config["rope_w_extrapolation_ratio"] = 3.0
+#         dit_config["rope_t_extrapolation_ratio"] = 1.0
 
-def get_dit_config(state_dict, key_prefix=''):
-    """Derive DiT configuration from state_dict weight shapes."""
-    dit_config = {}
-    dit_config["max_img_h"] = 512
-    dit_config["max_img_w"] = 512
-    dit_config["max_frames"] = 128
-    concat_padding_mask = True
-    dit_config["in_channels"] = (state_dict['{}x_embedder.proj.1.weight'.format(key_prefix)].shape[1] // 4) - int(concat_padding_mask)
-    dit_config["out_channels"] = 16
-    dit_config["patch_spatial"] = 2
-    dit_config["patch_temporal"] = 1
-    dit_config["model_channels"] = state_dict['{}x_embedder.proj.1.weight'.format(key_prefix)].shape[0]
-    dit_config["concat_padding_mask"] = concat_padding_mask
-    dit_config["crossattn_emb_channels"] = 1024
-    dit_config["pos_emb_cls"] = "rope3d"
-    dit_config["pos_emb_learnable"] = True
-    dit_config["pos_emb_interpolation"] = "crop"
-    dit_config["min_fps"] = 1
-    dit_config["max_fps"] = 30
+#     dit_config["extra_h_extrapolation_ratio"] = 1.0
+#     dit_config["extra_w_extrapolation_ratio"] = 1.0
+#     dit_config["extra_t_extrapolation_ratio"] = 1.0
+#     dit_config["rope_enable_fps_modulation"] = False
 
-    dit_config["use_adaln_lora"] = True
-    dit_config["adaln_lora_dim"] = 256
-    if dit_config["model_channels"] == 2048:
-        dit_config["num_blocks"] = 28
-        dit_config["num_heads"] = 16
-    elif dit_config["model_channels"] == 5120:
-        dit_config["num_blocks"] = 36
-        dit_config["num_heads"] = 40
-    elif dit_config["model_channels"] == 1280:
-        dit_config["num_blocks"] = 20
-        dit_config["num_heads"] = 20
-
-    if dit_config["in_channels"] == 16:
-        dit_config["extra_per_block_abs_pos_emb"] = False
-        dit_config["rope_h_extrapolation_ratio"] = 4.0
-        dit_config["rope_w_extrapolation_ratio"] = 4.0
-        dit_config["rope_t_extrapolation_ratio"] = 1.0
-    elif dit_config["in_channels"] == 17:
-        dit_config["extra_per_block_abs_pos_emb"] = False
-        dit_config["rope_h_extrapolation_ratio"] = 3.0
-        dit_config["rope_w_extrapolation_ratio"] = 3.0
-        dit_config["rope_t_extrapolation_ratio"] = 1.0
-
-    dit_config["extra_h_extrapolation_ratio"] = 1.0
-    dit_config["extra_w_extrapolation_ratio"] = 1.0
-    dit_config["extra_t_extrapolation_ratio"] = 1.0
-    dit_config["rope_enable_fps_modulation"] = False
-
-    return dit_config
+#     return dit_config

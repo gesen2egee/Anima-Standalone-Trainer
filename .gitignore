@@ -1,60 +1,35 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-!training-ui/lib/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual Environment
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Project Specific
-output/
-logs/
-*.safetensors
-*.ckpt
-*.pt
-*.pth
-training-ui/jobs/
-training-ui/public/uploads/
-training-ui/global_config.toml
-training-ui/_merged_config.toml
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Project Tasks and Plans
+logs
+__pycache__
+wd14_tagger_model
+venv
+*.egg-info
+build
+.vscode
+wandb
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+.claude
+.gemini
+MagicMock
+.codex-tmp
+references
 tasks/
 
-# User Jobs
-training-ui/jobs/my_job1/
+# Training UI local state
+training-ui/node_modules/
+training-ui/jobs/
+training-ui/global_config.toml
 
+
+
+
+# inpainting test artefacts (synthetic data, training outputs, downloads, mask viz)
+tests/test_data/
+tests/test_output_*/
+tests/downloaded_data/
+tests/mask_viz/
+
+# Tasks and temporary config/test logs
+tasks/
+*.log

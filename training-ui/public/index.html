@@ -79,7 +79,7 @@
                     <button class="tab active" data-tab="training">Training</button>
                     <button class="tab" data-tab="dataset">Dataset</button>
                     <button class="tab" data-tab="network">Network</button>
-                    <button class="tab" data-tab="multigpu">Multi-GPUs</button>
+                    <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
                     <button class="tab" data-tab="samples">Samples</button>
                     <button class="tab" data-tab="console">Console</button>
@@ -95,11 +95,11 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Learning Rate</label>
-                                <input type="text" id="cfg-learning-rate" value="5e-5" placeholder="5e-5">
+                                <input type="text" id="cfg-learning-rate" value="1e-4" placeholder="1e-4">
                             </div>
                             <div class="form-group">
                                 <label>Text Encoder LR</label>
-                                <input type="text" id="cfg-text-encoder-lr" value="5e-5" placeholder="5e-5">
+                                <input type="text" id="cfg-text-encoder-lr" value="0" placeholder="0">
                             </div>
                         </div>
                         <div class="form-row">
@@ -119,6 +119,8 @@
                                     <option value="AdamWScheduleFree">AdamWScheduleFree</option>
                                     <option value="RAdamScheduleFree">RAdamScheduleFree</option>
                                     <option value="SGDScheduleFree">SGDScheduleFree</option>
+                                    <option value="library.came.CAME">library.came.CAME</option>
+                                    <option value="library.emosens.EmoSens">library.emosens.EmoSens</option>
                                     <option value="pytorch_optimizer.CAME">pytorch_optimizer.CAME</option>
                                 </select>
                             </div>
@@ -127,6 +129,7 @@
                                 <select id="cfg-lr-scheduler">
                                     <option value="cosine">Cosine</option>
                                     <option value="constant">Constant</option>
+                                    <option value="constant_with_warmup">Constant w/ Warmup</option>
                                     <option value="linear">Linear</option>
                                     <option value="cosine_with_restarts">Cosine w/ Restarts</option>
                                     <option value="cosine_with_min_lr">Cosine w/ Min LR</option>
@@ -137,11 +140,11 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>LR Warmup Steps</label>
-                                <input type="number" id="cfg-lr-warmup" value="100" min="0">
+                                <input type="number" id="cfg-lr-warmup" value="0.1" min="0" step="0.01">
                             </div>
                             <div class="form-group">
                                 <label>Weight Decay</label>
-                                <input type="number" id="cfg-weight-decay" value="0.01" step="0.01" min="0">
+                                <input type="number" id="cfg-weight-decay" value="" step="0.01" min="0">
                             </div>
                             <div class="form-group">
                                 <label>Seed</label>
@@ -198,15 +201,55 @@
                             <div class="form-row">
                                 <div class="form-group">
                                     <label>Max Steps</label>
-                                    <input type="number" id="cfg-max-steps" value="1000" min="1">
+                                    <input type="number" id="cfg-max-steps" value="3000" min="1">
                                 </div>
                                 <div class="form-group">
                                     <label>Save Every N Steps</label>
-                                    <input type="number" id="cfg-save-every-steps" value="500" min="1">
+                                    <input type="number" id="cfg-save-every-steps" value="200" min="1">
                                 </div>
                             </div>
                         </div>
 
+
+                        <h4>Checkpoint Management</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Save Last N Steps</label>
+                                <input type="number" id="cfg-save-last-steps" value="" min="1"
+                                    placeholder="blank = keep all">
+                                <small>Only applies when saving by steps. Leave blank to keep all checkpoints.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Save Last N Epochs</label>
+                                <input type="number" id="cfg-save-last-epochs" value="" min="1"
+                                    placeholder="blank = keep all">
+                                <small>Only applies when saving by epochs. Leave blank to keep all checkpoints.</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-save-state"> Save Training State</label>
+                                <small>Also saves optimizer and scheduler state when a checkpoint is saved.</small>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-save-state-end"> Save State at Train End</label>
+                                <small>Saves a final state folder when training finishes.</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Save Last N Step States</label>
+                                <input type="number" id="cfg-save-last-steps-state" value="" min="1"
+                                    placeholder="blank = use checkpoint count">
+                                <small>Overrides step checkpoint retention for state folders.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Save Last N Epoch States</label>
+                                <input type="number" id="cfg-save-last-epochs-state" value="" min="1"
+                                    placeholder="blank = use checkpoint count">
+                                <small>Overrides epoch checkpoint retention for state folders.</small>
+                            </div>
+                        </div>
 
 
                         <div class="form-row">
@@ -235,6 +278,14 @@
                                 </select>
                             </div>
                             <div class="form-group">
+                                <label>Transformer DType</label>
+                                <select id="cfg-transformer-dtype">
+                                    <option value="bfloat16">BFloat16</option>
+                                    <option value="float16">Float16</option>
+                                    <option value="float32">Float32</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
                                 <label>Save Precision</label>
                                 <select id="cfg-save-precision">
                                     <option value="bf16">BFloat16</option>
@@ -244,7 +295,17 @@
                             </div>
                             <div class="form-group">
                                 <label>DataLoader Workers</label>
-                                <input type="number" id="cfg-workers" value="4" min="0" max="16">
+                                <input type="number" id="cfg-workers" value="2" min="0" max="16">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>KNN Noise K</label>
+                                <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>CEP Noise</label>
+                                <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
                             </div>
                         </div>
                         <div class="form-group">
@@ -299,24 +360,65 @@
                                 <label>VAE Batch Size</label>
                                 <input type="number" id="cfg-vae-batch" value="1" min="1" max="32">
                             </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label>VAE Chunk Size</label>
+                                <input type="number" id="cfg-vae-chunk-size" value="64" min="0" step="2">
+                                <small>0 disables chunked VAE decode. Lower values use less VRAM.</small>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-cache-te" checked> Cache Text Encoder Outputs to
                                 Disk</label>
                             <small>Pre-encode captions. Required if text encoder is frozen.</small>
                         </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="cfg-vae-disable-cache"> Disable VAE Cache</label>
+                            <small>Can reduce VAE memory if chunking is still not enough.</small>
+                        </div>
 
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Timestep Sample Method</label>
                                 <select id="cfg-timestep-method">
-                                    <option value="logit_normal">Logit Normal</option>
+                                    <option value="sigmoid">Sigmoid (Logit Normal)</option>
                                     <option value="uniform">Uniform</option>
+                                    <option value="sigma">Sigma</option>
+                                    <option value="shift">Shift</option>
+                                    <option value="flux_shift">Flux Shift</option>
+                                    <option value="plora">P-LoRA</option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label>Flow Shift</label>
-                                <input type="number" id="cfg-flow-shift" value="3.0" step="0.1" min="0">
+                                <input type="number" id="cfg-flow-shift" value="1.0" step="0.1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>Weighting Scheme</label>
+                                <select id="cfg-weighting-scheme">
+                                    <option value="uniform">Uniform (Kohya Default)</option>
+                                    <option value="none">None</option>
+                                    <option value="sigma_sqrt">Sigma Sqrt</option>
+                                    <option value="logit_normal">Logit Normal</option>
+                                    <option value="mode">Mode</option>
+                                    <option value="cosmap">Cosmap</option>
+                                    <option value="plora">P-LoRA</option>
+                                    <option value="plora_sigmoid">P-LoRA Sigmoid</option>
+                                    <option value="plora_sigmoid_1_3">P-LoRA Sigmoid 1.3</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Sigmoid Scale</label>
+                                <input type="number" id="cfg-sigmoid-scale" value="1.0" step="0.1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>Qwen3 Max Tokens</label>
+                                <input type="number" id="cfg-qwen3-max-token-length" value="512" min="1" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>T5 Max Tokens</label>
+                                <input type="number" id="cfg-t5-max-token-length" value="512" min="1" step="1">
                             </div>
                         </div>
 
@@ -328,12 +430,12 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Resolution(s)</label>
-                                <input type="text" id="cfg-resolution" value="1536" placeholder="e.g. 512, 1024, 1536">
+                                <input type="text" id="cfg-resolution" value="1024" placeholder="e.g. 512, 1024, 2048">
                                 <small>Max resolution(s) for bucketing. Comma-separate for multi-resolution caching (e.g. 512, 1024).</small>
                             </div>
                             <div class="form-group">
                                 <label>Batch Size(s)</label>
-                                <input type="text" id="cfg-batch-size" value="4" placeholder="e.g. 4, 2, 1">
+                                <input type="text" id="cfg-batch-size" value="1" placeholder="e.g. 1, 2, 4">
                                 <small>Comma-separate to assign varying batch sizes per resolution.</small>
                             </div>
                         </div>
@@ -361,7 +463,7 @@
                         </div>
 
                         <div class="form-group">
-                            <label><input type="checkbox" id="cfg-alpha-mask"> Alpha Mask</label>
+                            <label><input type="checkbox" id="cfg-alpha-mask" checked> Alpha Mask</label>
                             <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
                         </div>
 
@@ -384,7 +486,7 @@
                             </div>
                             <div class="form-group">
                                 <label>Max Bucket Resolution</label>
-                                <input type="number" id="cfg-max-bucket" value="1536" min="256" step="64">
+                                <input type="number" id="cfg-max-bucket" value="2048" min="256" step="64">
                             </div>
                         </div>
                         <div class="form-group">
@@ -431,7 +533,7 @@
                                     <option value="networks.krona">KRONA</option>
                                 </select>
                             </div>
-                            <div class="form-row">
+                            <div class="form-row" id="network-rank-alpha-row">
                                 <div class="form-group">
                                     <label>Network Dim (Rank)</label>
                                     <input type="number" id="cfg-network-dim" value="16" min="1">
@@ -474,15 +576,17 @@
                             </div>
                         </div>
 
-                        <h4>Resume Training</h4>
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-auto-resume"> Auto-resume from last saved state</label>
-                            <small>Automatically resumes from the most recent saved state in the output folder.</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Resume State Folder</label>
-                            <input type="text" id="cfg-resume" placeholder="C:\path\to\saved_state">
-                            <small>Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.</small>
+                        <div id="group-resume-training" style="display: none;">
+                            <h4>Resume Training</h4>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-auto-resume"> Auto-resume from last saved state</label>
+                                <small>Automatically resumes from the most recent saved state in the output folder.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Resume State Folder</label>
+                                <input type="text" id="cfg-resume" placeholder="C:\path\to\saved_state">
+                                <small>Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.</small>
+                            </div>
                         </div>
                     </div>
 
@@ -491,8 +595,13 @@
                         <!-- Sampling Controls -->
                         <div class="section-card">
                             <h4>In-Training Sampling</h4>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-enable-sampling" checked> Enable Sampling</label>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-enable-sampling" checked> Enable Sampling</label>
+                                </div>
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-sample-at-first"> Sample at First</label>
+                                </div>
                             </div>
                             <div id="group-sample-every">
                                 <div class="form-group" id="container-sample-every-epochs">
@@ -557,13 +666,13 @@
 
                             <div
                                 style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
-                                <div class="checkbox-group">
+                                <div class="checkbox-group" style="display: none;">
                                     <label title="Keep the model loaded in VRAM for faster subsequent generations">
                                         <input type="checkbox" id="chk-keep-loaded"> Keep Model Loaded
                                     </label>
                                 </div>
                                 <div style="display: flex; gap: 10px;">
-                                    <button id="btn-unload-model" class="btn btn-danger"
+                                    <button id="btn-unload-model" class="btn btn-danger hidden"
                                         title="Free VRAM by unloading the generation model">Unload Model</button>
                                     <button id="btn-gen-sample" class="btn btn-primary"
                                         style="min-width: 120px;">Generate</button>
@@ -1038,6 +1147,15 @@
 
                 <!-- Application Tab (static) -->
                 <div id="gtab-app" class="gtab-pane hidden">
+                    <div class="form-group language-switcher">
+                        <label for="ui-language">Language</label>
+                        <select id="ui-language">
+                            <option value="zh-TW">繁體中文</option>
+                            <option value="zh-CN">简体中文</option>
+                            <option value="en">English</option>
+                        </select>
+                    </div>
+
                     <div class="form-group">
                         <label>Python Venv Path</label>
                         <input type="text" id="cfg-global-venv" placeholder="C:\sd-scripts\venv">
