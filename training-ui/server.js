@@ -679,7 +679,7 @@ app.get('/api/jobs', (req, res) => {
 // Create new job
 app.post('/api/jobs', (req, res) => {
     try {
-        const { name } = req.body;
+        const { name, output_name, image_dir, max_train_steps } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
 
         const safeName = sanitizeName(name);
@@ -697,9 +697,35 @@ app.post('/api/jobs', (req, res) => {
 
         // Copy template configs
         const { config, useFallback } = getDefaultConfig();
+        config.training_arguments = config.training_arguments || {};
+        if (output_name && String(output_name).trim()) {
+            config.training_arguments.output_name = sanitizeName(String(output_name));
+        }
+        const parsedSteps = Number.parseInt(max_train_steps, 10);
+        if (Number.isFinite(parsedSteps) && parsedSteps > 0) {
+            config.training_arguments.max_train_steps = parsedSteps;
+            delete config.training_arguments.max_train_epochs;
+        }
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
         const datasetConfig = getDefaultDataset();
+        if (image_dir && String(image_dir).trim()) {
+            const datasets = Array.isArray(datasetConfig.datasets)
+                ? datasetConfig.datasets
+                : datasetConfig.datasets
+                    ? [datasetConfig.datasets]
+                    : [{}];
+            const firstDataset = datasets[0] || {};
+            const subsets = Array.isArray(firstDataset.subsets)
+                ? firstDataset.subsets
+                : firstDataset.subsets
+                    ? [firstDataset.subsets]
+                    : [{}];
+            subsets[0] = { ...(subsets[0] || {}), image_dir: stripQuotes(String(image_dir).trim()) };
+            firstDataset.subsets = subsets;
+            datasets[0] = firstDataset;
+            datasetConfig.datasets = datasets;
+        }
         fs.writeFileSync(path.join(jobPath, 'dataset.toml'), TOML.stringify(datasetConfig), 'utf8');
 
         // Copy sample prompts template
@@ -1444,16 +1470,17 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         const logFileName = `train_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
         const logStream = fs.createWriteStream(path.join(logsDir, logFileName), { flags: 'a' });
 
-        const appendLog = (data) => {
+        const appendLog = (data, cliStream = null) => {
             const text = data.toString();
             logBuffer.push(text);
             if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
+            if (cliStream) cliStream.write(text);
             logStream.write(text);
             broadcastLog(jobName, text);
         };
 
-        proc.stdout.on('data', appendLog);
-        proc.stderr.on('data', appendLog);
+        proc.stdout.on('data', (data) => appendLog(data, process.stdout));
+        proc.stderr.on('data', (data) => appendLog(data, process.stderr));
 
         // Prevent crashes on stream errors
         proc.stdout.on('error', (err) => console.error(`[Train/stdout] ${err.message}`));

@@ -57,19 +57,19 @@ const UI_TRANSLATIONS = {
   "Optimization": { "zh-TW": "最佳化", "zh-CN": "优化" },
   "Learning Rate": { "zh-TW": "學習率", "zh-CN": "学习率" },
   "Text Encoder LR": { "zh-TW": "Text Encoder 學習率", "zh-CN": "Text Encoder 学习率" },
-  "Optimizer": { "zh-TW": "最佳化器", "zh-CN": "优化器" },
+  "Optimizer": { "zh-TW": "優化器", "zh-CN": "优化器" },
   "LR Scheduler": { "zh-TW": "學習率排程", "zh-CN": "学习率调度" },
-  "LR Warmup Steps": { "zh-TW": "學習率 Warmup Steps", "zh-CN": "学习率 Warmup Steps" },
+  "LR Warmup Steps": { "zh-TW": "學習率預熱步數", "zh-CN": "学习率预热步数" },
   "Weight Decay": { "zh-TW": "Weight Decay", "zh-CN": "Weight Decay" },
   "Seed": { "zh-TW": "Seed", "zh-CN": "Seed" },
   "Duration": { "zh-TW": "訓練長度", "zh-CN": "训练长度" },
-  "Max Epochs": { "zh-TW": "最大 Epochs", "zh-CN": "最大 Epochs" },
-  "Save Every N Epochs": { "zh-TW": "每 N Epochs 儲存", "zh-CN": "每 N Epochs 保存" },
-  "Max Steps": { "zh-TW": "最大 Steps", "zh-CN": "最大 Steps" },
-  "Save Every N Steps": { "zh-TW": "每 N Steps 儲存", "zh-CN": "每 N Steps 保存" },
+  "Max Epochs": { "zh-TW": "最大訓練輪數", "zh-CN": "最大训练轮数" },
+  "Save Every N Epochs": { "zh-TW": "每 N 輪儲存", "zh-CN": "每 N 轮保存" },
+  "Max Steps": { "zh-TW": "最大步數", "zh-CN": "最大步数" },
+  "Save Every N Steps": { "zh-TW": "每 N 步儲存", "zh-CN": "每 N 步保存" },
   "Checkpoint Management": { "zh-TW": "Checkpoint 管理", "zh-CN": "Checkpoint 管理" },
-  "Save Last N Steps": { "zh-TW": "保留最近 N Steps", "zh-CN": "保留最近 N Steps" },
-  "Save Last N Epochs": { "zh-TW": "保留最近 N Epochs", "zh-CN": "保留最近 N Epochs" },
+  "Save Last N Steps": { "zh-TW": "保留最近 N 步", "zh-CN": "保留最近 N 步" },
+  "Save Last N Epochs": { "zh-TW": "保留最近 N 輪", "zh-CN": "保留最近 N 轮" },
   "Save Training State": { "zh-TW": "儲存訓練 State", "zh-CN": "保存训练 State" },
   "Save State at Train End": { "zh-TW": "訓練結束儲存 State", "zh-CN": "训练结束保存 State" },
   "Save Last N Step States": { "zh-TW": "保留最近 N Step States", "zh-CN": "保留最近 N Step States" },
@@ -117,7 +117,7 @@ const UI_TRANSLATIONS = {
   "Images": { "zh-TW": "圖片", "zh-CN": "图片" },
   "Min Bucket Resolution": { "zh-TW": "最小 Bucket 解析度", "zh-CN": "最小 Bucket 分辨率" },
   "Max Bucket Resolution": { "zh-TW": "最大 Bucket 解析度", "zh-CN": "最大 Bucket 分辨率" },
-  "Bucket Resolution Steps": { "zh-TW": "Bucket 解析度間隔", "zh-CN": "Bucket 分辨率间隔" },
+  "Bucket Resolution Steps": { "zh-TW": "Bucket 解析度步進", "zh-CN": "Bucket 分辨率步进" },
   "Disable Bucket Shuffle": { "zh-TW": "停用 Bucket Shuffle", "zh-CN": "禁用 Bucket Shuffle" },
   "Dataset Folders": { "zh-TW": "資料集資料夾", "zh-CN": "数据集文件夹" },
   "+ Add Dataset": { "zh-TW": "+ 新增資料集", "zh-CN": "+ 新增数据集" },
@@ -136,10 +136,10 @@ const UI_TRANSLATIONS = {
   "+ Add Prompt": { "zh-TW": "+ 新增提示詞", "zh-CN": "+ 新增提示词" },
   "Generate Sample": { "zh-TW": "生成樣本", "zh-CN": "生成样本" },
   "Sampling": { "zh-TW": "取樣", "zh-CN": "采样" },
-  "Sample Schedule": { "zh-TW": "Sample 排程", "zh-CN": "Sample 调度" },
-  "Sample at First": { "zh-TW": "開始前先 Sample", "zh-CN": "开始前先 Sample" },
-  "Enable Sampling During Training": { "zh-TW": "訓練中啟用 Sample", "zh-CN": "训练中启用 Sample" },
-  "Sample Every N Steps": { "zh-TW": "每 N Steps Sample", "zh-CN": "每 N Steps Sample" },
+  "Sample Schedule": { "zh-TW": "樣本排程", "zh-CN": "样本调度" },
+  "Sample at First": { "zh-TW": "開始前先產生樣本", "zh-CN": "开始前先生成样本" },
+  "Enable Sampling During Training": { "zh-TW": "訓練中產生樣本", "zh-CN": "训练中生成样本" },
+  "Sample Every N Steps": { "zh-TW": "每 N 步產生樣本", "zh-CN": "每 N 步生成样本" },
   "Refresh": { "zh-TW": "重新整理", "zh-CN": "刷新" },
   "TensorBoard": { "zh-TW": "TensorBoard", "zh-CN": "TensorBoard" },
   "Running on port": { "zh-TW": "執行中，port", "zh-CN": "运行中，端口" },
@@ -156,6 +156,7 @@ const UI_TRANSLATIONS = {
   "⚠️ Reset Config to Defaults": { "zh-TW": "⚠️ 重設為預設值", "zh-CN": "⚠️ 重置为默认值" },
   "Create New Training Job": { "zh-TW": "建立新的訓練工作", "zh-CN": "创建新的训练任务" },
   "Job Name": { "zh-TW": "工作名稱", "zh-CN": "任务名称" },
+  "Dataset 1 Image Folder": { "zh-TW": "資料集 1 圖片資料夾", "zh-CN": "数据集 1 图片文件夹" },
   "Cancel": { "zh-TW": "取消", "zh-CN": "取消" },
   "Create": { "zh-TW": "建立", "zh-CN": "创建" },
   "Clone Job": { "zh-TW": "複製工作", "zh-CN": "克隆任务" },
@@ -186,7 +187,7 @@ const UI_TRANSLATIONS = {
   "Caption Prefix": { "zh-TW": "Caption 前綴", "zh-CN": "Caption 前缀" },
   "Caption Dropout Rate": { "zh-TW": "Caption Dropout Rate", "zh-CN": "Caption Dropout Rate" },
   "Tag Dropout Rate": { "zh-TW": "Tag Dropout Rate", "zh-CN": "Tag Dropout Rate" },
-  "Dropout Every N Epochs": { "zh-TW": "每 N Epochs Dropout", "zh-CN": "每 N Epochs Dropout" },
+  "Dropout Every N Epochs": { "zh-TW": "每 N 輪 Dropout", "zh-CN": "每 N 轮 Dropout" },
   "Shuffle Captions": { "zh-TW": "打亂 Captions", "zh-CN": "打乱 Captions" },
   "Enable Wildcard": { "zh-TW": "啟用 Wildcard", "zh-CN": "启用 Wildcard" },
   "Flip Augmentations": { "zh-TW": "Flip Augmentations", "zh-CN": "Flip Augmentations" },
@@ -208,7 +209,7 @@ const UI_TRANSLATIONS = {
   "Training started": { "zh-TW": "訓練已開始", "zh-CN": "训练已开始" },
   "Training stopped": { "zh-TW": "訓練已停止", "zh-CN": "训练已停止" },
   "Generation started": { "zh-TW": "生成已開始", "zh-CN": "生成已开始" },
-  "Add sample prompts first": { "zh-TW": "請先新增 sample 提示詞", "zh-CN": "请先新增 sample 提示词" },
+  "Add sample prompts first": { "zh-TW": "請先新增樣本提示詞", "zh-CN": "请先新增样本提示词" },
   "Unloading model...": { "zh-TW": "正在卸載模型...", "zh-CN": "正在卸载模型..." },
   "Model unloaded": { "zh-TW": "模型已卸載", "zh-CN": "模型已卸载" },
   "Checkpoints refreshed": { "zh-TW": "Checkpoints 已重新整理", "zh-CN": "Checkpoints 已刷新" },
@@ -224,8 +225,8 @@ const UI_TRANSLATIONS = {
 Object.assign(UI_TRANSLATIONS, {
   "Anima LoRA Training": { "zh-TW": "Anima LoRA 訓練", "zh-CN": "Anima LoRA 训练" },
   "Duration Unit": { "zh-TW": "訓練長度單位", "zh-CN": "训练时长单位" },
-  "Epochs": { "zh-TW": "Epochs", "zh-CN": "Epochs" },
-  "Steps": { "zh-TW": "Steps", "zh-CN": "Steps" },
+  "Epochs": { "zh-TW": "輪數", "zh-CN": "轮数" },
+  "Steps": { "zh-TW": "步數", "zh-CN": "步数" },
   "Bucketing": { "zh-TW": "分桶", "zh-CN": "分桶" },
   "Do Not Upscale Images": { "zh-TW": "不要放大圖片", "zh-CN": "不要放大图片" },
   "Groups images by aspect ratio for efficient training.": {
@@ -250,8 +251,8 @@ Object.assign(UI_TRANSLATIONS, {
   },
   "Training Schedule": { "zh-TW": "訓練排程", "zh-CN": "训练调度" },
   "Checkpoint Management": { "zh-TW": "Checkpoint 管理", "zh-CN": "Checkpoint 管理" },
-  "Save Last N Steps": { "zh-TW": "保留最近 N Steps", "zh-CN": "保留最近 N Steps" },
-  "Save Last N Epochs": { "zh-TW": "保留最近 N Epochs", "zh-CN": "保留最近 N Epochs" },
+  "Save Last N Steps": { "zh-TW": "保留最近 N 步", "zh-CN": "保留最近 N 步" },
+  "Save Last N Epochs": { "zh-TW": "保留最近 N 輪", "zh-CN": "保留最近 N 轮" },
   "Save Training State": { "zh-TW": "儲存訓練 State", "zh-CN": "保存训练 State" },
   "Save State at Train End": { "zh-TW": "訓練結束儲存 State", "zh-CN": "训练结束保存 State" },
   "Save Last N Step States": { "zh-TW": "保留最近 N Step States", "zh-CN": "保留最近 N Step States" },
@@ -384,15 +385,15 @@ Object.assign(UI_TRANSLATIONS, {
     "zh-TW": "恢復訓練狀態（optimizer、scheduler、step 數）。啟用自動恢復時請留空。",
     "zh-CN": "恢复训练状态（optimizer、scheduler、step 数）。启用自动恢复时请留空。",
   },
-  "In-Training Sampling": { "zh-TW": "訓練中 Sample", "zh-CN": "训练中 Sample" },
-  "Enable Sampling": { "zh-TW": "啟用 Sample", "zh-CN": "启用 Sample" },
-  "Sample at First": { "zh-TW": "開始前先 Sample", "zh-CN": "开始前先 Sample" },
+  "In-Training Sampling": { "zh-TW": "訓練中產生樣本", "zh-CN": "训练中生成样本" },
+  "Enable Sampling": { "zh-TW": "啟用樣本產生", "zh-CN": "启用样本生成" },
+  "Sample at First": { "zh-TW": "開始前先產生樣本", "zh-CN": "开始前先生成样本" },
   "Generate sample images before training starts.": {
-    "zh-TW": "訓練開始前先產生 sample 圖。",
-    "zh-CN": "训练开始前先生成 sample 图。",
+    "zh-TW": "訓練開始前先產生樣本圖。",
+    "zh-CN": "训练开始前先生成样本图。",
   },
-  "Sample Every N Epochs": { "zh-TW": "每 N Epochs Sample", "zh-CN": "每 N Epochs Sample" },
-  "Sample Every N Steps": { "zh-TW": "每 N Steps Sample", "zh-CN": "每 N Steps Sample" },
+  "Sample Every N Epochs": { "zh-TW": "每 N 輪產生樣本", "zh-CN": "每 N 轮生成样本" },
+  "Sample Every N Steps": { "zh-TW": "每 N 步產生樣本", "zh-CN": "每 N 步生成样本" },
   "Test Generation": { "zh-TW": "測試生成", "zh-CN": "测试生成" },
   "LoRA Strength": { "zh-TW": "LoRA 強度", "zh-CN": "LoRA 强度" },
   "GPU Selection": { "zh-TW": "GPU 選擇", "zh-CN": "GPU 选择" },
@@ -400,17 +401,17 @@ Object.assign(UI_TRANSLATIONS, {
   "Keep Model Loaded": { "zh-TW": "保留模型載入", "zh-CN": "保持模型载入" },
   "Unload Model": { "zh-TW": "卸載模型", "zh-CN": "卸载模型" },
   "Generate": { "zh-TW": "生成", "zh-CN": "生成" },
-  "Sample Prompts": { "zh-TW": "Sample 提示詞", "zh-CN": "Sample 提示词" },
+  "Sample Prompts": { "zh-TW": "樣本提示詞", "zh-CN": "样本提示词" },
   "Negative Prompt": { "zh-TW": "負面提示詞", "zh-CN": "负面提示词" },
   "Apply to All": { "zh-TW": "套用到全部", "zh-CN": "应用到全部" },
   "No sample prompts yet. Click \"+ Add Prompt\" to add one.": {
-    "zh-TW": "尚未新增 sample 提示詞。點擊「+ 新增提示詞」來新增。",
-    "zh-CN": "尚未新增 sample 提示词。点击「+ 新增提示词」来新增。",
+    "zh-TW": "尚未新增樣本提示詞。點擊「+ 新增提示詞」來新增。",
+    "zh-CN": "尚未新增样本提示词。点击「+ 新增提示词」来新增。",
   },
-  "Generated Samples": { "zh-TW": "已生成 Samples", "zh-CN": "已生成 Samples" },
+  "Generated Samples": { "zh-TW": "已生成樣本", "zh-CN": "已生成样本" },
   "No sample images yet. They will appear here during training.": {
-    "zh-TW": "尚未產生 sample 圖，訓練期間會顯示在這裡。",
-    "zh-CN": "尚未生成 sample 图，训练期间会显示在这里。",
+    "zh-TW": "尚未產生樣本圖，訓練期間會顯示在這裡。",
+    "zh-CN": "尚未生成样本图，训练期间会显示在这里。",
   },
   "Training Console": { "zh-TW": "訓練主控台", "zh-CN": "训练控制台" },
   "Waiting for training to start...": { "zh-TW": "等待訓練開始...", "zh-CN": "等待训练开始..." },
@@ -508,6 +509,9 @@ Object.assign(UI_TRANSLATIONS, {
   },
   "e.g. Block": { "zh-TW": "例如 Block", "zh-CN": "例如 Block" },
   "e.g. Aemeath_copy": { "zh-TW": "例如 Aemeath_copy", "zh-CN": "例如 Aemeath_copy" },
+  "my_job_v1": { "zh-TW": "my_job_v1", "zh-CN": "my_job_v1" },
+  "e.g. Aemeath_v2": { "zh-TW": "例如 Aemeath_v2", "zh-CN": "例如 Aemeath_v2" },
+  "D:\\datasets\\my_images": { "zh-TW": "D:\\datasets\\my_images", "zh-CN": "D:\\datasets\\my_images" },
 });
 
 Object.assign(UI_TRANSLATIONS, {
@@ -768,9 +772,18 @@ function translatePhrase(text) {
   return UI_TRANSLATIONS[text]?.[currentLanguage] || text;
 }
 
+function isRichTextFragment(node) {
+  const parent = node.parentElement;
+  if (!parent) return false;
+  if (!parent.querySelector("a, strong, em, code")) return false;
+  const fullText = parent.textContent.replace(/\s+/g, " ").trim();
+  return fullText && fullText !== node.nodeValue.trim() && !UI_TRANSLATIONS[fullText];
+}
+
 function applyI18nTextNode(node) {
   const raw = node.nodeValue;
   if (!raw || !raw.trim()) return;
+  if (isRichTextFragment(node)) return;
   if (!originalTextNodes.has(node)) originalTextNodes.set(node, raw);
   const original = originalTextNodes.get(node);
   const leading = original.match(/^\s*/)?.[0] || "";
@@ -1066,6 +1079,34 @@ async function loadJobs() {
   });
   refreshI18n();
   return jobs;
+}
+function getExistingJobNames() {
+  return new Set(
+    Array.from(document.querySelectorAll(".job-name"))
+      .map((el) => el.textContent.trim())
+      .filter(Boolean),
+  );
+}
+function nextVersionedName(baseName, startVersion = 1) {
+  const existing = getExistingJobNames();
+  const cleanBase = String(baseName || "my_job")
+    .trim()
+    .replace(/_v\d+$/i, "")
+    .replace(/\s+v\d+$/i, "")
+    || "my_job";
+  let version = startVersion;
+  let candidate = `${cleanBase}_v${version}`;
+  while (existing.has(candidate)) {
+    version += 1;
+    candidate = `${cleanBase}_v${version}`;
+  }
+  return candidate;
+}
+function nextCloneName(name) {
+  const raw = String(name || "my_job").trim() || "my_job";
+  const match = raw.match(/^(.*?)(?:_v|\s+v)(\d+)$/i);
+  if (match) return nextVersionedName(match[1], Number(match[2]) + 1);
+  return nextVersionedName(raw, 2);
 }
 function clearCurrentJobSelection() {
   currentJob = null;
@@ -2004,8 +2045,9 @@ function updateTrainingTypeUI(type) {
   $("fft-config-section").classList.toggle("hidden", isLora);
 }
 function updateNetworkModuleUI() {
-  const isCdka = $("cfg-network-module").value === "networks.cdka";
-  $("network-rank-alpha-row").classList.toggle("hidden", isCdka);
+  const moduleName = $("cfg-network-module").value;
+  const hidesRankAlpha = moduleName === "networks.cdka" || moduleName === "networks.krona";
+  $("network-rank-alpha-row").classList.toggle("hidden", hidesRankAlpha);
 }
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
@@ -3525,14 +3567,35 @@ if (btnAddDataset) {
 }
 // New Job
 $("btn-new-job").addEventListener("click", () => {
-  $("new-job-name").value = "my_job";
+  const defaultName = nextVersionedName("my_job", 1);
+  $("new-job-name").value = defaultName;
+  $("new-job-output-name").value = defaultName;
+  $("new-job-output-name").dataset.autoValue = defaultName;
+  $("new-job-image-dir").value = "";
+  $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();
+  $("new-job-name").select();
+});
+$("new-job-name").addEventListener("input", () => {
+  const outputInput = $("new-job-output-name");
+  if (outputInput.value === outputInput.dataset.autoValue) {
+    outputInput.value = $("new-job-name").value.trim();
+    outputInput.dataset.autoValue = outputInput.value;
+  }
 });
 $("btn-create-job").addEventListener("click", async () => {
   const name = $("new-job-name").value.trim();
   if (!name) return;
-  const result = await api("/api/jobs", { method: "POST", body: { name } });
+  const result = await api("/api/jobs", {
+    method: "POST",
+    body: {
+      name,
+      output_name: $("new-job-output-name").value.trim(),
+      image_dir: $("new-job-image-dir").value.trim(),
+      max_train_steps: safeInt($("new-job-max-steps").value, 3000),
+    },
+  });
   if (result.error) {
     alert(result.error);
     return;
@@ -3941,22 +4004,8 @@ document.addEventListener("keydown", (e) => {
 // Clone
 $("btn-clone").addEventListener("click", () => {
   if (!currentJob) return;
-  // Calculate default name
-  let defaultName = `${currentJob}_copy`;
-  let counter = 1;
-  const uniqueName = (base) => {
-    const jobItems = document.querySelectorAll(".job-name");
-    for (let item of jobItems) {
-      if (item.textContent === base) return false;
-    }
-    return true;
-  };
-  while (!uniqueName(defaultName)) {
-    counter++;
-    defaultName = `${currentJob}_copy_${counter}`;
-  }
   // Open Modal
-  $("clone-job-name").value = defaultName;
+  $("clone-job-name").value = nextCloneName(currentJob);
   openModal("modal-clone-job");
   $("clone-job-name").focus();
   $("clone-job-name").select();

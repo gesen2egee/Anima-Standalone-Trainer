@@ -1097,7 +1097,19 @@
             <h3>Create New Training Job</h3>
             <div class="form-group">
                 <label>Job Name</label>
-                <input type="text" id="new-job-name" placeholder="my_job">
+                <input type="text" id="new-job-name" placeholder="my_job_v1">
+            </div>
+            <div class="form-group">
+                <label>Output Name</label>
+                <input type="text" id="new-job-output-name" placeholder="my_anima_lora">
+            </div>
+            <div class="form-group">
+                <label>Dataset 1 Image Folder</label>
+                <input type="text" id="new-job-image-dir" placeholder="D:\datasets\my_images">
+            </div>
+            <div class="form-group">
+                <label>Max Steps</label>
+                <input type="number" id="new-job-max-steps" value="3000" min="1">
             </div>
             <div class="modal-actions">
                 <button id="btn-cancel-job" class="btn btn-ghost">Cancel</button>
@@ -1112,7 +1124,7 @@
             <h3>Clone Job</h3>
             <div class="form-group">
                 <label>New Job Name</label>
-                <input type="text" id="clone-job-name" placeholder="e.g. Aemeath_copy">
+                <input type="text" id="clone-job-name" placeholder="e.g. Aemeath_v2">
             </div>
             <div class="modal-actions">
                 <button id="btn-cancel-clone" class="btn btn-ghost">Cancel</button>
