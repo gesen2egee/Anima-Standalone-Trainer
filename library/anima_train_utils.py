@@ -148,6 +148,18 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Disable internal VAE caching mechanism to reduce memory usage. Encoding / decoding will also be faster, but this differs from official behavior."
         + " / VAEのメモリ使用量を減らすために内部のキャッシュ機構を無効にします。エンコード/デコードも速くなりますが、公式の動作とは異なります。",
     )
+    parser.add_argument(
+        "--model_guidance_prob",
+        type=float,
+        default=1.0,
+        help="Probability of applying model guidance weight (0.0 to 1.0). Defaults to 1.0 (always applied).",
+    )
+    parser.add_argument(
+        "--ciop_prob",
+        type=float,
+        default=0.0,
+        help="AAAI-26 Coordinated Input-Output Perturbation (CIOP) probability. Default is 0.0 (disabled). Set to 0.8 for optimal academic performance.",
+    )
 
 
 # Loss weighting

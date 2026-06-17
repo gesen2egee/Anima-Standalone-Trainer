@@ -422,6 +422,78 @@
                             </div>
                         </div>
 
+                        <!-- Model Guidance Training Section -->
+                        <h4 style="margin-top: 20px;">Model Guidance Training (arXiv:2502.12154)</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Model Guidance Weight</label>
+                                <input type="number" id="cfg-model-guidance-weight" value="0.0" step="0.05" min="0">
+                                <small>Set > 0.0 to enable Model Guidance.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Warmup Steps</label>
+                                <input type="number" id="cfg-model-guidance-warmup-steps" value="500" min="0" step="1">
+                                <small>Linear warmup steps for weight.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Activation Probability</label>
+                                <input type="number" id="cfg-model-guidance-prob" value="1.0" step="0.05" min="0" max="1">
+                                <small>Probability of applying (0.0 ~ 1.0).</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>End Step</label>
+                                <input type="number" id="cfg-model-guidance-end-step" value="0" min="0" step="1">
+                                <small>0 means active for all steps.</small>
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
+                                <label style="display: flex; align-items: center; gap: 5px;">
+                                    <input type="checkbox" id="cfg-model-guidance-timestep-scaling" style="margin: 0; width: auto;"> Timestep Scaling
+                                </label>
+                                <small>Beta-curve adaptive scaling.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Min Weight</label>
+                                <input type="number" id="cfg-model-guidance-min-weight" value="0.0" step="0.05" min="0">
+                                <small>Used for Timestep Scaling.</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
+                                <label style="display: flex; align-items: center; gap: 5px;">
+                                    <input type="checkbox" id="cfg-model-guidance-cfg-zero" style="margin: 0; width: auto;"> CFG-Zero* Scaling
+                                </label>
+                                <small>Dynamic projection scaling.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>CFG-Zero* Threshold</label>
+                                <input type="number" id="cfg-model-guidance-zero-init-threshold" value="1.0" step="0.01" min="0" max="1">
+                            </div>
+
+                        <!-- CIOP Training Section -->
+                        <h4 style="margin-top: 20px;">Coordinated Input-Output Perturbation (CIOP, AAAI-26)</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>CIOP Probability</label>
+                                <input type="number" id="cfg-ciop-prob" value="0.0" step="0.05" min="0" max="1">
+                                <small>Probability of applying CIOP (0.0 to 1.0).</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Noise Magnitude</label>
+                                <input type="number" id="cfg-ciop-noise-magnitude" value="0.1" step="0.01" min="0">
+                                <small>Standard deviation or boundary of perturbation noise.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Noise Type</label>
+                                <select id="cfg-ciop-noise-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
+                                    <option value="gaussian">Gaussian</option>
+                                    <option value="uniform">Uniform</option>
+                                </select>
+                                <small>Noise distribution type.</small>
+                            </div>
+                        </div>
+
                     </div>
 
                     <!-- Dataset Tab -->
@@ -465,6 +537,51 @@
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-alpha-mask" checked> Alpha Mask</label>
                             <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
+                        </div>
+
+                        <h4>Frequency-Aware Dropout</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>FAD p_min</label>
+                                <input type="number" id="cfg-fad-p-min" value="0.35" step="0.01" min="0" max="1">
+                            </div>
+                            <div class="form-group">
+                                <label>FAD p_max</label>
+                                <input type="number" id="cfg-fad-p-max" value="1.0" step="0.01" min="0" max="1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>FAD Alpha</label>
+                                <input type="number" id="cfg-fad-alpha" value="10.0" step="0.1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>FAD Center</label>
+                                <input type="number" id="cfg-fad-c" value="0.5" step="0.01" min="0" max="1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>sFAD Start Ratio</label>
+                                <input type="number" id="cfg-fad-curriculum-start" value="0.0" step="0.01" min="0" max="1">
+                            </div>
+                            <div class="form-group">
+                                <label>sFAD End Ratio</label>
+                                <input type="number" id="cfg-fad-curriculum-end" value="1.0" step="0.01" min="0" max="1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>sFAD Beta</label>
+                                <input type="number" id="cfg-fad-curriculum-beta" value="3.0" step="0.1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>sFAD Step Scale</label>
+                                <div style="display: flex; gap: 8px;">
+                                    <input type="number" id="cfg-fad-step-start" value="0.0" step="0.01" min="0" max="1">
+                                    <input type="number" id="cfg-fad-step-end" value="1.0" step="0.01" min="0" max="1">
+                                </div>
+                            </div>
                         </div>
 
                         <h4>Bucketing</h4>

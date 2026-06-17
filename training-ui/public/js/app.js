@@ -1399,6 +1399,19 @@ function populateConfig(config) {
   $("cfg-sigmoid-scale").value = a.sigmoid_scale ?? 1.0;
   $("cfg-qwen3-max-token-length").value = a.qwen3_max_token_length ?? 512;
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
+  // Model Guidance
+  $("cfg-model-guidance-weight").value = a.model_guidance_weight ?? 0.0;
+  $("cfg-model-guidance-warmup-steps").value = a.model_guidance_warmup_steps ?? 500;
+  $("cfg-model-guidance-timestep-scaling").checked = a.model_guidance_timestep_scaling ?? false;
+  $("cfg-model-guidance-min-weight").value = a.model_guidance_min_weight ?? 0.0;
+  $("cfg-model-guidance-cfg-zero").checked = a.model_guidance_cfg_zero ?? false;
+  $("cfg-model-guidance-zero-init-threshold").value = a.model_guidance_zero_init_threshold ?? 1.0;
+  $("cfg-model-guidance-end-step").value = a.model_guidance_end_step ?? 0;
+  $("cfg-model-guidance-prob").value = a.model_guidance_prob ?? 1.0;
+  // CIOP
+  $("cfg-ciop-prob").value = a.ciop_prob ?? 0.0;
+  $("cfg-ciop-noise-magnitude").value = a.ciop_noise_magnitude ?? 0.1;
+  $("cfg-ciop-noise-type").value = a.ciop_noise_type ?? "gaussian";
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
@@ -1728,6 +1741,17 @@ function gatherConfig() {
       qwen3_max_token_length: safeInt($("cfg-qwen3-max-token-length").value),
       t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
       weighting_scheme: $("cfg-weighting-scheme").value,
+      model_guidance_weight: safeFloat($("cfg-model-guidance-weight").value),
+      model_guidance_warmup_steps: safeInt($("cfg-model-guidance-warmup-steps").value),
+      model_guidance_timestep_scaling: $("cfg-model-guidance-timestep-scaling").checked,
+      model_guidance_min_weight: safeFloat($("cfg-model-guidance-min-weight").value),
+      model_guidance_cfg_zero: $("cfg-model-guidance-cfg-zero").checked,
+      model_guidance_zero_init_threshold: safeFloat($("cfg-model-guidance-zero-init-threshold").value),
+      model_guidance_end_step: safeInt($("cfg-model-guidance-end-step").value),
+      model_guidance_prob: safeFloat($("cfg-model-guidance-prob").value),
+      ciop_prob: safeFloat($("cfg-ciop-prob").value),
+      ciop_noise_magnitude: safeFloat($("cfg-ciop-noise-magnitude").value),
+      ciop_noise_type: $("cfg-ciop-noise-type").value,
     },
     gpu_ids:
       Array.from(document.querySelectorAll('input[name="gpu-select"]:checked'))[0]?.value || "",

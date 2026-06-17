@@ -1,0 +1,61 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - heading "🎯 工作" [level=1] [ref=e6]
+        - button "+ 新增" [ref=e7] [cursor=pointer]
+      - generic [ref=e8]:
+        - generic [ref=e11] [cursor=pointer]: miss valentine_v8
+        - generic [ref=e14] [cursor=pointer]: miss valentine_v7
+        - generic [ref=e17] [cursor=pointer]: miss valentine_v6
+        - generic [ref=e20] [cursor=pointer]: miss valentine_v5
+        - generic [ref=e23] [cursor=pointer]: miss valentine_v4
+        - generic [ref=e26] [cursor=pointer]: miss valentine_v3
+        - generic [ref=e29] [cursor=pointer]: miss valentine_v2
+        - generic [ref=e32] [cursor=pointer]: miss valentine_v1
+        - generic [ref=e35] [cursor=pointer]: hong jin youn_v10
+        - generic [ref=e38] [cursor=pointer]: hong jin youn_v9
+        - generic [ref=e41] [cursor=pointer]: hong jin youn_v8
+        - generic [ref=e44] [cursor=pointer]: hong jin youn_v7
+        - generic [ref=e47] [cursor=pointer]: hong jin youn_v6
+        - generic [ref=e50] [cursor=pointer]: hong jin youn_v5
+        - generic [ref=e53] [cursor=pointer]: hong jin youn_v4
+        - generic [ref=e56] [cursor=pointer]: hong jin youn_v3
+        - generic [ref=e59] [cursor=pointer]: my_job_copy_copy_copy_v2
+        - generic [ref=e62] [cursor=pointer]: my_job_copy_copy_copy
+        - generic [ref=e65] [cursor=pointer]: my_job_copy_copy
+        - generic [ref=e68] [cursor=pointer]: my_job_copy
+        - generic [ref=e71] [cursor=pointer]: my_job
+        - generic [ref=e74] [cursor=pointer]: sample
+        - generic [ref=e77] [cursor=pointer]: _logs_anima
+      - button "⚙️ 全域設定" [ref=e79] [cursor=pointer]
+    - main [ref=e80]:
+      - generic [ref=e81]:
+        - generic [ref=e82]: 🧠
+        - heading "尚未選擇工作" [level=2] [ref=e83]
+        - paragraph [ref=e84]: 建立新的訓練工作，或從側邊欄選擇一個工作
+  - generic [ref=e85]:
+    - button "▼" [ref=e86] [cursor=pointer]
+    - generic [ref=e87]:
+      - generic [ref=e151]:
+        - generic [ref=e153]: System
+        - generic [ref=e154]:
+          - generic [ref=e155]: CPU
+          - generic [ref=e158]: 63%
+        - generic [ref=e159]:
+          - generic [ref=e160]: RAM
+          - generic [ref=e163]: 75% 47.9 GB / 63.7 GB
+      - generic [ref=e164]:
+        - generic [ref=e165]:
+          - generic [ref=e166]: GPU 0
+          - generic [ref=e167]: 48°C
+        - generic [ref=e168]:
+          - generic [ref=e169]: Core
+          - generic [ref=e171]: 0%
+        - generic [ref=e172]:
+          - generic [ref=e173]: VRAM
+          - generic [ref=e176]: 24% 2.9 / 12.0 GB
+        - generic [ref=e177]:
+          - generic [ref=e178]: Power
+          - generic [ref=e181]: 28W / 400W
+  - generic [ref=e182]: "Failed to load job: Job not found"

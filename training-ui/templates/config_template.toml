@@ -51,3 +51,16 @@ sigmoid_scale = 1.0
 qwen3_max_token_length = 512
 t5_max_token_length = 512
 weighting_scheme = "uniform"
+model_guidance_weight = 0.0
+model_guidance_warmup_steps = 500
+model_guidance_timestep_scaling = false
+model_guidance_min_weight = 0.0
+model_guidance_cfg_zero = false
+model_guidance_zero_init_threshold = 1.0
+model_guidance_end_step = 0
+model_guidance_prob = 1.0
+ciop_prob = 0.0
+ciop_noise_magnitude = 0.1
+ciop_noise_type = "gaussian"
+
+

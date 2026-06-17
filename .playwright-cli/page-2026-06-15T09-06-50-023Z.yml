@@ -1,0 +1,341 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - heading "🎯 工作" [level=1] [ref=e6]
+        - button "+ 新增" [ref=e7] [cursor=pointer]
+      - generic [ref=e8]:
+        - generic [ref=e122] [cursor=pointer]: miss valentine_v8
+        - generic [ref=e125] [cursor=pointer]: miss valentine_v7
+        - generic [ref=e128] [cursor=pointer]: miss valentine_v6
+        - generic [ref=e131] [cursor=pointer]: miss valentine_v5
+        - generic [ref=e134] [cursor=pointer]: miss valentine_v4
+        - generic [ref=e137] [cursor=pointer]: miss valentine_v3
+        - generic [ref=e140] [cursor=pointer]: miss valentine_v2
+        - generic [ref=e143] [cursor=pointer]: miss valentine_v1
+        - generic [ref=e146] [cursor=pointer]: hong jin youn_v10
+        - generic [ref=e149] [cursor=pointer]: hong jin youn_v9
+        - generic [ref=e152] [cursor=pointer]: hong jin youn_v8
+        - generic [ref=e155] [cursor=pointer]: hong jin youn_v7
+        - generic [ref=e158] [cursor=pointer]: hong jin youn_v6
+        - generic [ref=e161] [cursor=pointer]: hong jin youn_v5
+        - generic [ref=e164] [cursor=pointer]: hong jin youn_v4
+        - generic [ref=e167] [cursor=pointer]: hong jin youn_v3
+        - generic [ref=e170] [cursor=pointer]: my_job_copy_copy_copy_v2
+        - generic [ref=e173] [cursor=pointer]: my_job_copy_copy_copy
+        - generic [ref=e176] [cursor=pointer]: my_job_copy_copy
+        - generic [ref=e179] [cursor=pointer]: my_job_copy
+        - generic [ref=e182] [cursor=pointer]: my_job
+        - generic [ref=e185] [cursor=pointer]: sample
+        - generic [ref=e188] [cursor=pointer]: _logs_anima
+      - button "⚙️ 全域設定" [ref=e79] [cursor=pointer]
+    - main [ref=e80]:
+      - generic [ref=e189]:
+        - generic [ref=e190]:
+          - heading "my_job" [level=2] [ref=e191]
+          - generic [ref=e192]:
+            - button "複製" [ref=e193] [cursor=pointer]
+            - button "▶ 訓練" [ref=e194] [cursor=pointer]
+            - button "🗑" [ref=e195] [cursor=pointer]
+        - generic [ref=e196]:
+          - button "訓練" [ref=e197] [cursor=pointer]
+          - button "資料集" [ref=e198] [cursor=pointer]
+          - button "網路" [ref=e199] [cursor=pointer]
+          - button "提示詞" [ref=e200] [cursor=pointer]
+          - button "樣本" [ref=e201] [cursor=pointer]
+          - button "主控台" [ref=e202] [cursor=pointer]
+          - button "📊 TensorBoard" [ref=e203] [cursor=pointer]
+          - button "⚙️" [ref=e204] [cursor=pointer]
+        - generic [ref=e206]:
+          - heading "最佳化" [level=4] [ref=e207]
+          - generic [ref=e208]:
+            - generic [ref=e209]:
+              - generic [ref=e210]: 學習率
+              - textbox "1e-4" [ref=e211]: "0.0001"
+            - generic [ref=e212]:
+              - generic [ref=e213]: Text Encoder 學習率
+              - textbox "0" [ref=e214]
+          - generic [ref=e215]:
+            - generic [ref=e216]:
+              - generic [ref=e217]: 優化器
+              - combobox [ref=e218]:
+                - option "AdamW8bit"
+                - option "AdamW"
+                - option "PagedAdamW"
+                - option "PagedAdamW8bit"
+                - option "PagedAdamW32bit"
+                - option "Adafactor"
+                - option "Lion8bit"
+                - option "PagedLion8bit"
+                - option "SGDNesterov8bit"
+                - option "Prodigy"
+                - option "AdamWScheduleFree"
+                - option "RAdamScheduleFree"
+                - option "SGDScheduleFree"
+                - option "library.came.CAME" [selected]
+                - option "library.emosens.EmoSens"
+                - option "pytorch_optimizer.CAME"
+            - generic [ref=e219]:
+              - generic [ref=e220]: 學習率排程
+              - combobox [ref=e221]:
+                - option "Cosine"
+                - option "Constant"
+                - option "Constant w/ Warmup" [selected]
+                - option "Linear"
+                - option "Cosine w/ Restarts"
+                - option "Cosine w/ Min LR"
+                - option "Polynomial"
+          - generic [ref=e222]:
+            - generic [ref=e223]:
+              - generic [ref=e224]: 學習率預熱步數
+              - spinbutton [ref=e225]: "0.1"
+            - generic [ref=e226]:
+              - generic [ref=e227]: Weight Decay
+              - spinbutton [ref=e228]
+            - generic [ref=e229]:
+              - generic [ref=e230]: Seed
+              - spinbutton [ref=e231]: "42"
+          - heading "訓練排程" [level=4] [ref=e232]
+          - generic [ref=e233]:
+            - generic [ref=e234]: 訓練長度單位
+            - generic [ref=e235]:
+              - generic [ref=e236] [cursor=pointer]:
+                - radio "輪數" [ref=e237]
+                - text: 輪數
+              - generic [ref=e238] [cursor=pointer]:
+                - radio "步數" [checked] [ref=e239]
+                - text: 步數
+          - generic [ref=e241]:
+            - generic [ref=e242]:
+              - generic [ref=e243]: 最大步數
+              - spinbutton [ref=e244]: "3000"
+            - generic [ref=e245]:
+              - generic [ref=e246]: 每 N 步儲存
+              - spinbutton [ref=e247]: "200"
+          - heading "Checkpoint 管理" [level=4] [ref=e248]
+          - generic [ref=e249]:
+            - generic [ref=e250]:
+              - generic [ref=e251]: 保留最近 N 步
+              - spinbutton [ref=e252]
+              - generic [ref=e253]: 只在依 steps 儲存時生效。留空代表保留全部 checkpoints。
+            - generic [ref=e254]:
+              - generic [ref=e255]: 保留最近 N 輪
+              - spinbutton [ref=e256]
+              - generic [ref=e257]: 只在依 epochs 儲存時生效。留空代表保留全部 checkpoints。
+          - generic [ref=e258]:
+            - generic [ref=e259]:
+              - generic [ref=e260] [cursor=pointer]:
+                - checkbox "儲存訓練 State" [ref=e261]
+                - text: 儲存訓練 State
+              - generic [ref=e262]: 儲存 checkpoint 時，同時儲存 optimizer 與 scheduler 狀態。
+            - generic [ref=e263]:
+              - generic [ref=e264] [cursor=pointer]:
+                - checkbox "訓練結束儲存 State" [ref=e265]
+                - text: 訓練結束儲存 State
+              - generic [ref=e266]: 訓練完成時額外儲存最後的 state 資料夾。
+          - generic [ref=e267]:
+            - generic [ref=e268]:
+              - generic [ref=e269]: 保留最近 N Step States
+              - spinbutton [ref=e270]
+              - generic [ref=e271]: 覆蓋 step state 資料夾的保留數。
+            - generic [ref=e272]:
+              - generic [ref=e273]: 保留最近 N Epoch States
+              - spinbutton [ref=e274]
+              - generic [ref=e275]: 覆蓋 epoch state 資料夾的保留數。
+          - generic [ref=e276]:
+            - generic [ref=e277]:
+              - generic [ref=e278]: 輸出名稱
+              - textbox "my_anima_lora" [ref=e279]: hong jin youn
+            - generic [ref=e280]:
+              - generic [ref=e281]: 儲存格式
+              - combobox [ref=e282]:
+                - option "Safetensors" [selected]
+                - option "Checkpoint"
+          - heading "效能" [level=4] [ref=e283]
+          - generic [ref=e284]:
+            - generic [ref=e285]:
+              - generic [ref=e286]: 混合精度
+              - combobox [ref=e287]:
+                - option "BFloat16" [selected]
+                - option "Float16"
+                - option "Float32"
+            - generic [ref=e288]:
+              - generic [ref=e289]: Transformer DType
+              - combobox [ref=e290]:
+                - option "BFloat16" [selected]
+                - option "Float16"
+                - option "Float32"
+            - generic [ref=e291]:
+              - generic [ref=e292]: 儲存精度
+              - combobox [ref=e293]:
+                - option "BFloat16" [selected]
+                - option "Float16"
+                - option "Float32"
+            - generic [ref=e294]:
+              - generic [ref=e295]: DataLoader Workers
+              - spinbutton [ref=e296]: "2"
+          - generic [ref=e297]:
+            - generic [ref=e298]:
+              - generic [ref=e299]: KNN Noise K
+              - spinbutton [ref=e300]: "2"
+            - generic [ref=e301]:
+              - generic [ref=e302]: CEP Noise
+              - spinbutton [ref=e303]: "0.05"
+          - generic [ref=e304]:
+            - generic [ref=e305] [cursor=pointer]:
+              - checkbox "Persistent DataLoader Workers" [checked] [ref=e306]
+              - text: Persistent DataLoader Workers
+            - generic [ref=e307]: 讓 workers 在 epochs 間保持啟動，減少重新啟動延遲。
+          - generic [ref=e308]:
+            - generic [ref=e309] [cursor=pointer]:
+              - checkbox "Gradient Checkpointing" [checked] [ref=e310]
+              - text: Gradient Checkpointing
+            - generic [ref=e311]: 用額外計算換取 VRAM 節省，建議開啟。
+          - generic [ref=e312]:
+            - generic [ref=e313] [cursor=pointer]:
+              - checkbox "Flash Attention" [ref=e314]
+              - text: Flash Attention
+            - generic [ref=e315]: 需要 flash-attn 套件。
+          - generic [ref=e316]:
+            - generic [ref=e317] [cursor=pointer]:
+              - checkbox "Torch Compile" [ref=e318]
+              - text: Torch Compile
+            - generic [ref=e319]: 使用 dynamo inductor backend。第一步較慢，之後訓練可能更快。
+          - generic [ref=e320]:
+            - generic [ref=e321]:
+              - generic [ref=e322] [cursor=pointer]:
+                - checkbox "低 RAM 最佳化" [ref=e323]
+                - text: 低 RAM 最佳化
+              - generic [ref=e324]: 將模型載入 VRAM 以節省系統 RAM。
+            - generic [ref=e325]:
+              - generic [ref=e326]: 要 Swap 的 Blocks
+              - spinbutton [ref=e327]: "0"
+              - generic [ref=e328]: 把 transformer blocks 移到 RAM 以節省 VRAM。0 = 關閉。
+          - generic [ref=e329]:
+            - generic [ref=e330]: Activation Offload
+            - combobox [ref=e331]:
+              - option "None" [selected]
+              - option "CPU Offload (blocking transfers)"
+              - option "Unsloth Offload (async, faster)"
+            - generic [ref=e332]: backward 時把 activations 卸載到 CPU。需要 Gradient Checkpointing。
+          - heading "快取" [level=4] [ref=e333]
+          - generic [ref=e334]:
+            - generic [ref=e335]:
+              - generic [ref=e336] [cursor=pointer]:
+                - checkbox "Cache Latents to Disk" [checked] [ref=e337]
+                - text: Cache Latents to Disk
+              - generic [ref=e338]: 預先把圖片編碼成 .safetensors，加快訓練讀取。
+            - generic [ref=e339]:
+              - generic [ref=e340]: VAE Batch Size
+              - spinbutton [ref=e341]: "1"
+            - generic [ref=e342]:
+              - generic [ref=e343]: VAE Chunk Size
+              - spinbutton [ref=e344]: "64"
+              - generic [ref=e345]: 0 代表停用 VAE 分塊 decode。數值越低越省 VRAM。
+          - generic [ref=e346]:
+            - generic [ref=e347] [cursor=pointer]:
+              - checkbox "Cache Text Encoder Outputs to Disk" [ref=e348]
+              - text: Cache Text Encoder Outputs to Disk
+            - generic [ref=e349]: 預先編碼 captions。凍結 text encoder 時需要啟用。
+          - generic [ref=e350]:
+            - generic [ref=e351] [cursor=pointer]:
+              - checkbox "停用 VAE Cache" [ref=e352]
+              - text: 停用 VAE Cache
+            - generic [ref=e353]: 如果 VAE chunking 仍不夠，可再降低 VAE 記憶體使用。
+          - generic [ref=e354]:
+            - generic [ref=e355]:
+              - generic [ref=e356]: Timestep 取樣方式
+              - combobox [ref=e357]:
+                - option "Sigmoid (Logit Normal)" [selected]
+                - option "Uniform"
+                - option "Sigma"
+                - option "Shift"
+                - option "Flux Shift"
+                - option "P-LoRA"
+            - generic [ref=e358]:
+              - generic [ref=e359]: Flow Shift
+              - spinbutton [ref=e360]: "1"
+            - generic [ref=e361]:
+              - generic [ref=e362]: 權重方案
+              - combobox [ref=e363]:
+                - option "Uniform（Kohya 預設）" [selected]
+                - option "None"
+                - option "Sigma Sqrt"
+                - option "Logit Normal"
+                - option "Mode"
+                - option "Cosmap"
+                - option "P-LoRA"
+                - option "P-LoRA Sigmoid"
+                - option "P-LoRA Sigmoid 1.3"
+          - generic [ref=e364]:
+            - generic [ref=e365]:
+              - generic [ref=e366]: Sigmoid Scale
+              - spinbutton [ref=e367]: "1"
+            - generic [ref=e368]:
+              - generic [ref=e369]: Qwen3 最大 Tokens
+              - spinbutton [ref=e370]: "512"
+            - generic [ref=e371]:
+              - generic [ref=e372]: T5 最大 Tokens
+              - spinbutton [ref=e373]: "512"
+          - heading "Model Guidance Training (arXiv:2502.12154)" [level=4] [ref=e374]
+          - generic [ref=e375]:
+            - generic [ref=e376]:
+              - generic [ref=e377]: Model Guidance Weight
+              - spinbutton [ref=e378]: "0"
+              - generic [ref=e379]: Set > 0.0 to enable Model Guidance.
+            - generic [ref=e380]:
+              - generic [ref=e381]: Warmup Steps
+              - spinbutton [ref=e382]: "500"
+              - generic [ref=e383]: Linear warmup steps for weight.
+            - generic [ref=e384]:
+              - generic [ref=e385]: Activation Probability
+              - spinbutton [ref=e386]: "1"
+              - generic [ref=e387]: Probability of applying (0.0 ~ 1.0).
+          - generic [ref=e388]:
+            - generic [ref=e389]:
+              - generic [ref=e390]: End Step
+              - spinbutton [ref=e391]: "0"
+              - generic [ref=e392]: 0 means active for all steps.
+            - generic [ref=e393]:
+              - generic [ref=e394] [cursor=pointer]:
+                - checkbox "Timestep Scaling" [ref=e395]
+                - text: Timestep Scaling
+              - generic [ref=e396]: Beta-curve adaptive scaling.
+            - generic [ref=e397]:
+              - generic [ref=e398]: Min Weight
+              - spinbutton [ref=e399]: "0"
+              - generic [ref=e400]: Used for Timestep Scaling.
+          - generic [ref=e401]:
+            - generic [ref=e402]:
+              - generic [ref=e403] [cursor=pointer]:
+                - checkbox "CFG-Zero* Scaling" [ref=e404]
+                - text: CFG-Zero* Scaling
+              - generic [ref=e405]: Dynamic projection scaling.
+            - generic [ref=e406]:
+              - generic [ref=e407]: CFG-Zero* Threshold
+              - spinbutton [ref=e408]: "1"
+              - generic [ref=e409]: Zero-init noise threshold.
+  - generic [ref=e85]:
+    - button "▼" [ref=e86] [cursor=pointer]
+    - generic [ref=e87]:
+      - generic [ref=e410]:
+        - generic [ref=e412]: System
+        - generic [ref=e413]:
+          - generic [ref=e414]: CPU
+          - generic [ref=e417]: 58%
+        - generic [ref=e418]:
+          - generic [ref=e419]: RAM
+          - generic [ref=e422]: 75% 47.9 GB / 63.7 GB
+      - generic [ref=e423]:
+        - generic [ref=e424]:
+          - generic [ref=e425]: GPU 0
+          - generic [ref=e426]: 48°C
+        - generic [ref=e427]:
+          - generic [ref=e428]: Core
+          - generic [ref=e430]: 0%
+        - generic [ref=e431]:
+          - generic [ref=e432]: VRAM
+          - generic [ref=e435]: 24% 2.9 / 12.0 GB
+        - generic [ref=e436]:
+          - generic [ref=e437]: Power
+          - generic [ref=e440]: 28W / 400W

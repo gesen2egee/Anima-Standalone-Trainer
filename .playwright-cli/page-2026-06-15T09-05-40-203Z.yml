@@ -1,0 +1,215 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - heading "🎯 工作" [level=1] [ref=e6]
+        - button "+ 新增" [ref=e7] [cursor=pointer]
+      - generic [ref=e8]:
+        - generic [ref=e216] [cursor=pointer]: miss valentine_v8
+        - generic [ref=e219] [cursor=pointer]: miss valentine_v7
+        - generic [ref=e222] [cursor=pointer]: miss valentine_v6
+        - generic [ref=e225] [cursor=pointer]: miss valentine_v5
+        - generic [ref=e228] [cursor=pointer]: miss valentine_v4
+        - generic [ref=e231] [cursor=pointer]: miss valentine_v3
+        - generic [ref=e234] [cursor=pointer]: miss valentine_v2
+        - generic [ref=e237] [cursor=pointer]: miss valentine_v1
+        - generic [ref=e240] [cursor=pointer]: hong jin youn_v10
+        - generic [ref=e243] [cursor=pointer]: hong jin youn_v9
+        - generic [ref=e246] [cursor=pointer]: hong jin youn_v8
+        - generic [ref=e249] [cursor=pointer]: hong jin youn_v7
+        - generic [ref=e252] [cursor=pointer]: hong jin youn_v6
+        - generic [ref=e255] [cursor=pointer]: hong jin youn_v5
+        - generic [ref=e258] [cursor=pointer]: hong jin youn_v4
+        - generic [ref=e261] [cursor=pointer]: hong jin youn_v3
+        - generic [ref=e264] [cursor=pointer]: my_job_copy_copy_copy_v2
+        - generic [ref=e267] [cursor=pointer]: my_job_copy_copy_copy
+        - generic [ref=e270] [cursor=pointer]: my_job_copy_copy
+        - generic [ref=e273] [cursor=pointer]: my_job_copy
+        - generic [ref=e276] [cursor=pointer]: my_job
+        - generic [ref=e279] [cursor=pointer]: sample
+        - generic [ref=e282] [cursor=pointer]: _logs_anima
+      - button "⚙️ 全域設定" [ref=e79] [cursor=pointer]
+    - main [ref=e80]:
+      - generic [ref=e283]:
+        - generic [ref=e284]:
+          - heading "my_job" [level=2] [ref=e285]
+          - generic [ref=e286]:
+            - button "複製" [ref=e287] [cursor=pointer]
+            - button "▶ 訓練" [ref=e288] [cursor=pointer]
+            - button "🗑" [ref=e289] [cursor=pointer]
+        - generic [ref=e290]:
+          - button "訓練" [ref=e291] [cursor=pointer]
+          - button "資料集" [active] [ref=e292] [cursor=pointer]
+          - button "網路" [ref=e293] [cursor=pointer]
+          - button "提示詞" [ref=e294] [cursor=pointer]
+          - button "樣本" [ref=e295] [cursor=pointer]
+          - button "主控台" [ref=e296] [cursor=pointer]
+          - button "📊 TensorBoard" [ref=e297] [cursor=pointer]
+          - button "⚙️" [ref=e298] [cursor=pointer]
+        - generic [ref=e566]:
+          - heading "資料集全域設定" [level=4] [ref=e567]
+          - generic [ref=e568]:
+            - generic [ref=e569]:
+              - generic [ref=e570]: 解析度
+              - textbox "例如 512, 1024, 2048" [ref=e571]: "768"
+              - generic [ref=e572]: 分桶用最大解析度。多解析度快取可用逗號分隔，例如 512, 1024。
+            - generic [ref=e573]:
+              - generic [ref=e574]: Batch Size
+              - textbox "例如 1, 2, 4" [ref=e575]: "1"
+              - generic [ref=e576]: 用逗號分隔，可替不同解析度指定不同 batch size。
+          - generic [ref=e577]:
+            - generic [ref=e578] [cursor=pointer]:
+              - checkbox "漸進式解析度排程" [ref=e579]
+              - text: 漸進式解析度排程
+            - generic [ref=e580]: 依序訓練各解析度（低 → 高），而不是混合訓練。上方至少需要 2 個解析度，epochs 與 max steps 都可用。
+          - generic [ref=e581]:
+            - generic [ref=e582]:
+              - generic [ref=e583]: Gradient Accumulation
+              - spinbutton [ref=e584]: "1"
+            - generic [ref=e585]:
+              - generic [ref=e586]: Caption 副檔名
+              - textbox ".txt" [ref=e587]
+          - generic [ref=e588]:
+            - generic [ref=e589] [cursor=pointer]:
+              - checkbox "Alpha Mask" [checked] [ref=e590]
+              - text: Alpha Mask
+            - generic [ref=e591]: 使用圖片 alpha channel 作為 loss mask。沒有 alpha 的圖片會正常訓練。
+          - heading "Frequency-Aware Dropout" [level=4] [ref=e592]
+          - generic [ref=e593]:
+            - generic [ref=e594]:
+              - generic [ref=e595]: FAD 最小丟棄率
+              - spinbutton [ref=e596]: "0.35"
+            - generic [ref=e597]:
+              - generic [ref=e598]: FAD 最大丟棄率
+              - spinbutton [ref=e599]: "1"
+          - generic [ref=e600]:
+            - generic [ref=e601]:
+              - generic [ref=e602]: FAD Alpha
+              - spinbutton [ref=e603]: "10"
+            - generic [ref=e604]:
+              - generic [ref=e605]: FAD 中心比例
+              - spinbutton [ref=e606]: "0.5"
+          - generic [ref=e607]:
+            - generic [ref=e608]:
+              - generic [ref=e609]: sFAD 開始比例
+              - spinbutton [ref=e610]: "0.1"
+            - generic [ref=e611]:
+              - generic [ref=e612]: sFAD 結束比例
+              - spinbutton [ref=e613]: "0.8"
+          - generic [ref=e614]:
+            - generic [ref=e615]:
+              - generic [ref=e616]: sFAD Beta
+              - spinbutton [ref=e617]: "3"
+            - generic [ref=e618]:
+              - generic [ref=e619]: sFAD 步數縮放
+              - generic [ref=e620]:
+                - spinbutton [ref=e621]: "0"
+                - spinbutton [ref=e622]: "1"
+          - heading "分桶" [level=4] [ref=e623]
+          - generic [ref=e624]:
+            - generic [ref=e625] [cursor=pointer]:
+              - checkbox "Enable Aspect Ratio Bucketing" [checked] [ref=e626]
+              - text: Enable Aspect Ratio Bucketing
+            - generic [ref=e627]: 依照圖片長寬比分組，讓訓練更有效率。
+          - generic [ref=e628]:
+            - generic [ref=e629] [cursor=pointer]:
+              - checkbox "Do Not Upscale Images" [checked] [ref=e630]
+              - text: Do Not Upscale Images
+            - generic [ref=e631]: Images smaller than the bucket resolution will not be upscaled, saving VRAM and disk space.
+          - generic [ref=e632]:
+            - generic [ref=e633]:
+              - generic [ref=e634]: 最小 Bucket 解析度
+              - spinbutton [ref=e635]: "512"
+            - generic [ref=e636]:
+              - generic [ref=e637]: 最大 Bucket 解析度
+              - spinbutton [ref=e638]: "2048"
+          - generic [ref=e639]:
+            - generic [ref=e640]: Bucket 解析度步進
+            - spinbutton [ref=e641]: "64"
+          - generic [ref=e642]:
+            - generic [ref=e643] [cursor=pointer]:
+              - checkbox "停用 Bucket Shuffle" [ref=e644]
+              - text: 停用 Bucket Shuffle
+            - generic [ref=e645]: 保留每個解析度 bucket 內的 DataLoader 順序。
+          - generic [ref=e646]:
+            - heading "資料集資料夾" [level=4] [ref=e647]
+            - button "+ 新增資料集" [ref=e648] [cursor=pointer]
+          - generic [ref=e650]:
+            - generic [ref=e651]:
+              - generic [ref=e652] [cursor=pointer]:
+                - generic [ref=e653]: ▼
+                - generic [ref=e654]: Dataset 1
+              - button "🗑️" [disabled] [ref=e655]
+            - generic [ref=e656]:
+              - generic [ref=e657]:
+                - generic [ref=e658]: 圖片資料夾
+                - generic [ref=e659]:
+                  - textbox "C:\\path\\to\\images" [ref=e660]: D:\SDXL\ai-toolkit\datasets\hong jin youn
+                  - button "📂" [ref=e661] [cursor=pointer]
+              - generic [ref=e662]:
+                - generic [ref=e663]:
+                  - generic [ref=e664]: 重複次數
+                  - spinbutton [ref=e665]: "1"
+                - generic [ref=e666]:
+                  - generic [ref=e667]: 保留 Tokens
+                  - spinbutton [ref=e668]: "5"
+              - generic [ref=e669]:
+                - generic [ref=e670]: Caption 前綴
+                - textbox "e.g. A photo of," [ref=e671]
+              - generic [ref=e672]:
+                - generic [ref=e673]:
+                  - generic [ref=e674]: Caption Dropout Rate
+                  - spinbutton [ref=e675]: "0.05"
+                - generic [ref=e676]:
+                  - generic [ref=e677]: Tag Dropout Rate
+                  - spinbutton [ref=e678]: "0.3"
+              - generic [ref=e680]:
+                - generic [ref=e681]: 每 N 輪 Dropout
+                - spinbutton [ref=e682]: "0"
+                - generic [ref=e683]: 0 = disabled
+              - generic [ref=e685]:
+                - generic [ref=e687] [cursor=pointer]:
+                  - checkbox "打亂 Captions" [checked] [ref=e688]
+                  - text: 打亂 Captions
+                - generic [ref=e690] [cursor=pointer]:
+                  - checkbox "啟用 Wildcard" [checked] [ref=e691]
+                  - text: 啟用 Wildcard
+              - generic [ref=e692]:
+                - generic [ref=e694] [cursor=pointer]:
+                  - checkbox "啟用 FAD" [ref=e695]
+                  - text: 啟用 FAD
+                - generic [ref=e697] [cursor=pointer]:
+                  - checkbox "sFAD 排程" [ref=e698]
+                  - text: sFAD 排程
+              - generic [ref=e701] [cursor=pointer]:
+                - checkbox "Flip Augmentations" [ref=e702]
+                - text: Flip Augmentations
+              - generic [ref=e704]:
+                - generic [ref=e705] [cursor=pointer]:
+                  - checkbox "正則化資料集" [ref=e706]
+                  - text: 正則化資料集
+                - generic [ref=e707]: Images in this folder are used as regularization (class images) to prevent overfitting.
+  - generic [ref=e85]:
+    - button "▼" [ref=e86] [cursor=pointer]
+    - generic [ref=e87]:
+      - generic [ref=e708]:
+        - generic [ref=e710]: System
+        - generic [ref=e711]:
+          - generic [ref=e712]: CPU
+          - generic [ref=e715]: 57%
+        - generic [ref=e716]:
+          - generic [ref=e717]: RAM
+          - generic [ref=e720]: 75% 47.6 GB / 63.7 GB
+      - generic [ref=e721]:
+        - generic [ref=e722]:
+          - generic [ref=e723]: GPU 0
+          - generic [ref=e724]: 48°C
+        - generic [ref=e725]:
+          - generic [ref=e726]: Core
+          - generic [ref=e728]: 0%
+        - generic [ref=e729]:
+          - generic [ref=e730]: VRAM
+          - generic [ref=e733]: 24% 2.9 / 12.0 GB
+        - generic [ref=e734]:
+          - generic [ref=e735]: Power
+          - generic [ref=e738]: 28W / 400W

@@ -535,6 +535,21 @@ def train(args):
                 )
                 timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
+                # AAAI-26 Coordinated Input-Output Perturbation (CIOP)
+                apply_ciop = False
+                if hasattr(args, "ciop_prob") and args.ciop_prob > 0.0 and torch.rand(1).item() < args.ciop_prob:
+                    apply_ciop = True
+                    std = args.ciop_noise_magnitude
+                    if getattr(args, "ciop_noise_type", "gaussian") == "uniform":
+                        limit = math.sqrt(3.0) * args.ciop_noise_magnitude
+                        eps_in = (torch.rand_like(latents) * 2 - 1.0) * limit
+                        eps_out = (torch.rand_like(latents) * 2 - 1.0) * limit
+                    else:
+                        eps_in = torch.randn_like(latents) * std
+                        eps_out = torch.randn_like(latents) * std
+                    
+                    noisy_model_input = noisy_model_input + eps_in
+
                 # NaN checks
                 if torch.any(torch.isnan(noisy_model_input)):
                     accelerator.print("NaN found in noisy_model_input, replacing with zeros")
@@ -562,7 +577,67 @@ def train(args):
                 model_pred = model_pred.squeeze(2)  # 5D to 4D, (B, C, H, W)
 
                 # Compute loss (rectified flow: target = noise - latents)
-                target = noise - latents
+                end_step = getattr(args, "model_guidance_end_step", 0)
+
+                # Model guidance stochastic activation check
+                apply_model_guidance = False
+                if getattr(args, "model_guidance_weight", 0.0) > 0.0 and (end_step == 0 or global_step < end_step):
+                    apply_model_guidance = True
+                    if hasattr(args, "model_guidance_prob") and args.model_guidance_prob < 1.0:
+                        if torch.rand(1).item() > args.model_guidance_prob:
+                            apply_model_guidance = False
+
+                if apply_model_guidance:
+                    current_mg_weight = args.model_guidance_weight
+                    if getattr(args, "model_guidance_warmup_steps", 0) > 0 and global_step < args.model_guidance_warmup_steps:
+                        current_mg_weight = args.model_guidance_weight * (global_step / args.model_guidance_warmup_steps)
+
+                    prompt_embeds_uncond = torch.zeros_like(prompt_embeds)
+                    attn_mask_uncond = torch.zeros_like(attn_mask)
+                    attn_mask_uncond[:, 0] = 1
+                    t5_input_ids_uncond = torch.zeros_like(t5_input_ids)
+                    t5_input_ids_uncond[:, 0] = 1
+                    t5_attn_mask_uncond = torch.zeros_like(t5_attn_mask)
+                    t5_attn_mask_uncond[:, 0] = 1
+
+                    with torch.no_grad(), accelerator.autocast():
+                        model_pred_uncond = dit(
+                            noisy_model_input,
+                            timesteps,
+                            prompt_embeds_uncond,
+                            padding_mask=padding_mask,
+                            source_attention_mask=attn_mask_uncond,
+                            t5_input_ids=t5_input_ids_uncond,
+                            t5_attn_mask=t5_attn_mask_uncond,
+                        )
+                    model_pred_uncond = model_pred_uncond.squeeze(2)
+
+                    if getattr(args, "model_guidance_cfg_zero", False):
+                        dot_product = torch.sum(model_pred * model_pred_uncond, dim=[1, 2, 3], keepdim=True)
+                        squared_norm = torch.sum(model_pred_uncond ** 2, dim=[1, 2, 3], keepdim=True) + 1e-8
+                        st_star = dot_product / squared_norm
+                        w_t = current_mg_weight * st_star.detach()
+
+                        # zero init threshold is only active when model_guidance_cfg_zero is True
+                        is_zero_init_stage = (timesteps >= getattr(args, "model_guidance_zero_init_threshold", 0.95))
+                        zero_mask = (~is_zero_init_stage).float().view(bs, 1, 1, 1)
+                        w_t = w_t * zero_mask
+                    elif getattr(args, "model_guidance_timestep_scaling", False):
+                        beta_curve = 4.0 * timesteps * (1.0 - timesteps)
+                        min_w = getattr(args, "model_guidance_min_weight", 0.0)
+                        w_t = min_w + (current_mg_weight - min_w) * beta_curve
+                        w_t = w_t.view(bs, 1, 1, 1)
+                    else:
+                        w_t = current_mg_weight
+
+                    target = (noise - latents) + w_t * (model_pred - model_pred_uncond).detach()
+                else:
+                    target = noise - latents
+
+                # Apply CIOP output perturbation to target
+                if apply_ciop:
+                    target = target + eps_out
+
 
                 # Weighting
                 weighting = anima_train_utils.compute_loss_weighting_for_anima(
@@ -732,6 +807,47 @@ def setup_parser() -> argparse.ArgumentParser:
         help="offload gradient checkpointing to CPU (reduces VRAM at cost of speed)",
     )
     parser.add_argument(
+        "--model_guidance_weight",
+        type=float,
+        default=0.0,
+        help="Weight for Model-guidance training (arXiv:2502.12154). Set > 0.0 to enable.",
+    )
+    parser.add_argument(
+        "--model_guidance_warmup_steps",
+        type=int,
+        default=500,
+        help="Warmup steps for model guidance training (arXiv:2502.12154).",
+    )
+    parser.add_argument(
+        "--model_guidance_timestep_scaling",
+        action="store_true",
+        help="Enable timestep-adaptive weight scaling (beta-CFG geometry).",
+    )
+    parser.add_argument(
+        "--model_guidance_min_weight",
+        type=float,
+        default=0.0,
+        help="Minimum weight for timestep-adaptive scaling.",
+    )
+    parser.add_argument(
+        "--model_guidance_cfg_zero",
+        action="store_true",
+        help="Enable CFG-Zero* geometric adaptive scaling.",
+    )
+    parser.add_argument(
+        "--model_guidance_zero_init_threshold",
+        type=float,
+        default=1.0,
+        help="Threshold t for high-noise zero guidance stage (only active with CFG-Zero*).",
+    )
+    parser.add_argument(
+        "--model_guidance_end_step",
+        type=int,
+        default=0,
+        help="Only use Model Guidance for the first N steps. Default 0 means use for all steps.",
+    )
+
+    parser.add_argument(
         "--unsloth_offload_checkpointing",
         action="store_true",
         help="offload activations to CPU RAM using async non-blocking transfers (faster than --cpu_offload_checkpointing). "
@@ -741,6 +857,19 @@ def setup_parser() -> argparse.ArgumentParser:
         "--skip_latents_validity_check",
         action="store_true",
         help="[Deprecated] use 'skip_cache_check' instead",
+    )
+    parser.add_argument(
+        "--ciop_noise_magnitude",
+        type=float,
+        default=0.1,
+        help="AAAI-26 Coordinated Input-Output Perturbation (CIOP) noise standard deviation/weight. Default is 0.1.",
+    )
+    parser.add_argument(
+        "--ciop_noise_type",
+        type=str,
+        default="gaussian",
+        choices=["gaussian", "uniform"],
+        help="AAAI-26 Coordinated Input-Output Perturbation (CIOP) noise distribution type. Default is 'gaussian'.",
     )
 
     return parser

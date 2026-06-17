@@ -9,6 +9,15 @@ bucket_reso_steps = 64
 resolution = [1024, 1024]
 batch_size = 1
 caption_extension = ".txt"
+fad_p_min = 0.35
+fad_p_max = 1.0
+fad_alpha = 10.0
+fad_c = 0.5
+fad_curriculum_start = 0.0
+fad_curriculum_end = 1.0
+fad_curriculum_beta = 3.0
+fad_step_start = 0.0
+fad_step_end = 1.0
 
   [[datasets.subsets]]
   image_dir = ""
@@ -17,6 +26,8 @@ caption_extension = ".txt"
   flip_aug = false
   caption_prefix = ""
   shuffle_caption = true
+  enable_fad = false
+  fad_curriculum = false
   enable_wildcard = true
   alpha_mask = true
   caption_tag_dropout_rate = 0.3
