@@ -4504,8 +4504,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "--loss_type",
         type=str,
         default="l2",
-        choices=["l1", "l2", "huber", "smooth_l1"],
-        help="The type of loss function to use (L1, L2, Huber, or smooth L1), default is L2 / 使用する損失関数の種類（L1、L2、Huber、またはsmooth L1）、デフォルトはL2",
+        choices=["l1", "l2", "huber", "smooth_l1", "cwmi"],
+        help="The type of loss function to use (L1, L2, Huber, smooth L1, or CWMI), default is L2 / 使用する損失関数の種類（L1、L2、Huber、smooth L1、またはCWMI）、デフォルトはL2",
     )
     parser.add_argument(
         "--huber_schedule",
@@ -4529,6 +4529,30 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         default=1.0,
         help="The Huber loss scale parameter. Only used if one of the huber loss modes (huber or smooth l1) is selected with loss_type. default is 1.0"
         " / Huber損失のスケールパラメータ。loss_typeがhuberまたはsmooth l1の場合に有効。デフォルトは1.0",
+    )
+    parser.add_argument(
+        "--cwmi_lambda",
+        type=float,
+        default=0.1,
+        help="mixing factor for CWMI loss: final loss is (1-cwmi_lambda)*cwmi + cwmi_lambda*l2 when loss_type is cwmi",
+    )
+    parser.add_argument(
+        "--cwmi_levels",
+        type=int,
+        default=4,
+        help="number of decomposition levels for CWMI (used when loss_type is cwmi)",
+    )
+    parser.add_argument(
+        "--cwmi_orientations",
+        type=int,
+        default=4,
+        help="number of orientations for CWMI steerable pyramid (used when loss_type is cwmi)",
+    )
+    parser.add_argument(
+        "--cwmi_eps",
+        type=float,
+        default=5e-4,
+        help="numerical stability epsilon for CWMI covariance/cholesky operations (used when loss_type is cwmi)",
     )
 
     parser.add_argument(
@@ -4857,6 +4881,24 @@ def verify_training_args(args: argparse.Namespace):
             "sample_every_n_steps is less than or equal to 0, so it will be disabled / sample_every_n_stepsに0以下の値が指定されたため無効になります"
         )
         args.sample_every_n_steps = None
+
+    if not hasattr(args, "cwmi_lambda"):
+        args.cwmi_lambda = 0.1
+    if not hasattr(args, "cwmi_levels"):
+        args.cwmi_levels = 4
+    if not hasattr(args, "cwmi_orientations"):
+        args.cwmi_orientations = 4
+    if not hasattr(args, "cwmi_eps"):
+        args.cwmi_eps = 5e-4
+
+    if args.cwmi_lambda < 0.0 or args.cwmi_lambda > 1.0:
+        raise ValueError("cwmi_lambda must be between 0.0 and 1.0")
+    if args.cwmi_levels < 1:
+        raise ValueError("cwmi_levels must be greater than or equal to 1")
+    if args.cwmi_orientations < 1:
+        raise ValueError("cwmi_orientations must be greater than or equal to 1")
+    if args.cwmi_eps <= 0.0:
+        raise ValueError("cwmi_eps must be greater than 0.0")
 
 
 def add_dataset_arguments(

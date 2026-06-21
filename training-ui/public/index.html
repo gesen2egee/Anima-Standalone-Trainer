@@ -308,6 +308,44 @@
                                 <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
                             </div>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Loss Type</label>
+                                <select id="cfg-loss-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
+                                    <option value="l2">L2</option>
+                                    <option value="l1">L1</option>
+                                    <option value="huber">Huber</option>
+                                    <option value="smooth_l1">Smooth L1</option>
+                                    <option value="cwmi">CWMI</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="group-cwmi-fields" class="hidden">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>CWMI Lambda</label>
+                                    <input type="number" id="cfg-cwmi-lambda" value="0.1" min="0" max="1" step="0.01">
+                                    <small>Mixing factor: (1-lambda)*cwmi + lambda*l2</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>CWMI Levels</label>
+                                    <input type="number" id="cfg-cwmi-levels" value="4" min="1" step="1">
+                                    <small>Pyramid decomposition levels</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>CWMI Orientations</label>
+                                    <input type="number" id="cfg-cwmi-orientations" value="4" min="1" step="1">
+                                    <small>Number of orientations</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>CWMI Epsilon</label>
+                                    <input type="number" id="cfg-cwmi-eps" value="0.0005" min="0" step="0.0001">
+                                    <small>Epsilon for Cholesky stability</small>
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-persistent-workers" checked> Persistent DataLoader
                                 Workers</label>

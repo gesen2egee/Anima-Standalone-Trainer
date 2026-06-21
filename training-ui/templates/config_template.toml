@@ -32,6 +32,11 @@ vae_batch_size = 1
 vae_chunk_size = 64
 vae_disable_cache = false
 cache_text_encoder_outputs_to_disk = false
+loss_type = "l2"
+cwmi_lambda = 0.1
+cwmi_levels = 4
+cwmi_orientations = 4
+cwmi_eps = 0.0005
 
 [network_arguments]
 network_module = "networks.krona"

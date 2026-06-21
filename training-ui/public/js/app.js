@@ -1264,6 +1264,12 @@ function populateConfig(config) {
   $("cfg-blocks-to-swap").value = t.blocks_to_swap ?? 0;
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
+  $("cfg-loss-type").value = t.loss_type || "l2";
+  $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;
+  $("cfg-cwmi-levels").value = t.cwmi_levels ?? 4;
+  $("cfg-cwmi-orientations").value = t.cwmi_orientations ?? 4;
+  $("cfg-cwmi-eps").value = t.cwmi_eps ?? 0.0005;
+  updateLossTypeUI();
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
     $("cfg-activation-offload").value = "unsloth";
@@ -1496,6 +1502,11 @@ function updateLrSchedulerOptions() {
     scheduler !== "cosine_with_min_lr",
   );
 }
+function updateLossTypeUI() {
+  const lossType = $("cfg-loss-type").value;
+  const isCwmi = lossType === "cwmi";
+  $("group-cwmi-fields").classList.toggle("hidden", !isCwmi);
+}
 function updateActivationOffloadUI() {
   const offload = $("cfg-activation-offload").value;
   const blocksInput = $("cfg-blocks-to-swap");
@@ -1600,6 +1611,11 @@ function gatherConfig() {
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
       knn_noise_k: safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
+      loss_type: $("cfg-loss-type").value,
+      cwmi_lambda: safeFloat($("cfg-cwmi-lambda").value),
+      cwmi_levels: safeInt($("cfg-cwmi-levels").value),
+      cwmi_orientations: safeInt($("cfg-cwmi-orientations").value),
+      cwmi_eps: safeFloat($("cfg-cwmi-eps").value),
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -4423,6 +4439,7 @@ async function init() {
     "change",
     updateActivationOffloadUI,
   );
+  $("cfg-loss-type").addEventListener("change", updateLossTypeUI);
   // Discard Button
   $("btn-discard").addEventListener("click", discardChanges);
   // Mutual exclusivity for Flash/Sage Attention
