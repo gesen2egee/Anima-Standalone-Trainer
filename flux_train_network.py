@@ -331,6 +331,8 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
+        self.current_noisy_latents = noisy_model_input
+        self.current_sigmas = sigmas
 
         # pack latents and get img_ids
         packed_noisy_model_input = flux_utils.pack_latents(noisy_model_input)  # b, c, h*2, w*2 -> b, h*w, c*4
@@ -435,6 +437,9 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         return loss
+
+    def get_wavelet_prediction_type(self, args):
+        return "velocity" if args.model_prediction_type == "raw" else "sample"
 
     def get_sai_model_spec(self, args):
         if self.model_type != "chroma":

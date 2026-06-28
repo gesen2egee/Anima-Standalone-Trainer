@@ -50,7 +50,7 @@ class CAME(torch.optim.Optimizer):
         params,
         lr: float = 2e-4,
         betas: Tuple[float, float, float] = (0.9, 0.999, 0.9999),
-        weight_decay: float = 0.1,
+        weight_decay: float = 0,
         weight_decouple: bool = True,
         fixed_decay: bool = False,
         clip_threshold: float = 1.0,
@@ -81,6 +81,12 @@ class CAME(torch.optim.Optimizer):
         adapprox_oversample: int = 4,
         adapprox_niter: int = 1,
         adapprox_residual: bool = True,
+        use_msign: bool = False,
+        msign_period: int = 100,
+        msign_min_dim: int = 2,
+        msign_eps: float = 1e-12,
+        msign_max_numel: int = 0,
+        msign_on_schedulefree_p: bool = True,
         **kwargs,
     ):
         # Accept both the requested public spelling `Adapprox=True` and the
@@ -132,6 +138,14 @@ class CAME(torch.optim.Optimizer):
             raise ValueError(f"adapprox_oversample must be >= 0. Got {adapprox_oversample}")
         if adapprox_niter < 0:
             raise ValueError(f"adapprox_niter must be >= 0. Got {adapprox_niter}")
+        if msign_period < 1:
+            raise ValueError(f"msign_period must be >= 1. Got {msign_period}")
+        if msign_min_dim < 1:
+            raise ValueError(f"msign_min_dim must be >= 1. Got {msign_min_dim}")
+        if msign_eps <= 0.0:
+            raise ValueError(f"msign_eps must be > 0. Got {msign_eps}")
+        if msign_max_numel < 0:
+            raise ValueError(f"msign_max_numel must be >= 0. Got {msign_max_numel}")
 
         if automagic and lr > 1e-3:
             print("Warning! Start lr is very high for Automagic; forcing to 1e-6.")
@@ -176,6 +190,12 @@ class CAME(torch.optim.Optimizer):
             "adapprox_oversample": int(adapprox_oversample),
             "adapprox_niter": int(adapprox_niter),
             "adapprox_residual": bool(adapprox_residual),
+            "use_msign": bool(use_msign),
+            "msign_period": int(msign_period),
+            "msign_min_dim": int(msign_min_dim),
+            "msign_eps": float(msign_eps),
+            "msign_max_numel": int(msign_max_numel),
+            "msign_on_schedulefree_p": bool(msign_on_schedulefree_p),
         }
 
         super().__init__(params, defaults)
@@ -353,6 +373,62 @@ class CAME(torch.optim.Optimizer):
     @staticmethod
     def _unflatten_from_matrix(x: torch.Tensor, original_shape: Tuple[int, ...]) -> torch.Tensor:
         return x.reshape(original_shape)
+
+    @torch.no_grad()
+    def _apply_msign_to_parameter(self, tensor: torch.Tensor, state: dict, group: dict) -> bool:
+        """Apply Frobenius-norm preserving matrix sign to one parameter.
+
+        For tensors with ndim > 2, the tensor is flattened to a 2D matrix by
+        preserving the last dimension. This keeps the method usable for generic
+        PyTorch parameters, while standard Transformer linear weights remain the
+        common 2D case.
+
+        Returns True when MSign was applied and False when the tensor was skipped.
+        """
+        if not group.get("use_msign", False):
+            return False
+        if tensor.ndim < 2 or not tensor.is_floating_point():
+            return False
+
+        max_numel = int(group.get("msign_max_numel", 0))
+        if max_numel > 0 and tensor.numel() > max_numel:
+            return False
+
+        matrix, original_shape = self._flatten_to_matrix(tensor)
+        if min(matrix.shape) < int(group.get("msign_min_dim", 2)):
+            return False
+
+        # SVD is much more stable and broadly supported in fp32/fp64 than in
+        # fp16/bf16. Keep fp64 as fp64; otherwise compute the projection in fp32.
+        work_dtype = torch.float64 if tensor.dtype == torch.float64 else torch.float32
+        matrix_work = matrix.detach().to(work_dtype)
+
+        fro_norm = torch.linalg.vector_norm(matrix_work)
+        if not bool(torch.isfinite(fro_norm).item()) or float(fro_norm.item()) == 0.0:
+            return False
+
+        try:
+            u, _, vh = torch.linalg.svd(matrix_work, full_matrices=False)
+            signed = u @ vh
+        except RuntimeError:
+            # Do not fail the whole optimizer step if one SVD does not converge.
+            return False
+
+        signed_norm = torch.linalg.vector_norm(signed).clamp_min(float(group.get("msign_eps", 1e-12)))
+        restored = signed.mul(fro_norm / signed_norm).reshape(original_shape)
+        tensor.copy_(restored.to(dtype=tensor.dtype))
+
+        # The parameter was replaced by a projection, so stale Kahan residuals
+        # should not be applied on top of the projected value in later steps.
+        kahan_comp = state.get("kahan_comp")
+        if torch.is_tensor(kahan_comp):
+            kahan_comp.zero_()
+
+        return True
+
+    @staticmethod
+    def _should_apply_msign(group: dict) -> bool:
+        return bool(group.get("use_msign", False)) and int(group["step"]) % int(group.get("msign_period", 100)) == 0
 
     @staticmethod
     def _reconstruct_low_rank(
@@ -828,6 +904,14 @@ class CAME(torch.optim.Optimizer):
                         self.apply_kahan_update(target_tensor=p, update_tensor=update_tensor, state=state)
                     else:
                         p.add_(-update_tensor.to(p.dtype))
+
+                if self._should_apply_msign(group):
+                    if self.schedulefree:
+                        self._apply_msign_to_parameter(target, state, group)
+                        if group.get("msign_on_schedulefree_p", True):
+                            self._apply_msign_to_parameter(p, state, group)
+                    else:
+                        self._apply_msign_to_parameter(p, state, group)
 
                 self._quantize_state_tensors(state, group)
 

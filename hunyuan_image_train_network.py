@@ -540,6 +540,8 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, _, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
+        self.current_noisy_latents = noisy_model_input
+        self.current_sigmas = sigmas
         # bfloat16 is too low precision for 0-1000 TODO fix get_noisy_model_input_and_timesteps
         timesteps = (sigmas[:, 0, 0, 0] * 1000).to(torch.int64)
         # print(
@@ -578,6 +580,9 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         return loss
+
+    def get_wavelet_prediction_type(self, args):
+        return "velocity" if args.model_prediction_type == "raw" else "sample"
 
     def get_sai_model_spec(self, args):
         return train_util.get_sai_model_spec_dataclass(None, args, False, True, False, hunyuan_image="2.1").to_metadata_dict()

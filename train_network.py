@@ -285,6 +285,8 @@ class NetworkTrainer:
         # Sample noise, sample a random timestep for each image, and add noise to the latents,
         # with noise offset and/or multires noise if specified
         noise, noisy_latents, timesteps = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
+        self.current_noisy_latents = noisy_latents
+        self.current_sigmas = None
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
@@ -539,7 +541,20 @@ class NetworkTrainer:
             cwmi_lambda = float(getattr(args, "cwmi_lambda", 0.1))
             loss = (1.0 - cwmi_lambda) * cwmi_loss_sample + cwmi_lambda * l2_loss
         else:
-            loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+            loss = train_util.conditional_loss(
+                noise_pred.float(),
+                target.float(),
+                args.loss_type,
+                "none",
+                huber_c,
+                latents=latents,
+                noisy_latents=getattr(self, "current_noisy_latents", None),
+                timesteps=timesteps,
+                sigmas=getattr(self, "current_sigmas", None),
+                noise_scheduler=noise_scheduler,
+                args=args,
+                wavelet_prediction_type=self.get_wavelet_prediction_type(args),
+            )
             if weighting is not None:
                 loss = loss * weighting
             if use_masked_loss:
@@ -555,6 +570,9 @@ class NetworkTrainer:
 
     def cast_text_encoder(self, args):
         return True  # default for other than HunyuanImage
+
+    def get_wavelet_prediction_type(self, args):
+        return getattr(args, "wavelet_loss_prediction_type", "velocity")
 
     def cast_vae(self, args):
         return True  # default for other than HunyuanImage
@@ -1480,6 +1498,10 @@ class NetworkTrainer:
                     torch.cuda.set_rng_state(gpu_rng_state)
             random.setstate(python_rng_state)
 
+        pnp_params = None
+        if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0:
+            pnp_params = [p for p in accelerator.unwrap_model(network).get_trainable_params() if p.requires_grad]
+
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}\n")
             current_epoch.value = epoch + 1
@@ -1523,6 +1545,12 @@ class NetworkTrainer:
                         train_text_encoder=train_text_encoder,
                         train_unet=train_unet,
                     )
+
+                    # Preserve-and-Personalize (P&P) LOSS
+                    if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0 and pnp_params:
+                        flat_params = torch.cat([p.flatten() for p in pnp_params])
+                        pnp_loss = torch.sum(flat_params ** 2) * args.pnp_loss_weight
+                        loss = loss + pnp_loss
 
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:

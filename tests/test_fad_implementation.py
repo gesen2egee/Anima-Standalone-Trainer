@@ -89,7 +89,7 @@ for module_name, attributes in {
 from library.train_util import BaseDataset, BaseSubset, ControlNetDataset, DreamBoothDataset, FineTuningDataset, ImageInfo
 
 
-def create_subset(enable_wildcard=False, enable_fad=False, fad_curriculum=False):
+def create_subset(enable_wildcard=False, enable_fad=False, fad_curriculum=False, keep_tags=None):
     return BaseSubset(
         image_dir="/mock/img/dir",
         alpha_mask=False,
@@ -113,6 +113,7 @@ def create_subset(enable_wildcard=False, enable_fad=False, fad_curriculum=False)
         token_warmup_step=0,
         enable_fad=enable_fad,
         fad_curriculum=fad_curriculum,
+        keep_tags=keep_tags,
     )
 
 
@@ -221,6 +222,83 @@ class TestFADImplementation(unittest.TestCase):
         controlnet_dataset = ControlNetDataset(**common_params)
 
         self.assertEqual(dreambooth_dataset.fad_p_min, 0.2)
+
+    def test_keep_tags_default_protects_fad_matched_flex_tokens(self):
+        subset = create_subset(enable_fad=True)
+        dataset = create_dataset(
+            subset,
+            fad_p_min=1.0,
+            fad_p_max=1.0,
+            fad_alpha=10.0,
+            fad_c=0.5,
+        )
+        info = ImageInfo(
+            image_key="img",
+            num_repeats=1,
+            caption="trigger, 1girl, cat",
+            is_reg=False,
+            absolute_path="/mock/img/dir/img.jpg",
+        )
+        info.image_size = (512, 512)
+        dataset.register_image(info, subset)
+        dataset.make_buckets()
+        dataset.set_max_train_steps(1000)
+        dataset.set_current_step(1000)
+
+        caption = dataset.process_caption(subset, "trigger, 1girl, cat")
+
+        self.assertIn("1girl", caption)
+        self.assertNotIn("cat", caption)
+
+    def test_keep_tags_custom_regex_protects_tag_dropout_with_flexible_matching(self):
+        subset = create_subset(
+            keep_tags="fake_screenshot, window\\(computing\\), .* logo",
+        )
+        subset.caption_tag_dropout_rate = 1.0
+        dataset = create_dataset(subset)
+
+        caption = dataset.process_caption(
+            subset,
+            "trigger, Fake Screenshot, window(computing), artist_logo, cat",
+        )
+
+        self.assertIn("Fake Screenshot", caption)
+        self.assertIn("window(computing)", caption)
+        self.assertIn("artist_logo", caption)
+        self.assertNotIn("cat", caption)
+
+    def test_default_keep_tags_patterns_match_flexible_tokens(self):
+        subset = create_subset()
+        cases = {
+            "1girl": True,
+            "1GIRL": True,
+            "2girls": True,
+            "solo": False,
+            "cropped_head": True,
+            "disembodied_arm": True,
+            "artist logo": True,
+            "artist_logo": True,
+            "window_(computing)": True,
+            r"window_\(computing\)": True,
+            "fake phone screenshot": True,
+            "fake_phone_screenshot": True,
+            "speech bubble": True,
+            "speech_bubble": True,
+            "bad_censor_bar": True,
+            "motion blur": True,
+            "motion_blur": True,
+            "character_profile": True,
+            "front_cover": True,
+            "multiple_views": True,
+            "oil_(medium)": True,
+            r"oil_\(medium\)": True,
+            "sketch": True,
+            "cat": False,
+        }
+
+        for token, expected in cases.items():
+            with self.subTest(token=token):
+                self.assertEqual(subset.is_keep_tag(token), expected)
 
 
 if __name__ == "__main__":

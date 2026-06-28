@@ -311,6 +311,9 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             # Apply input perturbation to noisy model input
             noisy_model_input = noisy_model_input + eps_in
 
+        self.current_noisy_latents = noisy_model_input
+        self.current_sigmas = sigmas
+
         # Gradient checkpointing support
         if args.gradient_checkpointing:
             noisy_model_input.requires_grad_(True)
@@ -472,6 +475,9 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         return loss
+
+    def get_wavelet_prediction_type(self, args):
+        return "velocity"
 
     def get_sai_model_spec(self, args):
         return train_util.get_sai_model_spec_dataclass(None, args, False, True, False, anima="preview").to_metadata_dict()

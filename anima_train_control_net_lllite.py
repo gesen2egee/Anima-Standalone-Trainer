@@ -637,6 +637,7 @@ def train(args):
                 noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
                     args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype
                 )
+                noisy_model_input_4d = noisy_model_input
                 timesteps = timesteps / 1000.0
                 if torch.any(torch.isnan(noisy_model_input)):
                     accelerator.print("NaN found in noisy_model_input, replacing with zeros")
@@ -671,8 +672,21 @@ def train(args):
                 weighting = anima_train_utils.compute_loss_weighting_for_anima(
                     weighting_scheme=args.weighting_scheme, sigmas=sigmas
                 )
-                huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, None)
-                loss = train_util.conditional_loss(model_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler_copy)
+                loss = train_util.conditional_loss(
+                    model_pred.float(),
+                    target.float(),
+                    args.loss_type,
+                    "none",
+                    huber_c,
+                    latents=latents,
+                    noisy_latents=noisy_model_input_4d,
+                    timesteps=timesteps,
+                    sigmas=sigmas,
+                    noise_scheduler=noise_scheduler_copy,
+                    args=args,
+                    wavelet_prediction_type="velocity",
+                )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                     loss = apply_masked_loss(loss, batch)
                 loss = loss.mean([1, 2, 3])

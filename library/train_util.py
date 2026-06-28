@@ -103,6 +103,20 @@ STEP_DIFFUSERS_DIR_NAME = "{}-step{:08d}"
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".PNG", ".JPG", ".JPEG", ".WEBP", ".BMP"]
 
+DEFAULT_KEEP_TAGS = (
+    "1girl, 1boy, 1other, .*girls, .*boys, .*others, .*out_of_frame, cropped_.*, "
+    "disembodied_.*, letterboxed, pillarboxed, .*_border, round_image, circle_cut, "
+    "split_screen, variations, comparison, .*koma, .*comic, column_lineup, nengajou, "
+    ".*chart, zoom_layer, .*_inset, .*_background, .*watermark, copyright_notice, "
+    "signature, qr_code, artist_logo, pixiv_logo, twitter_logo, instagram_logo, "
+    ".*_logo, .*_name, pixiv_id, .*_username, window_(computing), fake_screenshot, "
+    "fake_phone_screenshot, battery_indicator, timestamp, cursor, art_program_in_frame, "
+    "d-pad, gameplay_mechanics, ranguage, .*text, profanity, .*speech_bubble, "
+    "thought_bubble, lyrics, page_number, subtitled, .*censor.*, chromatic_aberration, "
+    "film_grain, blending, .*blur.*, .*_profile, .*cover, multiple_.*, ranguage, "
+    ".*_(medium), monochrome, greyscale, sketch"
+)
+
 try:
     import pillow_avif
 
@@ -438,6 +452,7 @@ class BaseSubset:
         resize_interpolation: Optional[str] = None,
         enable_fad: bool = False,
         fad_curriculum: bool = False,
+        keep_tags: Optional[str] = None,
     ) -> None:
         self.image_dir = image_dir
         self.alpha_mask = alpha_mask if alpha_mask is not None else False
@@ -473,6 +488,59 @@ class BaseSubset:
         self.enable_fad = enable_fad
         self.fad_curriculum = fad_curriculum
         self.fad_tag_frequencies = {}
+        self.keep_tags = DEFAULT_KEEP_TAGS if keep_tags is None else keep_tags
+        self.keep_tag_patterns = self.compile_keep_tag_patterns(self.keep_tags)
+
+    @staticmethod
+    def split_keep_tags(keep_tags: Optional[str]) -> List[str]:
+        if not keep_tags:
+            return []
+        return [tag.strip() for tag in keep_tags.split(",") if tag.strip()]
+
+    @staticmethod
+    def normalize_keep_tag_token(token: str) -> str:
+        return token.strip().replace(r"\(", "(").replace(r"\)", ")")
+
+    @staticmethod
+    def make_flexible_keep_tag_regex(pattern: str) -> str:
+        pattern = BaseSubset.normalize_keep_tag_token(pattern)
+        regex_parts = []
+        i = 0
+        while i < len(pattern):
+            char = pattern[i]
+            if char == "\\" and i + 1 < len(pattern):
+                next_char = pattern[i + 1]
+                if next_char in "()":
+                    regex_parts.append(re.escape(next_char))
+                else:
+                    regex_parts.append(char + next_char)
+                i += 2
+                continue
+            if char in "_ ":
+                while i < len(pattern) and pattern[i] in "_ ":
+                    i += 1
+                regex_parts.append(r"[ _]+")
+                continue
+            if char in "()":
+                regex_parts.append(re.escape(char))
+            else:
+                regex_parts.append(char)
+            i += 1
+        return "".join(regex_parts)
+
+    @classmethod
+    def compile_keep_tag_patterns(cls, keep_tags: Optional[str]) -> List[re.Pattern]:
+        patterns = []
+        for tag in cls.split_keep_tags(keep_tags):
+            try:
+                patterns.append(re.compile(cls.make_flexible_keep_tag_regex(tag), re.IGNORECASE))
+            except re.error as e:
+                logger.warning(f"Invalid keep_tags regex skipped: {tag!r} ({e})")
+        return patterns
+
+    def is_keep_tag(self, token: str) -> bool:
+        normalized_token = self.normalize_keep_tag_token(token)
+        return any(pattern.fullmatch(normalized_token) for pattern in self.keep_tag_patterns)
 
 
 class DreamBoothSubset(BaseSubset):
@@ -1010,6 +1078,9 @@ class BaseDataset(torch.utils.data.Dataset):
                         return tokens
                     l = []
                     for token in tokens:
+                        if subset.is_keep_tag(token):
+                            l.append(token)
+                            continue
                         if random.random() >= subset.caption_tag_dropout_rate:
                             l.append(token)
                     return l
@@ -1038,6 +1109,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
                         l = []
                         for token in flex_tokens:
+                            if subset.is_keep_tag(token):
+                                l.append(token)
+                                continue
                             r_w = subset.fad_tag_frequencies.get(token, 0.0)
                             delta_p = self.fad_p_max - self.fad_p_min
                             val = self.fad_alpha * (r_w - self.fad_c)
@@ -2757,6 +2831,7 @@ class ControlNetDataset(BaseDataset):
                 resize_interpolation=subset.resize_interpolation,
                 enable_fad=subset.enable_fad,
                 fad_curriculum=subset.fad_curriculum,
+                keep_tags=subset.keep_tags,
             )
             db_subsets.append(db_subset)
 
@@ -4139,6 +4214,12 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
 
 def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: bool):
     parser.add_argument(
+        "--pnp_loss_weight",
+        type=float,
+        default=None,
+        help="weight for Preserve-and-Personalize (P&P) L2 regularization loss. / Preserve-and-Personalize (P&P) L2正則化損失的權重。預設為 None（不啟用）。",
+    )
+    parser.add_argument(
         "--output_dir", type=str, default=None, help="directory to output trained model / 学習後のモデル出力先ディレクトリ"
     )
     parser.add_argument(
@@ -4504,8 +4585,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "--loss_type",
         type=str,
         default="l2",
-        choices=["l1", "l2", "huber", "smooth_l1", "cwmi"],
-        help="The type of loss function to use (L1, L2, Huber, smooth L1, or CWMI), default is L2 / 使用する損失関数の種類（L1、L2、Huber、smooth L1、またはCWMI）、デフォルトはL2",
+        choices=["l1", "l2", "huber", "smooth_l1", "cwmi", "snr_aware_huber_wavelet", "wavelet_l2"],
+        help="The type of loss function to use (L1, L2, Huber, smooth L1, CWMI, SNR-Aware Huber Wavelet, or Wavelet L2), default is L2 / 使用する損失関数の種類（L1、L2、Huber、smooth L1、CWMI、SNR-Aware Huber Wavelet、またはWavelet L2）、デフォルトはL2",
     )
     parser.add_argument(
         "--huber_schedule",
@@ -4529,6 +4610,49 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         default=1.0,
         help="The Huber loss scale parameter. Only used if one of the huber loss modes (huber or smooth l1) is selected with loss_type. default is 1.0"
         " / Huber損失のスケールパラメータ。loss_typeがhuberまたはsmooth l1の場合に有効。デフォルトは1.0",
+    )
+    parser.add_argument(
+        "--wavelet_loss_c_min",
+        type=float,
+        default=0.2,
+        help="minimum pseudo-Huber threshold for SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_c_max",
+        type=float,
+        default=1.0,
+        help="maximum pseudo-Huber threshold for SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_alpha",
+        type=float,
+        default=0.5,
+        help="SNR exponent for pseudo-Huber threshold in SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_beta",
+        type=float,
+        default=0.5,
+        help="SNR exponent for time rebalancing in SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_gamma",
+        type=float,
+        default=5.0,
+        help="maximum SNR clamp for SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_weight",
+        type=float,
+        default=1.0,
+        help="overall multiplier for SNR-Aware Huber Wavelet loss",
+    )
+    parser.add_argument(
+        "--wavelet_loss_prediction_type",
+        type=str,
+        default="velocity",
+        choices=["velocity", "negative_velocity", "sample", "x0"],
+        help="prediction convention used to reconstruct clean latents for SNR-Aware Huber Wavelet loss",
     )
     parser.add_argument(
         "--cwmi_lambda",
@@ -4972,6 +5096,12 @@ def add_dataset_arguments(
         default="",
         help="A custom separator to divide the caption into fixed and flexible parts. Tokens before this separator will not be shuffled. If not specified, '--keep_tokens' will be used to determine the fixed number of tokens."
         + " / captionを固定部分と可変部分に分けるためのカスタム区切り文字。この区切り文字より前のトークンはシャッフルされない。指定しない場合、'--keep_tokens'が固定部分のトークン数として使用される。",
+    )
+    parser.add_argument(
+        "--keep_tags",
+        type=str,
+        default=DEFAULT_KEEP_TAGS,
+        help="Comma separated regex patterns for flex tokens that must not be dropped by FAD or caption_tag_dropout_rate.",
     )
     parser.add_argument(
         "--secondary_separator",
@@ -6726,8 +6856,195 @@ def get_huber_threshold_if_needed(args, timesteps: torch.Tensor, noise_scheduler
     return result
 
 
+def _is_flow_matching_scheduler(noise_scheduler) -> bool:
+    return "FlowMatch" in noise_scheduler.__class__.__name__
+
+
+def _as_batch_vector(value: torch.Tensor, batch_size: int, device: torch.device) -> torch.Tensor:
+    if not torch.is_tensor(value):
+        value = torch.as_tensor(value, device=device)
+    value = value.to(device=device)
+    return value.reshape(batch_size, -1)[:, 0]
+
+
+def _match_latent_dims(x: torch.Tensor, reference: torch.Tensor, name: str) -> torch.Tensor:
+    if x.ndim == reference.ndim:
+        return x
+    if x.ndim == reference.ndim + 1 and x.shape[2] == 1:
+        return x.squeeze(2)
+    raise ValueError(
+        f"{name} must have the same dimensions as model_pred, or a singleton frame dimension at dim=2. "
+        f"got {tuple(x.shape)} vs {tuple(reference.shape)}"
+    )
+
+
+def haar_dwt_2d(x: torch.Tensor) -> torch.Tensor:
+    """
+    Computes a 2D orthonormal 1-level Haar Discrete Wavelet Transform (DWT)
+    along the spatial dimensions. Sub-bands (LL, LH, HL, HH) are concatenated along the channel dimension.
+    Supports both 4D [B, C, H, W] and 5D [B, F, C, H, W] tensors.
+    """
+    h, w = x.shape[-2], x.shape[-1]
+    pad_h = h % 2
+    pad_w = w % 2
+    if pad_h > 0 or pad_w > 0:
+        x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h), mode="constant", value=0.0)
+
+    x00 = x[..., 0::2, 0::2]
+    x01 = x[..., 0::2, 1::2]
+    x10 = x[..., 1::2, 0::2]
+    x11 = x[..., 1::2, 1::2]
+
+    ll = (x00 + x01 + x10 + x11) / 2.0
+    lh = (x00 - x01 + x10 - x11) / 2.0
+    hl = (x00 + x01 - x10 - x11) / 2.0
+    hh = (x00 - x01 - x10 + x11) / 2.0
+
+    c_dim = x.ndim - 3
+    return torch.cat([ll, lh, hl, hh], dim=c_dim)
+
+
+def compute_snr_and_z_pred(
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    noisy_latents: torch.Tensor,
+    timesteps: torch.Tensor,
+    sigmas: Optional[torch.Tensor],
+    noise_scheduler,
+    prediction_type: str = "velocity",
+):
+    """
+    Estimates clean latent z_pred (x0) and calculates SNR for each sample.
+    Supports both Flow Matching (sigmas-based) and traditional Diffusion (alphas_cumprod-based).
+    """
+    is_flow_matching = _is_flow_matching_scheduler(noise_scheduler)
+
+    if is_flow_matching:
+        b_size = model_pred.shape[0]
+        if sigmas is None:
+            sigmas = timesteps / 1000.0
+
+        sigmas = _as_batch_vector(sigmas, b_size, model_pred.device)
+        sigmas_reshaped = sigmas.view(-1, *([1] * (model_pred.ndim - 1)))
+
+        eps = 1e-8
+        snr = ((1.0 - sigmas) / (sigmas + eps)) ** 2
+
+        prediction_type = prediction_type.lower()
+        if prediction_type in ("velocity", "flow_velocity"):
+            z_pred = noisy_latents - sigmas_reshaped * model_pred
+        elif prediction_type in ("negative_velocity", "reverse_velocity"):
+            z_pred = noisy_latents + sigmas_reshaped * model_pred
+        elif prediction_type in ("sample", "x0"):
+            z_pred = model_pred
+        else:
+            raise ValueError(f"Unsupported wavelet prediction type for Flow Matching: {prediction_type}")
+    else:
+        alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
+        alphas_cumprod = torch.index_select(alphas_cumprod, 0, timesteps)
+
+        snr = alphas_cumprod / (1.0 - alphas_cumprod + 1e-8)
+
+        sqrt_alpha_prod = torch.sqrt(alphas_cumprod).view(-1, *([1] * (model_pred.ndim - 1)))
+        sqrt_one_minus_alpha_prod = torch.sqrt(1.0 - alphas_cumprod).view(-1, *([1] * (model_pred.ndim - 1)))
+
+        scheduler_prediction_type = getattr(noise_scheduler.config, "prediction_type", "epsilon")
+        if scheduler_prediction_type == "v_prediction":
+            z_pred = sqrt_alpha_prod * noisy_latents - sqrt_one_minus_alpha_prod * model_pred
+        else:
+            z_pred = (noisy_latents - sqrt_one_minus_alpha_prod * model_pred) / (sqrt_alpha_prod + 1e-8)
+
+    return snr, z_pred
+
+
+def snr_aware_huber_wavelet_loss(
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    latents: torch.Tensor,
+    noisy_latents: torch.Tensor,
+    timesteps: torch.Tensor,
+    sigmas: Optional[torch.Tensor],
+    noise_scheduler,
+    args,
+    prediction_type: Optional[str] = None,
+):
+    """
+    Computes SNR-Aware Huber Wavelet loss from the UltraFlux training objective.
+    """
+    latents = _match_latent_dims(latents, model_pred, "latents")
+    noisy_latents = _match_latent_dims(noisy_latents, model_pred, "noisy_latents")
+    if prediction_type is None:
+        prediction_type = getattr(args, "wavelet_loss_prediction_type", "velocity") if args is not None else "velocity"
+
+    snr, z_pred = compute_snr_and_z_pred(
+        model_pred, target, noisy_latents, timesteps, sigmas, noise_scheduler, prediction_type
+    )
+
+    w_z_pred = haar_dwt_2d(z_pred)
+    w_z = haar_dwt_2d(latents)
+    r_theta = w_z_pred - w_z
+
+    c_min = getattr(args, "wavelet_loss_c_min", 0.2)
+    c_max = getattr(args, "wavelet_loss_c_max", 1.0)
+    alpha = getattr(args, "wavelet_loss_alpha", 0.5)
+    beta = getattr(args, "wavelet_loss_beta", 0.5)
+    gamma = getattr(args, "wavelet_loss_gamma", 5.0)
+
+    snr_clamped = torch.clamp(snr, max=gamma)
+    c_t = c_min + (c_max - c_min) * (snr_clamped / gamma) ** alpha
+    c_t = c_t.view(-1, *([1] * (r_theta.ndim - 1)))
+
+    loss = (c_t**2) * (torch.sqrt(1.0 + (r_theta / (c_t + 1e-8)) ** 2) - 1.0)
+
+    if _is_flow_matching_scheduler(noise_scheduler):
+        b_size = model_pred.shape[0]
+        if sigmas is None:
+            sigmas = timesteps / 1000.0
+        t = _as_batch_vector(sigmas, b_size, model_pred.device).clamp(1e-8, 1.0 - 1e-8)
+        omega_t = (t / (1.0 - t)) * (snr_clamped**beta)
+    else:
+        omega_t = torch.ones_like(snr_clamped)
+    loss = loss * omega_t.view(-1, *([1] * (loss.ndim - 1)))
+
+    return loss * getattr(args, "wavelet_loss_weight", 1.0)
+
+
+def wavelet_l2_loss(
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    latents: torch.Tensor,
+    noisy_latents: torch.Tensor,
+    timesteps: torch.Tensor,
+    sigmas: Optional[torch.Tensor],
+    noise_scheduler,
+    args,
+    prediction_type: Optional[str] = None,
+):
+    latents = _match_latent_dims(latents, model_pred, "latents")
+    noisy_latents = _match_latent_dims(noisy_latents, model_pred, "noisy_latents")
+    if prediction_type is None:
+        prediction_type = getattr(args, "wavelet_loss_prediction_type", "velocity") if args is not None else "velocity"
+
+    _, z_pred = compute_snr_and_z_pred(
+        model_pred, target, noisy_latents, timesteps, sigmas, noise_scheduler, prediction_type
+    )
+    loss = (haar_dwt_2d(z_pred) - haar_dwt_2d(latents)) ** 2
+    return loss * getattr(args, "wavelet_loss_weight", 1.0)
+
+
 def conditional_loss(
-    model_pred: torch.Tensor, target: torch.Tensor, loss_type: str, reduction: str, huber_c: Optional[torch.Tensor] = None
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    loss_type: str,
+    reduction: str,
+    huber_c: Optional[torch.Tensor] = None,
+    latents: Optional[torch.Tensor] = None,
+    noisy_latents: Optional[torch.Tensor] = None,
+    timesteps: Optional[torch.Tensor] = None,
+    sigmas: Optional[torch.Tensor] = None,
+    noise_scheduler=None,
+    args=None,
+    wavelet_prediction_type: Optional[str] = None,
 ):
     """
     NOTE: if you're using the scheduled version, huber_c has to depend on the timesteps already
@@ -6752,6 +7069,44 @@ def conditional_loss(
         # Reshape huber_c to broadcast with model_pred (supports 4D and 5D tensors)
         huber_c = huber_c.view(-1, *([1] * (model_pred.ndim - 1)))
         loss = 2 * (torch.sqrt((model_pred - target) ** 2 + huber_c**2) - huber_c)
+        if reduction == "mean":
+            loss = torch.mean(loss)
+        elif reduction == "sum":
+            loss = torch.sum(loss)
+    elif loss_type == "snr_aware_huber_wavelet":
+        if latents is None or noisy_latents is None or timesteps is None or noise_scheduler is None:
+            raise ValueError(
+                "SNR-Aware Huber Wavelet loss requires latents, noisy_latents, timesteps, and noise_scheduler."
+            )
+        loss = snr_aware_huber_wavelet_loss(
+            model_pred,
+            target,
+            latents,
+            noisy_latents,
+            timesteps,
+            sigmas,
+            noise_scheduler,
+            args,
+            wavelet_prediction_type,
+        )
+        if reduction == "mean":
+            loss = torch.mean(loss)
+        elif reduction == "sum":
+            loss = torch.sum(loss)
+    elif loss_type == "wavelet_l2":
+        if latents is None or noisy_latents is None or timesteps is None or noise_scheduler is None:
+            raise ValueError("Wavelet L2 loss requires latents, noisy_latents, timesteps, and noise_scheduler.")
+        loss = wavelet_l2_loss(
+            model_pred,
+            target,
+            latents,
+            noisy_latents,
+            timesteps,
+            sigmas,
+            noise_scheduler,
+            args,
+            wavelet_prediction_type,
+        )
         if reduction == "mean":
             loss = torch.mean(loss)
         elif reduction == "sum":

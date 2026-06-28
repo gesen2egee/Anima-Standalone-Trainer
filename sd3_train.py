@@ -856,7 +856,20 @@ def train(args):
                 # )
                 # calculate loss
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, dummy_scheduler)
-                loss = train_util.conditional_loss(model_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                loss = train_util.conditional_loss(
+                    model_pred.float(),
+                    target.float(),
+                    args.loss_type,
+                    "none",
+                    huber_c,
+                    latents=latents,
+                    noisy_latents=noisy_model_input,
+                    timesteps=timesteps,
+                    sigmas=sigmas,
+                    noise_scheduler=dummy_scheduler,
+                    args=args,
+                    wavelet_prediction_type="sample",
+                )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                     loss = apply_masked_loss(loss, batch)
                 loss = loss.mean([1, 2, 3])

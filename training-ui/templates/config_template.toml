@@ -37,6 +37,14 @@ cwmi_lambda = 0.1
 cwmi_levels = 4
 cwmi_orientations = 4
 cwmi_eps = 0.0005
+wavelet_loss_c_min = 0.2
+wavelet_loss_c_max = 1.0
+wavelet_loss_alpha = 0.5
+wavelet_loss_beta = 0.5
+wavelet_loss_gamma = 5.0
+wavelet_loss_weight = 1.0
+wavelet_loss_prediction_type = "velocity"
+pnp_loss_weight = 0.0
 
 [network_arguments]
 network_module = "networks.krona"
@@ -67,5 +75,4 @@ model_guidance_prob = 1.0
 ciop_prob = 0.0
 ciop_noise_magnitude = 0.1
 ciop_noise_type = "gaussian"
-
 

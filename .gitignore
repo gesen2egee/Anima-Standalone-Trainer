@@ -20,6 +20,7 @@ tasks/
 training-ui/node_modules/
 training-ui/jobs/
 training-ui/global_config.toml
+training-ui/queue_state.json
 
 
 

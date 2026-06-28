@@ -775,7 +775,18 @@ def train(args):
                     args, 1000 - timesteps, noise_scheduler
                 )
                 loss = train_util.conditional_loss(
-                    model_pred.float(), target.float(), args.loss_type, "none", huber_c
+                    model_pred.float(),
+                    target.float(),
+                    args.loss_type,
+                    "none",
+                    huber_c,
+                    latents=latents,
+                    noisy_latents=noisy_model_input,
+                    timesteps=timesteps,
+                    sigmas=sigmas,
+                    noise_scheduler=noise_scheduler,
+                    args=args,
+                    wavelet_prediction_type="negative_velocity" if args.model_prediction_type == "raw" else "sample",
                 )
                 if weighting is not None:
                     loss = loss * weighting

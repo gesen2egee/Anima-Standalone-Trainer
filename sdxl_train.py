@@ -358,6 +358,28 @@ def train(args):
         training_models.append(text_encoder2)
         params_to_optimize.append({"params": list(text_encoder2.parameters()), "lr": args.learning_rate_te2 or args.learning_rate})
 
+    # 備份原始權重至 CPU
+    if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0:
+        accelerator.print("P&P Loss enabled. Copying base model weights to CPU...")
+        pnp_params = []
+        pnp_base_tensors = []
+        if train_unet:
+            for name, p in unet.named_parameters():
+                if p.requires_grad:
+                    pnp_params.append(p)
+                    pnp_base_tensors.append(p.data.cpu().clone())
+        if train_text_encoder1:
+            for name, p in text_encoder1.named_parameters():
+                if p.requires_grad:
+                    pnp_params.append(p)
+                    pnp_base_tensors.append(p.data.cpu().clone())
+        if train_text_encoder2:
+            for name, p in text_encoder2.named_parameters():
+                if p.requires_grad:
+                    pnp_params.append(p)
+                    pnp_base_tensors.append(p.data.cpu().clone())
+        pnp_base_flat = torch.cat([t.flatten() for t in pnp_base_tensors]).cpu()
+
     # calculate number of trainable parameters
     n_params = 0
     for group in params_to_optimize:
@@ -706,6 +728,7 @@ def train(args):
                 noise, noisy_latents, timesteps = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
 
                 noisy_latents = noisy_latents.to(weight_dtype)  # TODO check why noisy_latents is not weight_dtype
+                pure_noisy_latents = noisy_latents
 
                 if batch["masks"] is not None:
                     with torch.no_grad():
@@ -739,7 +762,19 @@ def train(args):
                     or args.masked_loss
                 ):
                     # do not mean over batch dimension for snr weight or scale v-pred loss
-                    loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                    loss = train_util.conditional_loss(
+                        noise_pred.float(),
+                        target.float(),
+                        args.loss_type,
+                        "none",
+                        huber_c,
+                        latents=latents,
+                        noisy_latents=pure_noisy_latents,
+                        timesteps=timesteps,
+                        sigmas=None,
+                        noise_scheduler=noise_scheduler,
+                        args=args,
+                    )
                     if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                         loss = apply_masked_loss(loss, batch)
                     loss = loss.mean([1, 2, 3])
@@ -755,7 +790,26 @@ def train(args):
 
                     loss = loss.mean()  # mean over batch dimension
                 else:
-                    loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "mean", huber_c)
+                    loss = train_util.conditional_loss(
+                        noise_pred.float(),
+                        target.float(),
+                        args.loss_type,
+                        "mean",
+                        huber_c,
+                        latents=latents,
+                        noisy_latents=pure_noisy_latents,
+                        timesteps=timesteps,
+                        sigmas=None,
+                        noise_scheduler=noise_scheduler,
+                        args=args,
+                    )
+
+                # Preserve-and-Personalize (P&P) LOSS
+                if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0 and pnp_params:
+                    flat_p = torch.cat([p.flatten() for p in pnp_params])
+                    base_p_gpu = pnp_base_flat.to(device=flat_p.device, dtype=flat_p.dtype, non_blocking=True)
+                    pnp_loss = torch.sum((flat_p - base_p_gpu) ** 2) * args.pnp_loss_weight
+                    loss = loss + pnp_loss
 
                 accelerator.backward(loss)
 

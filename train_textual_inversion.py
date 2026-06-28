@@ -611,6 +611,7 @@ class TextualInversionTrainer:
                     noise, noisy_latents, timesteps = train_util.get_noise_noisy_latents_and_timesteps(
                         args, noise_scheduler, latents
                     )
+                    pure_noisy_latents = noisy_latents
                     if batch["masks"] is not None:
                       # Concatenate the noised latents with the mask and the masked latents
                       noisy_latents = torch.cat([noisy_latents, mask, masked_latents], dim=1)
@@ -628,7 +629,19 @@ class TextualInversionTrainer:
                         target = noise
 
                     huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler)
-                    loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                    loss = train_util.conditional_loss(
+                        noise_pred.float(),
+                        target.float(),
+                        args.loss_type,
+                        "none",
+                        huber_c,
+                        latents=latents,
+                        noisy_latents=pure_noisy_latents,
+                        timesteps=timesteps,
+                        sigmas=None,
+                        noise_scheduler=noise_scheduler,
+                        args=args,
+                    )
                     if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                         loss = apply_masked_loss(loss, batch)
                     loss = loss.mean([1, 2, 3])

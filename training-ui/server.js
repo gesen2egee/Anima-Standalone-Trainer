@@ -6,6 +6,7 @@ const TOML = require('@iarna/toml');
 const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
+const { createJobQueue } = require('./lib/jobQueue');
 
 require('./lib/setup').runSetup();
 
@@ -19,6 +20,7 @@ const portArg = args.find(a => a.startsWith('--port='));
 const DEFAULT_PORT = portArg
     ? parseInt(portArg.split('=')[1])
     : (parseInt(args[0]) || 3000);
+let activePort = DEFAULT_PORT;
 
 // Paths
 const ROOT_DIR = path.join(__dirname, '..');
@@ -27,6 +29,7 @@ const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const GLOBAL_CONFIG_PATH = path.join(__dirname, 'global_config.toml');
 const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
 const ARCHITECTURES_PATH = path.join(__dirname, 'architectures.json');
+const QUEUE_STATE_PATH = path.join(__dirname, 'queue_state.json');
 
 // Load architecture registry
 const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
@@ -200,6 +203,24 @@ function getJobsDir() {
         fs.mkdirSync(jobsDir, { recursive: true });
     }
     return jobsDir;
+}
+
+function jobExists(jobName) {
+    const configPath = path.join(getJobPath(jobName), 'config.toml');
+    return fs.existsSync(configPath);
+}
+
+const trainingQueue = createJobQueue({
+    statePath: QUEUE_STATE_PATH,
+    jobExists
+});
+let queueAutoRunning = false;
+
+function getRunningTrainingJobName() {
+    for (const [name, job] of runningJobs.entries()) {
+        if (job.type === 'training') return name;
+    }
+    return null;
 }
 
 // Serve architecture registry to frontend
@@ -657,6 +678,8 @@ app.get('/api/jobs', (req, res) => {
     try {
         const jobsDir = getJobsDir();
         if (!fs.existsSync(jobsDir)) return res.json([]);
+        const queueState = trainingQueue.getState();
+        const queuedJobs = new Set(queueState.items);
         const jobs = fs.readdirSync(jobsDir, { withFileTypes: true })
             .filter(d => d.isDirectory())
             .map(d => {
@@ -670,6 +693,9 @@ app.get('/api/jobs', (req, res) => {
                     name: d.name,
                     hasConfig,
                     running: runningJobs.has(d.name),
+                    queued: queuedJobs.has(d.name),
+                    queueIndex: queueState.items.indexOf(d.name),
+                    queueActive: queueState.active === d.name,
                     mtime
                 };
             })
@@ -1376,9 +1402,114 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
 
 // --- Training Control ---
 
+async function startQueuedJob(jobName) {
+    const response = await fetch(`http://127.0.0.1:${activePort}/api/jobs/${encodeURIComponent(jobName)}/train/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromQueue: true })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.error) {
+        queueAutoRunning = false;
+        trainingQueue.clearActive(jobName);
+        broadcastStatus(jobName, 'failed');
+        throw new Error(body.error || `Failed to start queued job "${jobName}"`);
+    }
+    return body;
+}
+
+async function runNextQueuedJob() {
+    if (!queueAutoRunning) return null;
+    const runningTraining = getRunningTrainingJobName();
+    if (runningTraining) return null;
+    const nextJob = trainingQueue.getNext();
+    if (!nextJob) {
+        queueAutoRunning = false;
+        return null;
+    }
+    return startQueuedJob(nextJob);
+}
+
+app.get('/api/queue', (req, res) => {
+    try {
+        res.json({ ...trainingQueue.getState(), autoRunning: queueAutoRunning });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/queue/jobs/:name', (req, res) => {
+    try {
+        const jobName = sanitizeName(req.params.name);
+        res.json({ ...trainingQueue.enqueue(jobName), autoRunning: queueAutoRunning });
+    } catch (err) {
+        res.status(err.message === 'Job not found' ? 404 : 500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/queue/jobs/:name', (req, res) => {
+    try {
+        const jobName = sanitizeName(req.params.name);
+        if (runningJobs.has(jobName)) {
+            return res.status(400).json({ error: 'Stop job before removing it from queue' });
+        }
+        res.json({ ...trainingQueue.remove(jobName), autoRunning: queueAutoRunning });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/queue/jobs/:name/move', (req, res) => {
+    try {
+        const jobName = sanitizeName(req.params.name);
+        const targetIndex = Number.parseInt(req.body?.index, 10);
+        if (!Number.isFinite(targetIndex)) {
+            return res.status(400).json({ error: 'index required' });
+        }
+        res.json({ ...trainingQueue.move(jobName, targetIndex), autoRunning: queueAutoRunning });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/queue/start', async (req, res) => {
+    try {
+        const runningTraining = getRunningTrainingJobName();
+        if (runningTraining) {
+            return res.status(409).json({ error: `Training job "${runningTraining}" is already running` });
+        }
+
+        const state = trainingQueue.getState();
+        if (state.active && !runningJobs.has(state.active)) {
+            trainingQueue.clearActive(state.active);
+        }
+
+        queueAutoRunning = true;
+        const result = await runNextQueuedJob();
+        res.json({
+            success: true,
+            started: !!result,
+            queue: trainingQueue.getState(),
+            autoRunning: queueAutoRunning
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/queue/stop', (req, res) => {
+    try {
+        queueAutoRunning = false;
+        res.json({ success: true, queue: trainingQueue.getState(), autoRunning: queueAutoRunning });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/jobs/:name/train/start', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
+        const fromQueue = req.body?.fromQueue === true;
         const jobPath = getJobPath(jobName);
         const configPath = path.join(jobPath, 'config.toml');
 
@@ -1387,6 +1518,9 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         }
         if (runningJobs.has(jobName)) {
             return res.status(400).json({ error: 'Job already running' });
+        }
+        if (fromQueue && !trainingQueue.getState().items.includes(jobName)) {
+            trainingQueue.enqueue(jobName);
         }
 
         // Auto-kill persistent gen server to free VRAM
@@ -1498,17 +1632,41 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         proc.on('close', (code) => {
             const msg = `\n--- Training ${code === 0 ? 'completed' : 'stopped'} (exit code: ${code}) ---\n`;
-            logStream.write(msg);
-            logStream.end();
             appendLog(Buffer.from(msg));
+            logStream.end();
             runningJobs.delete(jobName);
-            broadcastStatus(jobName, 'idle');
+            const isQueuedJob = trainingQueue.getState().items.includes(jobName);
+            if (fromQueue || isQueuedJob) {
+                if (code === 0) {
+                    trainingQueue.finishQueuedJob(jobName, { success: true });
+                    broadcastStatus(jobName, 'completed');
+                    setTimeout(() => {
+                        runNextQueuedJob().catch(err => {
+                            queueAutoRunning = false;
+                            console.error(`[Queue] ${err.message}`);
+                        });
+                    }, 1000);
+                } else {
+                    queueAutoRunning = false;
+                    trainingQueue.finishQueuedJob(jobName, { success: false });
+                    broadcastStatus(jobName, 'failed');
+                }
+            } else {
+                broadcastStatus(jobName, 'idle');
+            }
         });
 
         proc.on('error', (err) => {
             appendLog(Buffer.from(`\nERROR: ${err.message}\n`));
             runningJobs.delete(jobName);
-            broadcastStatus(jobName, 'idle');
+            const isQueuedJob = trainingQueue.getState().items.includes(jobName);
+            if (fromQueue || isQueuedJob) {
+                queueAutoRunning = false;
+                trainingQueue.finishQueuedJob(jobName, { success: false });
+                broadcastStatus(jobName, 'failed');
+            } else {
+                broadcastStatus(jobName, 'idle');
+            }
         });
 
         runningJobs.set(jobName, {
@@ -1517,9 +1675,13 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             startTime: Date.now(),
             logBuffer,
             type: 'training',
-            gpuIds: currentGpuIds
+            gpuIds: currentGpuIds,
+            fromQueue
         });
 
+        if (fromQueue) {
+            trainingQueue.markActive(jobName);
+        }
         broadcastStatus(jobName, 'running');
         res.json({ success: true, pid: proc.pid });
     } catch (err) {
@@ -1877,6 +2039,7 @@ async function findAvailablePort(startPort, maxAttempts = 10) {
         console.warn(`Port ${DEFAULT_PORT} was busy, using ${port} instead.`);
     }
 
+    activePort = port;
     server.listen(port, () => {
         console.log(`Anima Training UI running at http://localhost:${port}`);
         try {

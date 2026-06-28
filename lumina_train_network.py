@@ -255,6 +255,8 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, timesteps, sigmas = lumina_train_util.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
+        self.current_noisy_latents = noisy_model_input
+        self.current_sigmas = sigmas
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
@@ -323,6 +325,9 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         return loss
+
+    def get_wavelet_prediction_type(self, args):
+        return "negative_velocity" if args.model_prediction_type == "raw" else "sample"
 
     def get_sai_model_spec(self, args):
         return train_util.get_sai_model_spec(None, args, False, True, False, lumina="lumina2")

@@ -184,6 +184,22 @@ def train(args):
         vae.eval()
         vae.to(accelerator.device, dtype=weight_dtype)
 
+    # 備份原始權重至 CPU
+    if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0:
+        accelerator.print("P&P Loss enabled. Copying base model weights to CPU...")
+        pnp_params = []
+        pnp_base_tensors = []
+        for name, p in unet.named_parameters():
+            if p.requires_grad:
+                pnp_params.append(p)
+                pnp_base_tensors.append(p.data.cpu().clone())
+        if train_text_encoder:
+            for name, p in text_encoder.named_parameters():
+                if p.requires_grad:
+                    pnp_params.append(p)
+                    pnp_base_tensors.append(p.data.cpu().clone())
+        pnp_base_flat = torch.cat([t.flatten() for t in pnp_base_tensors]).cpu()
+
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
     if train_text_encoder:
@@ -394,6 +410,7 @@ def train(args):
                 # Sample noise, sample a random timestep for each image, and add noise to the latents,
                 # with noise offset and/or multires noise if specified
                 noise, noisy_latents, timesteps = train_util.get_noise_noisy_latents_and_timesteps(args, noise_scheduler, latents)
+                pure_noisy_latents = noisy_latents
 
                 if batch["masks"] is not None:
                   # Concatenate the noised latents with the mask and the masked latents
@@ -410,7 +427,19 @@ def train(args):
                     target = noise
 
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler)
-                loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                loss = train_util.conditional_loss(
+                    noise_pred.float(),
+                    target.float(),
+                    args.loss_type,
+                    "none",
+                    huber_c,
+                    latents=latents,
+                    noisy_latents=pure_noisy_latents,
+                    timesteps=timesteps,
+                    sigmas=None,
+                    noise_scheduler=noise_scheduler,
+                    args=args,
+                )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                     loss = apply_masked_loss(loss, batch)
                 loss = loss.mean([1, 2, 3])
@@ -426,6 +455,13 @@ def train(args):
                     loss = apply_debiased_estimation(loss, timesteps, noise_scheduler, args.v_parameterization)
 
                 loss = loss.mean()  # 平均なのでbatch_sizeで割る必要なし
+
+                # Preserve-and-Personalize (P&P) LOSS
+                if args.pnp_loss_weight is not None and args.pnp_loss_weight > 0.0 and pnp_params:
+                    flat_p = torch.cat([p.flatten() for p in pnp_params])
+                    base_p_gpu = pnp_base_flat.to(device=flat_p.device, dtype=flat_p.dtype, non_blocking=True)
+                    pnp_loss = torch.sum((flat_p - base_p_gpu) ** 2) * args.pnp_loss_weight
+                    loss = loss + pnp_loss
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients and args.max_grad_norm != 0.0:

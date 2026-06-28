@@ -1,6 +1,21 @@
 // === Anima Training UI — Client ===
 const DEFAULT_NEGATIVE_PROMPT =
   "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, low quality, worst quality, blurry, bad anatomy, extra limbs, deformed, watermark, text, signature, bareness, artifacts, hands, copyrights name, jpeg_artifacts, scan_artifacts, bad hands, missing fingers, extra digit, fewer digits, artistic error, ye-pop, deviantart, logo, patreon logo";
+const DEFAULT_KEEP_TAGS = [
+  "1girl", "1boy", "1other", ".*girls", ".*boys", ".*others", ".*out_of_frame",
+  "cropped_.*", "disembodied_.*", "letterboxed", "pillarboxed", ".*_border",
+  "round_image", "circle_cut", "split_screen", "variations", "comparison",
+  ".*koma", ".*comic", "column_lineup", "nengajou", ".*chart", "zoom_layer",
+  ".*_inset", ".*_background", ".*watermark", "copyright_notice", "signature",
+  "qr_code", "artist_logo", "pixiv_logo", "twitter_logo", "instagram_logo",
+  ".*_logo", ".*_name", "pixiv_id", ".*_username", "window_(computing)",
+  "fake_screenshot", "fake_phone_screenshot", "battery_indicator", "timestamp",
+  "cursor", "art_program_in_frame", "d-pad", "gameplay_mechanics", "ranguage",
+  ".*text", "profanity", ".*speech_bubble", "thought_bubble", "lyrics",
+  "page_number", "subtitled", ".*censor.*", "chromatic_aberration", "film_grain",
+  "blending", ".*blur.*", ".*_profile", ".*cover", "multiple_.*", "ranguage",
+  ".*_(medium)", "monochrome", "greyscale", "sketch",
+].join(", ");
 let currentJob = null;
 let ws = null;
 let isDirty = false;
@@ -15,7 +30,9 @@ let currentSubsets = [];
 let archRegistry = null; // Loaded from /api/architectures
 // --- DOM Refs ---
 const $ = (id) => document.getElementById(id);
-const jobListEl = $("job-list");
+const queuedJobListEl = $("queued-job-list");
+const pendingJobListEl = $("pending-job-list");
+const jobListEl = pendingJobListEl || $("job-list");
 const emptyState = $("empty-state");
 const jobEditor = $("job-editor");
 const jobTitle = $("job-title");
@@ -184,6 +201,11 @@ const UI_TRANSLATIONS = {
   "Image Directory": { "zh-TW": "圖片資料夾", "zh-CN": "图片文件夹" },
   "Num Repeats": { "zh-TW": "重複次數", "zh-CN": "重复次数" },
   "Keep Tokens": { "zh-TW": "保留 Tokens", "zh-CN": "保留 Tokens" },
+  "KEEP TAGS": { "zh-TW": "KEEP TAGS", "zh-CN": "KEEP TAGS" },
+  "Comma separated regex. Matched flex tokens are protected from FAD and Tag Dropout.": {
+    "zh-TW": "用逗號分隔 regex。符合的 flex tokens 不會被 FAD 和 Tag Dropout 丟掉。",
+    "zh-CN": "用逗号分隔 regex。符合的 flex tokens 不会被 FAD 和 Tag Dropout 丢掉。",
+  },
   "Caption Prefix": { "zh-TW": "Caption 前綴", "zh-CN": "Caption 前缀" },
   "Caption Dropout Rate": { "zh-TW": "Caption Dropout Rate", "zh-CN": "Caption Dropout Rate" },
   "Tag Dropout Rate": { "zh-TW": "Tag Dropout Rate", "zh-CN": "Tag Dropout Rate" },
@@ -195,6 +217,33 @@ const UI_TRANSLATIONS = {
   "Enter prompt text...": { "zh-TW": "輸入提示詞...", "zh-CN": "输入提示词..." },
   "Base Model (No LoRA)": { "zh-TW": "基礎模型（無 LoRA）", "zh-CN": "基础模型（无 LoRA）" },
   "No jobs yet": { "zh-TW": "還沒有工作", "zh-CN": "还没有任务" },
+  "Training Queue": { "zh-TW": "訓練隊列", "zh-CN": "训练队列" },
+  "Runs from top to bottom": { "zh-TW": "由上到下依序訓練", "zh-CN": "由上到下依序训练" },
+  "Pending Jobs": { "zh-TW": "未排隊任務", "zh-CN": "未排队任务" },
+  "New jobs appear here": { "zh-TW": "新建立任務會出現在這裡", "zh-CN": "新建任务会出现在这里" },
+  "Start Queue": { "zh-TW": "開始隊列", "zh-CN": "开始队列" },
+  "Pause Queue": { "zh-TW": "暫停隊列", "zh-CN": "暂停队列" },
+  "Queued": { "zh-TW": "等待中", "zh-CN": "等待中" },
+  "Next": { "zh-TW": "下一個", "zh-CN": "下一个" },
+  "Running": { "zh-TW": "執行中", "zh-CN": "执行中" },
+  "Add to Queue": { "zh-TW": "加入隊列", "zh-CN": "加入队列" },
+  "Remove from Queue": { "zh-TW": "移出隊列", "zh-CN": "移出队列" },
+  "Move Up": { "zh-TW": "上移", "zh-CN": "上移" },
+  "Move Down": { "zh-TW": "下移", "zh-CN": "下移" },
+  "No queued jobs": { "zh-TW": "尚無排隊任務", "zh-CN": "暂无排队任务" },
+  "Add pending jobs to train them one by one.": {
+    "zh-TW": "從下方加入任務，就能一個接一個自動訓練。",
+    "zh-CN": "从下方加入任务，就能一个接一个自动训练。",
+  },
+  "No pending jobs": { "zh-TW": "沒有未排隊任務", "zh-CN": "没有未排队任务" },
+  "Completed queued jobs return here.": {
+    "zh-TW": "隊列任務完成後會回到這裡。",
+    "zh-CN": "队列任务完成后会回到这里。",
+  },
+  "Job added to queue": { "zh-TW": "任務已加入隊列", "zh-CN": "任务已加入队列" },
+  "Job removed from queue": { "zh-TW": "任務已移出隊列", "zh-CN": "任务已移出队列" },
+  "Queue started": { "zh-TW": "隊列已開始", "zh-CN": "队列已开始" },
+  "Queue paused": { "zh-TW": "隊列已暫停", "zh-CN": "队列已暂停" },
   "Connecting...": { "zh-TW": "連線中...", "zh-CN": "连接中..." },
   "Idle": { "zh-TW": "閒置", "zh-CN": "空闲" },
   "Single GPU": { "zh-TW": "單 GPU", "zh-CN": "单 GPU" },
@@ -909,6 +958,7 @@ function connectWS() {
       } else if (msg.type === "status") {
         if (msg.data === "generating") return; // Ignore generation status for Training button
         updateRunningState(msg.data === "running");
+        loadJobs();
       }
     } catch (e) { }
   };
@@ -1066,28 +1116,207 @@ function updateHwMonitor(stats) {
 // ==========================================
 //  Job List
 // ==========================================
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getJobStatusLabel(job, queuedIndex) {
+  if (job.running || job.queueActive) return "Running";
+  if (queuedIndex === 0) return "Next";
+  if (job.queued) return "Queued";
+  return "";
+}
+
+function createJobItem(job, options = {}) {
+  const { section = "pending", queuedIndex = -1, queuedTotal = 0 } = options;
+  const statusLabel = getJobStatusLabel(job, queuedIndex);
+  const isQueuedSection = section === "queued";
+  const el = document.createElement("div");
+  el.className = `job-item${job.name === currentJob ? " active" : ""}${job.running || job.queueActive ? " running" : ""}${job.queued ? " queued" : ""}`;
+  el.innerHTML = `
+            <div class="status-dot"></div>
+            <div class="job-main">
+              <span class="job-name">${escapeHtml(job.name)}</span>
+              ${statusLabel ? `<div class="job-meta"><span class="job-status-badge ${statusLabel === "Running" ? "running" : statusLabel === "Next" ? "next" : ""}">${translatePhrase(statusLabel)}</span></div>` : ""}
+            </div>
+            <div class="job-actions"></div>
+        `;
+  el.addEventListener("click", () => selectJob(job.name));
+
+  const actions = el.querySelector(".job-actions");
+  if (isQueuedSection && job.queued && !job.running && !job.queueActive) {
+    const upBtn = document.createElement("button");
+    upBtn.className = "job-btn";
+    upBtn.title = translatePhrase("Move Up");
+    upBtn.textContent = "↑";
+    upBtn.disabled = queuedIndex <= 0;
+    upBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveQueuedJob(job.name, queuedIndex - 1);
+    });
+    actions.appendChild(upBtn);
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "job-btn";
+    downBtn.title = translatePhrase("Move Down");
+    downBtn.textContent = "↓";
+    downBtn.disabled = queuedIndex >= queuedTotal - 1;
+    downBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveQueuedJob(job.name, queuedIndex + 1);
+    });
+    actions.appendChild(downBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "job-btn";
+    removeBtn.title = translatePhrase("Remove from Queue");
+    removeBtn.textContent = "−";
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeJobFromQueue(job.name);
+    });
+    actions.appendChild(removeBtn);
+  } else if (!isQueuedSection && !job.running && job.hasConfig) {
+    const addBtn = document.createElement("button");
+    addBtn.className = "job-btn";
+    addBtn.title = translatePhrase("Add to Queue");
+    addBtn.textContent = "+";
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      addJobToQueue(job.name);
+    });
+    actions.appendChild(addBtn);
+  }
+
+  return el;
+}
+
+function renderEmptyJobList(container, title, body) {
+  container.innerHTML = `
+        <div class="queue-empty">
+          <strong>${translatePhrase(title)}</strong><br>
+          <span>${translatePhrase(body)}</span>
+        </div>
+      `;
+}
+
 async function loadJobs() {
   const jobs = await api("/api/jobs");
-  jobListEl.innerHTML = "";
-  if (jobs.length === 0) {
-    jobListEl.innerHTML =
-      '<div style="padding:20px;text-align:center;color:var(--text-muted)">No jobs yet</div>';
+  const queuedJobs = jobs
+    .filter((job) => job.queued || job.running)
+    .sort((a, b) => {
+      const ai = a.queueIndex >= 0 ? a.queueIndex : -1;
+      const bi = b.queueIndex >= 0 ? b.queueIndex : -1;
+      if (ai !== bi) return ai - bi;
+      return b.mtime - a.mtime;
+    });
+  const pendingJobs = jobs.filter((job) => !job.queued && !job.running);
+
+  if ($("queue-count")) $("queue-count").textContent = queuedJobs.length;
+  if ($("pending-count")) $("pending-count").textContent = pendingJobs.length;
+
+  if (!queuedJobListEl || !pendingJobListEl) {
+    jobListEl.innerHTML = "";
+    jobs.forEach((job) => jobListEl.appendChild(createJobItem(job)));
     refreshI18n();
     return jobs;
   }
-  jobs.forEach((job) => {
-    const el = document.createElement("div");
-    el.className = `job-item${job.name === currentJob ? " active" : ""}${job.running ? " running" : ""}`;
-    el.innerHTML = `
-            <div class="status-dot"></div>
-            <span class="job-name">${job.name}</span>
-        `;
-    el.addEventListener("click", () => selectJob(job.name));
-    jobListEl.appendChild(el);
-  });
+
+  queuedJobListEl.innerHTML = "";
+  pendingJobListEl.innerHTML = "";
+
+  if (queuedJobs.length === 0) {
+    renderEmptyJobList(queuedJobListEl, "No queued jobs", "Add pending jobs to train them one by one.");
+  } else {
+    queuedJobs.forEach((job, idx) => {
+      queuedJobListEl.appendChild(createJobItem(job, {
+        section: "queued",
+        queuedIndex: job.queueIndex >= 0 ? job.queueIndex : idx,
+        queuedTotal: queuedJobs.length
+      }));
+    });
+  }
+
+  if (pendingJobs.length === 0) {
+    renderEmptyJobList(pendingJobListEl, "No pending jobs", "Completed queued jobs return here.");
+  } else {
+    pendingJobs.forEach((job) => pendingJobListEl.appendChild(createJobItem(job, { section: "pending" })));
+  }
   refreshI18n();
   return jobs;
 }
+
+async function addJobToQueue(name) {
+  await api(`/api/queue/jobs/${encodeURIComponent(name)}`, { method: "POST" });
+  await loadJobs();
+  showToast("Job added to queue");
+}
+
+async function removeJobFromQueue(name) {
+  await api(`/api/queue/jobs/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await loadJobs();
+  showToast("Job removed from queue");
+}
+
+async function moveQueuedJob(name, index) {
+  await api(`/api/queue/jobs/${encodeURIComponent(name)}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { index },
+  });
+  await loadJobs();
+}
+
+async function startQueue() {
+  await api("/api/queue/start", { method: "POST" });
+  await loadJobs();
+  showToast("Queue started");
+}
+
+async function pauseQueue() {
+  await api("/api/queue/stop", { method: "POST" });
+  await loadJobs();
+  showToast("Queue paused");
+}
+
+function initSidebarSplitter() {
+  const splitter = $("sidebar-splitter");
+  const sidebar = document.querySelector(".sidebar-queues");
+  const queueSection = document.querySelector(".queue-section");
+  if (!splitter || !sidebar || !queueSection) return;
+
+  const savedHeight = localStorage.getItem("queue_panel_height");
+  if (savedHeight) {
+    document.documentElement.style.setProperty("--queue-panel-height", savedHeight);
+  }
+
+  let dragging = false;
+  splitter.addEventListener("mousedown", (e) => {
+    dragging = true;
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = sidebar.getBoundingClientRect();
+    const percent = ((e.clientY - rect.top) / rect.height) * 100;
+    const clamped = Math.max(24, Math.min(72, percent));
+    const value = `${clamped.toFixed(1)}%`;
+    document.documentElement.style.setProperty("--queue-panel-height", value);
+    localStorage.setItem("queue_panel_height", value);
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = "";
+  });
+}
+
 function getExistingJobNames() {
   return new Set(
     Array.from(document.querySelectorAll(".job-name"))
@@ -1265,10 +1494,18 @@ function populateConfig(config) {
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
   $("cfg-loss-type").value = t.loss_type || "l2";
+  $("cfg-pnp-loss-weight").value = t.pnp_loss_weight ?? "";
   $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;
   $("cfg-cwmi-levels").value = t.cwmi_levels ?? 4;
   $("cfg-cwmi-orientations").value = t.cwmi_orientations ?? 4;
   $("cfg-cwmi-eps").value = t.cwmi_eps ?? 0.0005;
+  $("cfg-wavelet-loss-c-min").value = t.wavelet_loss_c_min ?? 0.2;
+  $("cfg-wavelet-loss-c-max").value = t.wavelet_loss_c_max ?? 1.0;
+  $("cfg-wavelet-loss-alpha").value = t.wavelet_loss_alpha ?? 0.5;
+  $("cfg-wavelet-loss-beta").value = t.wavelet_loss_beta ?? 0.5;
+  $("cfg-wavelet-loss-gamma").value = t.wavelet_loss_gamma ?? 5.0;
+  $("cfg-wavelet-loss-weight").value = t.wavelet_loss_weight ?? 1.0;
+  $("cfg-wavelet-loss-prediction-type").value = t.wavelet_loss_prediction_type || "velocity";
   updateLossTypeUI();
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
@@ -1453,6 +1690,15 @@ function populateDataset(dataset) {
 
   const d = dArray[0];
   $("cfg-caption-ext").value = d.caption_extension || ".txt";
+  $("cfg-fad-p-min").value = d.fad_p_min ?? 0.35;
+  $("cfg-fad-p-max").value = d.fad_p_max ?? 1.0;
+  $("cfg-fad-alpha").value = d.fad_alpha ?? 10.0;
+  $("cfg-fad-c").value = d.fad_c ?? 0.5;
+  $("cfg-fad-curriculum-start").value = d.fad_curriculum_start ?? 0.0;
+  $("cfg-fad-curriculum-end").value = d.fad_curriculum_end ?? 1.0;
+  $("cfg-fad-curriculum-beta").value = d.fad_curriculum_beta ?? 3.0;
+  $("cfg-fad-step-start").value = d.fad_step_start ?? 0.0;
+  $("cfg-fad-step-end").value = d.fad_step_end ?? 1.0;
   $("cfg-enable-bucket").checked = g.enable_bucket ?? true;
   $("cfg-bucket-no-upscale").checked = g.bucket_no_upscale ?? true;
   $("cfg-min-bucket").value = g.min_bucket_reso ?? 512;
@@ -1466,6 +1712,7 @@ function populateDataset(dataset) {
     image_dir: s.image_dir || "",
     num_repeats: s.num_repeats ?? 1,
     keep_tokens: s.keep_tokens ?? 5,
+    keep_tags: s.keep_tags ?? DEFAULT_KEEP_TAGS,
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
     caption_dropout_rate: s.caption_dropout_rate ?? 0.0,
@@ -1473,6 +1720,8 @@ function populateDataset(dataset) {
     caption_dropout_every_n_epochs: s.caption_dropout_every_n_epochs ?? 0,
     shuffle_caption: s.shuffle_caption ?? true,
     enable_wildcard: s.enable_wildcard ?? true,
+    enable_fad: s.enable_fad ?? false,
+    fad_curriculum: s.fad_curriculum ?? false,
     is_reg: s.is_reg ?? false,
   }));
   // Edge case: if empty, force at least 1
@@ -1505,7 +1754,13 @@ function updateLrSchedulerOptions() {
 function updateLossTypeUI() {
   const lossType = $("cfg-loss-type").value;
   const isCwmi = lossType === "cwmi";
+  const isSnrWavelet = lossType === "snr_aware_huber_wavelet";
+  const isWavelet = isSnrWavelet || lossType === "wavelet_l2";
   $("group-cwmi-fields").classList.toggle("hidden", !isCwmi);
+  $("group-wavelet-loss-fields").classList.toggle("hidden", !isWavelet);
+  document.querySelectorAll(".wavelet-huber-field").forEach((el) => {
+    el.classList.toggle("hidden", !isSnrWavelet);
+  });
 }
 function updateActivationOffloadUI() {
   const offload = $("cfg-activation-offload").value;
@@ -1612,10 +1867,18 @@ function gatherConfig() {
       knn_noise_k: safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
       loss_type: $("cfg-loss-type").value,
+      pnp_loss_weight: $("cfg-pnp-loss-weight").value !== "" ? safeFloat($("cfg-pnp-loss-weight").value) : 0.0,
       cwmi_lambda: safeFloat($("cfg-cwmi-lambda").value),
       cwmi_levels: safeInt($("cfg-cwmi-levels").value),
       cwmi_orientations: safeInt($("cfg-cwmi-orientations").value),
       cwmi_eps: safeFloat($("cfg-cwmi-eps").value),
+      wavelet_loss_c_min: safeFloat($("cfg-wavelet-loss-c-min").value, 0.2),
+      wavelet_loss_c_max: safeFloat($("cfg-wavelet-loss-c-max").value, 1.0),
+      wavelet_loss_alpha: safeFloat($("cfg-wavelet-loss-alpha").value, 0.5),
+      wavelet_loss_beta: safeFloat($("cfg-wavelet-loss-beta").value, 0.5),
+      wavelet_loss_gamma: safeFloat($("cfg-wavelet-loss-gamma").value, 5.0),
+      wavelet_loss_weight: safeFloat($("cfg-wavelet-loss-weight").value, 1.0),
+      wavelet_loss_prediction_type: $("cfg-wavelet-loss-prediction-type").value,
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -1797,11 +2060,21 @@ function gatherDataset() {
           resolution: [r, r],
           batch_size: b,
           caption_extension: $("cfg-caption-ext").value,
+          fad_p_min: safeFloat($("cfg-fad-p-min").value),
+          fad_p_max: safeFloat($("cfg-fad-p-max").value),
+          fad_alpha: safeFloat($("cfg-fad-alpha").value),
+          fad_c: safeFloat($("cfg-fad-c").value),
+          fad_curriculum_start: safeFloat($("cfg-fad-curriculum-start").value),
+          fad_curriculum_end: safeFloat($("cfg-fad-curriculum-end").value),
+          fad_curriculum_beta: safeFloat($("cfg-fad-curriculum-beta").value),
+          fad_step_start: safeFloat($("cfg-fad-step-start").value),
+          fad_step_end: safeFloat($("cfg-fad-step-end").value),
           subsets: currentSubsets.map((s) => {
             const subset = {
               image_dir: s.image_dir,
               num_repeats: safeInt(s.num_repeats),
               keep_tokens: safeInt(s.keep_tokens),
+              keep_tags: s.keep_tags ?? "",
               flip_aug: s.flip_aug,
               caption_prefix: s.caption_prefix,
               caption_dropout_rate: safeFloat(s.caption_dropout_rate),
@@ -1811,6 +2084,8 @@ function gatherDataset() {
               ),
               shuffle_caption: s.shuffle_caption,
               enable_wildcard: s.enable_wildcard,
+              enable_fad: s.enable_fad,
+              fad_curriculum: s.fad_curriculum,
             };
             if (s.is_reg) subset.is_reg = true;
             if ($("cfg-alpha-mask").checked) subset.alpha_mask = true;
@@ -1829,6 +2104,7 @@ function addSubset(shouldRender = true) {
     image_dir: "",
     num_repeats: 1,
     keep_tokens: 5,
+    keep_tags: DEFAULT_KEEP_TAGS,
     flip_aug: false,
     caption_prefix: "",
     caption_dropout_rate: 0.0,
@@ -1836,6 +2112,8 @@ function addSubset(shouldRender = true) {
     caption_dropout_every_n_epochs: 0,
     shuffle_caption: true,
     enable_wildcard: true,
+    enable_fad: false,
+    fad_curriculum: false,
     is_reg: false,
     collapsed: false,
   });
@@ -1897,6 +2175,11 @@ function renderSubsets() {
                     <label style="font-size: 0.8rem;">Caption Prefix</label>
                     <input type="text" class="sub-caption-prefix" value="${escapeHtml(subset.caption_prefix)}" placeholder="e.g. A photo of,">
                 </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label style="font-size: 0.8rem;">KEEP TAGS</label>
+                    <textarea class="sub-keep-tags" rows="4" style="width: 100%; box-sizing: border-box; resize: vertical;" placeholder="1girl, .*watermark, fake_screenshot">${escapeHtml(subset.keep_tags ?? DEFAULT_KEEP_TAGS)}</textarea>
+                    <small style="display:block; font-size: 0.7rem; color: var(--text-muted);">Comma separated regex. Matched flex tokens are protected from FAD and Tag Dropout.</small>
+                </div>
                 <div class="form-row" style="margin-top: 10px;">
                     <div class="form-group">
                         <label style="font-size: 0.8rem;">Caption Dropout Rate</label>
@@ -1922,6 +2205,14 @@ function renderSubsets() {
                     </div>
                     <div class="form-group">
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-enable-wildcard" ${subset.enable_wildcard ? "checked" : ""}> Enable Wildcard</label>
+                    </div>
+                </div>
+                <div class="form-row" style="margin-top: 10px;">
+                    <div class="form-group">
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-enable-fad" ${subset.enable_fad ? "checked" : ""}> Enable FAD</label>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-fad-curriculum" ${subset.fad_curriculum ? "checked" : ""}> Enable sFAD</label>
                     </div>
                 </div>
                 <div class="form-row" style="margin-top: 10px;">
@@ -1953,6 +2244,7 @@ function renderSubsets() {
           card.querySelector(".sub-keep-tokens").value,
         );
         subset.caption_prefix = card.querySelector(".sub-caption-prefix").value;
+        subset.keep_tags = card.querySelector(".sub-keep-tags").value;
         subset.caption_dropout_rate = safeFloat(
           card.querySelector(".sub-caption-dropout").value,
         );
@@ -1968,11 +2260,13 @@ function renderSubsets() {
         subset.enable_wildcard = card.querySelector(
           ".sub-enable-wildcard",
         ).checked;
+        subset.enable_fad = card.querySelector(".sub-enable-fad").checked;
+        subset.fad_curriculum = card.querySelector(".sub-fad-curriculum").checked;
         subset.flip_aug = card.querySelector(".sub-flip-aug").checked;
         subset.is_reg = card.querySelector(".sub-is-reg").checked;
         checkDirty();
       };
-      card.querySelectorAll("input").forEach((input) => {
+      card.querySelectorAll("input, textarea").forEach((input) => {
         input.addEventListener("input", updateSubset);
         if (input.type === "checkbox") {
           input.addEventListener("change", updateSubset);
@@ -3619,6 +3913,9 @@ if (btnAddDataset) {
   btnAddDataset.addEventListener("click", () => addSubset(true));
 }
 // New Job
+$("btn-queue-start")?.addEventListener("click", startQueue);
+$("btn-queue-stop")?.addEventListener("click", pauseQueue);
+
 $("btn-new-job").addEventListener("click", () => {
   const defaultName = nextVersionedName("my_job", 1);
   $("new-job-name").value = defaultName;
@@ -4417,9 +4714,11 @@ async function init() {
   // 2. Normal Init
   connectWS();
   applyI18n();
+  initSidebarSplitter();
   await loadJobs();
   // Start status polling
   setInterval(updateGPUActivity, 3000);
+  setInterval(loadJobs, 5000);
   // Watch for config changes
   document.addEventListener("input", (e) => {
     if (e.target.id && e.target.id.startsWith("cfg-")) {

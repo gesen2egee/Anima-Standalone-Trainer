@@ -61,6 +61,7 @@ class BaseSubsetParams:
     caption_separator: str = (",",)
     keep_tokens: int = 0
     keep_tokens_separator: str = (None,)
+    keep_tags: str = train_util.DEFAULT_KEEP_TAGS
     secondary_separator: Optional[str] = None
     enable_wildcard: bool = False
     color_aug: bool = False
@@ -204,6 +205,7 @@ class ConfigSanitizer:
         "fad_curriculum": bool,
         "keep_tokens": int,
         "keep_tokens_separator": str,
+        "keep_tags": str,
         "secondary_separator": str,
         "caption_separator": str,
         "enable_wildcard": bool,
@@ -589,6 +591,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     enable_fad: {subset.enable_fad}
                     fad_curriculum: {subset.fad_curriculum}
                     keep_tokens: {subset.keep_tokens}
+                    keep_tags: {subset.keep_tags}
                     caption_dropout_rate: {subset.caption_dropout_rate}
                     caption_dropout_every_n_epochs: {subset.caption_dropout_every_n_epochs}
                     caption_tag_dropout_rate: {subset.caption_tag_dropout_rate}
