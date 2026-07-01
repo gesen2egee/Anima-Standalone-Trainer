@@ -215,12 +215,40 @@ const trainingQueue = createJobQueue({
     jobExists
 });
 let queueAutoRunning = false;
+let queueStartInFlight = false;
 
 function getRunningTrainingJobName() {
     for (const [name, job] of runningJobs.entries()) {
         if (job.type === 'training') return name;
     }
     return null;
+}
+
+function stopTrainingJob(jobName) {
+    const job = runningJobs.get(jobName);
+    if (!job) return null;
+
+    job.stopRequested = true;
+    broadcastStatus(jobName, 'stopping');
+
+    if (job.pid) {
+        killProcess(job.pid, 8000).catch(() => {});
+    }
+
+    return job;
+}
+
+function stopRunningTrainingForQueue() {
+    const runningTraining = getRunningTrainingJobName();
+    if (!runningTraining) {
+        const state = trainingQueue.getState();
+        if (state.active) trainingQueue.clearActive(state.active);
+        return null;
+    }
+
+    const stoppedJob = stopTrainingJob(runningTraining);
+    trainingQueue.clearActive(runningTraining);
+    return stoppedJob ? runningTraining : null;
 }
 
 // Serve architecture registry to frontend
@@ -410,6 +438,16 @@ function broadcastStatus(jobName, status) {
             }
         });
     }
+    broadcastQueueChanged();
+}
+
+function broadcastQueueChanged() {
+    const data = JSON.stringify({ type: 'queue' });
+    wss.clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(data);
+        }
+    });
 }
 
 // Find the most recently modified state folder in a job's output directory
@@ -1172,19 +1210,14 @@ app.post('/api/jobs/:name/unload', (req, res) => {
 app.post('/api/jobs/:name/train/stop', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
-        const job = runningJobs.get(jobName);
+        const job = stopTrainingJob(jobName);
 
         if (!job) {
             return res.status(400).json({ error: 'Job not running' });
         }
 
-        runningJobs.delete(jobName);
-        broadcastStatus(jobName, 'stopping');
-
-        if (job.pid) {
-            killProcess(job.pid, 8000).catch(() => {});
-        }
-
+        queueAutoRunning = false;
+        trainingQueue.clearActive(jobName);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1420,6 +1453,7 @@ async function startQueuedJob(jobName) {
 
 async function runNextQueuedJob() {
     if (!queueAutoRunning) return null;
+    if (queueStartInFlight) return null;
     const runningTraining = getRunningTrainingJobName();
     if (runningTraining) return null;
     const nextJob = trainingQueue.getNext();
@@ -1427,7 +1461,12 @@ async function runNextQueuedJob() {
         queueAutoRunning = false;
         return null;
     }
-    return startQueuedJob(nextJob);
+    queueStartInFlight = true;
+    try {
+        return await startQueuedJob(nextJob);
+    } finally {
+        queueStartInFlight = false;
+    }
 }
 
 app.get('/api/queue', (req, res) => {
@@ -1500,7 +1539,13 @@ app.post('/api/queue/start', async (req, res) => {
 app.post('/api/queue/stop', (req, res) => {
     try {
         queueAutoRunning = false;
-        res.json({ success: true, queue: trainingQueue.getState(), autoRunning: queueAutoRunning });
+        const stoppedJob = stopRunningTrainingForQueue();
+        res.json({
+            success: true,
+            stoppedJob,
+            queue: trainingQueue.getState(),
+            autoRunning: queueAutoRunning
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1634,10 +1679,11 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             const msg = `\n--- Training ${code === 0 ? 'completed' : 'stopped'} (exit code: ${code}) ---\n`;
             appendLog(Buffer.from(msg));
             logStream.end();
+            const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
-                if (code === 0) {
+                if (code === 0 && !stoppedByRequest) {
                     trainingQueue.finishQueuedJob(jobName, { success: true });
                     broadcastStatus(jobName, 'completed');
                     setTimeout(() => {
@@ -1649,7 +1695,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
                 } else {
                     queueAutoRunning = false;
                     trainingQueue.finishQueuedJob(jobName, { success: false });
-                    broadcastStatus(jobName, 'failed');
+                    broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
                 }
             } else {
                 broadcastStatus(jobName, 'idle');
@@ -1658,12 +1704,13 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         proc.on('error', (err) => {
             appendLog(Buffer.from(`\nERROR: ${err.message}\n`));
+            const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 queueAutoRunning = false;
                 trainingQueue.finishQueuedJob(jobName, { success: false });
-                broadcastStatus(jobName, 'failed');
+                broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
             } else {
                 broadcastStatus(jobName, 'idle');
             }

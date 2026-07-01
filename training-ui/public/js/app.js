@@ -952,6 +952,10 @@ function connectWS() {
         updateHwMonitor(msg.data);
         return;
       }
+      if (msg.type === "queue") {
+        loadJobs();
+        return;
+      }
       if (msg.job !== currentJob) return;
       if (msg.type === "log") {
         appendConsole(msg.data);
@@ -4416,19 +4420,18 @@ $("btn-run").addEventListener("click", async () => {
   }
   // Auto-save first
   if (isDirty) await saveJob();
-  const result = await api(`/api/jobs/${currentJob}/train/start`, {
+  await api(`/api/queue/jobs/${encodeURIComponent(currentJob)}`, {
     method: "POST",
   });
-  if (result.error) {
-    alert(result.error);
-    return;
-  }
-  updateRunningState(true);
+  await api("/api/queue/start", { method: "POST" });
+  await loadJobs();
+  const status = await api(`/api/jobs/${currentJob}/train/status`);
+  updateRunningState(status.running);
   consoleOutput.textContent = "";
   if (warningMsg) appendConsole(warningMsg);
   // Auto-switch to console tab
   document.querySelector('[data-tab="console"]').click();
-  showToast("Training started");
+  showToast("Queue started");
 });
 // Generate
 $("btn-gen-sample").addEventListener("click", async () => {
@@ -4491,8 +4494,9 @@ $("btn-stop").addEventListener("click", () => {
     "Stop Training",
     `Stop training for "${currentJob}"?`,
     async () => {
-      await api(`/api/jobs/${currentJob}/train/stop`, { method: "POST" });
+      await api("/api/queue/stop", { method: "POST" });
       updateRunningState(false);
+      await loadJobs();
       showToast("Training stopped");
     },
   );

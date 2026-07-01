@@ -88,3 +88,16 @@ test('failed queued job completion clears active but keeps the job for retry', (
     assert.deepStrictEqual(queue.getState().items, ['alpha', 'beta']);
     assert.strictEqual(queue.getState().active, null);
 });
+
+test('stopping a queue clears active but keeps current and remaining jobs queued', () => {
+    const { queue } = makeQueue();
+
+    queue.enqueue('alpha');
+    queue.enqueue('beta');
+    queue.markActive('alpha');
+    queue.clearActive();
+
+    assert.deepStrictEqual(queue.getState().items, ['alpha', 'beta']);
+    assert.strictEqual(queue.getState().active, null);
+    assert.strictEqual(queue.getNext(), 'alpha');
+});
