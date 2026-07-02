@@ -8,6 +8,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const { createJobQueue } = require('./lib/jobQueue');
 const { findAutoResumeSource } = require('./lib/autoResume');
+const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 
 require('./lib/setup').runSetup();
@@ -716,9 +717,14 @@ app.get('/api/jobs', (req, res) => {
                 const configPath = path.join(jobsDir, d.name, 'config.toml');
                 const hasConfig = fs.existsSync(configPath);
                 let mtime = 0;
+                let config = {};
                 if (hasConfig) {
-                    try { mtime = fs.statSync(configPath).mtimeMs; } catch (e) { }
+                    try {
+                        mtime = fs.statSync(configPath).mtimeMs;
+                        config = TOML.parse(fs.readFileSync(configPath, 'utf8'));
+                    } catch (e) { }
                 }
+                const trainingArgs = config.training_arguments || {};
                 return {
                     name: d.name,
                     hasConfig,
@@ -726,6 +732,11 @@ app.get('/api/jobs', (req, res) => {
                     queued: queuedJobs.has(d.name),
                     queueIndex: queueState.items.indexOf(d.name),
                     queueActive: queueState.active === d.name,
+                    progress: calculateJobProgress(path.join(jobsDir, d.name, 'output'), {
+                        outputName: trainingArgs.output_name || d.name,
+                        maxTrainSteps: trainingArgs.max_train_steps,
+                        maxTrainEpochs: trainingArgs.max_train_epochs
+                    }),
                     mtime
                 };
             })

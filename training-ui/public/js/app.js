@@ -1136,6 +1136,15 @@ function getJobStatusLabel(job, queuedIndex) {
   return "";
 }
 
+function renderJobProgress(progress) {
+  const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 0));
+  const title = progress?.label ? ` title="${escapeHtml(progress.label)}"` : "";
+  return `
+              <div class="job-progress"${title}>
+                <div class="job-progress-fill" style="width: ${percent}%"></div>
+              </div>`;
+}
+
 function createJobItem(job, options = {}) {
   const { section = "pending", queuedIndex = -1, queuedTotal = 0 } = options;
   const statusLabel = getJobStatusLabel(job, queuedIndex);
@@ -1147,6 +1156,7 @@ function createJobItem(job, options = {}) {
             <div class="job-main">
               <span class="job-name">${escapeHtml(job.name)}</span>
               ${statusLabel ? `<div class="job-meta"><span class="job-status-badge ${statusLabel === "Running" ? "running" : statusLabel === "Next" ? "next" : ""}">${translatePhrase(statusLabel)}</span></div>` : ""}
+              ${renderJobProgress(job.progress)}
             </div>
             <div class="job-actions"></div>
         `;
