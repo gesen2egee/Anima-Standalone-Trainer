@@ -7,6 +7,7 @@ const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 const { createJobQueue } = require('./lib/jobQueue');
+const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 
 require('./lib/setup').runSetup();
 
@@ -1676,14 +1677,19 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         logStream.on('error', (err) => console.error(`[Train/LogFile] ${err.message}`));
 
         proc.on('close', (code) => {
-            const msg = `\n--- Training ${code === 0 ? 'completed' : 'stopped'} (exit code: ${code}) ---\n`;
+            const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
+            const completedSuccessfully = isSuccessfulTrainingExit({
+                code,
+                stoppedByRequest,
+                logText: logBuffer.join('')
+            });
+            const msg = `\n--- Training ${completedSuccessfully ? 'completed' : 'stopped'} (exit code: ${code}) ---\n`;
             appendLog(Buffer.from(msg));
             logStream.end();
-            const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
-                if (code === 0 && !stoppedByRequest) {
+                if (completedSuccessfully) {
                     trainingQueue.finishQueuedJob(jobName, { success: true });
                     broadcastStatus(jobName, 'completed');
                     setTimeout(() => {
