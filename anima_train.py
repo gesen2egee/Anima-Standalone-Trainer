@@ -662,7 +662,7 @@ def train(args):
                     wavelet_prediction_type="velocity",
                 )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
-                    loss = apply_masked_loss(loss, batch)
+                    loss = apply_masked_loss(loss, batch, getattr(args, "masked_loss_random_strength", None))
                 loss = loss.mean([1, 2, 3])  # (B, C, H, W) -> (B,)
 
                 if weighting is not None:

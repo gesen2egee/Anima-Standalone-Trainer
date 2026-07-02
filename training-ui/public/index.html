@@ -464,15 +464,53 @@
                                 <option value="unsloth">Unsloth Offload (async, faster)</option>
                             </select>
                             <small>Offloads activations to CPU during backward pass. Requires Gradient Checkpointing.</small>
+                            <small>Keeps workers alive between epochs (less startup lag).</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="cfg-gradient-checkpointing" checked> Gradient
+                                Checkpointing</label>
+                            <small>Trades compute for VRAM savings. Recommended on.</small>
+                        </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="cfg-flash-attn"> Flash Attention</label>
+                            <small>Requires flash-attn package.</small>
+                        </div>
+                        <div id="group-torch-compile" class="form-group">
+                            <label><input type="checkbox" id="cfg-torch-compile"> Torch Compile</label>
+                            <small>Uses dynamo inductor backend. Slower first step, faster training after.</small>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 1;">
+                                <label><input type="checkbox" id="cfg-lowram"> Low RAM Optimization</label>
+                                <small>Loads model to VRAM to save system RAM.</small>
+                            </div>
+                            <div id="group-blocks-to-swap" class="form-group" style="flex: 1;">
+                                <label>Blocks to Swap</label>
+                                <input type="number" id="cfg-blocks-to-swap" value="0" min="0" max="26">
+                                <small>Moves transformer blocks to RAM to save VRAM. 0=Off.</small>
+                            </div>
+                        </div>
+                        <div id="group-activation-offload" class="form-group">
+                            <label>Activation Offload</label>
+                            <select id="cfg-activation-offload">
+                                <option value="none">None</option>
+                                <option value="cpu">CPU Offload (blocking transfers)</option>
+                                <option value="unsloth">Unsloth Offload (async, faster)</option>
+                            </select>
+                            <small>Offloads activations to CPU during backward pass. Requires Gradient Checkpointing.</small>
                         </div>
 
 
                         <h4>Caching</h4>
                         <div class="form-row">
-                            <div class="form-group" style="flex: 1.5;">
-                                <label><input type="checkbox" id="cfg-cache-latents" checked> Cache Latents to
-                                    Disk</label>
-                                <small>Pre-encode images as .safetensors files for faster training.</small>
+                            <div class="form-group" style="flex: 1.2;">
+                                <label><input type="checkbox" id="cfg-cache-latents" checked> Cache Latents</label>
+                                <small>Cache VAE latents in RAM for faster training.</small>
+                            </div>
+                            <div class="form-group" style="flex: 1.2;">
+                                <label><input type="checkbox" id="cfg-cache-latents-to-disk" checked> Cache Latents to Disk</label>
+                                <small>Pre-encode images to disk as .safetensors files.</small>
                             </div>
                             <div class="form-group" style="flex: 1;">
                                 <label>VAE Batch Size</label>
@@ -657,6 +695,11 @@
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-alpha-mask" checked> Alpha Mask</label>
                             <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="cfg-masked-loss-random"> Random Mask Strength</label>
+                            <small>Randomize loss weight for masked-out areas (mask=0) between 0.0 and 1.0.</small>
                         </div>
 
                         <h4>Frequency-Aware Dropout</h4>

@@ -4765,6 +4765,12 @@ def add_masked_loss_arguments(parser: argparse.ArgumentParser):
         action="store_true",
         help="apply mask for calculating loss. conditioning_data_dir is required for dataset. / 損失計算時にマスクを適用する。datasetにはconditioning_data_dirが必要",
     )
+    parser.add_argument(
+        "--masked_loss_random_strength",
+        type=float,
+        default=None,
+        help="minimum strength for random masked loss. If specified, mask weight will be randomized between min and 1.0 for mask=0 areas. / ランダムマスク損失の最小強度。指定された場合、マスクが0の領域の重みがminから1.0の間でランダムになります。",
+    )
 
 
 def add_dit_training_arguments(parser: argparse.ArgumentParser):

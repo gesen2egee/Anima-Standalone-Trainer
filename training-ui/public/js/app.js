@@ -1522,11 +1522,14 @@ function populateConfig(config) {
   updateActivationOffloadUI();
   $("cfg-persistent-workers").checked =
     t.persistent_data_loader_workers ?? true;
-  $("cfg-cache-latents").checked = t.cache_latents_to_disk ?? true;
+  $("cfg-cache-latents").checked = t.cache_latents ?? true;
+  $("cfg-cache-latents-to-disk").checked = t.cache_latents_to_disk ?? true;
   $("cfg-vae-batch").value = t.vae_batch_size ?? 1;
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
+  $("cfg-masked-loss-random").checked =
+    t.masked_loss_random_strength !== undefined && t.masked_loss_random_strength !== null;
   $("cfg-disable-bucket-shuffle").checked = t.disable_bucket_shuffle ?? false;
   // Progressive resolution schedule
   if (t.resolution_schedule) {
@@ -1896,12 +1899,13 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
-      cache_latents: $("cfg-cache-latents").checked,
-      cache_latents_to_disk: $("cfg-cache-latents").checked,
+      cache_latents: $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked,
+      cache_latents_to_disk: $("cfg-cache-latents-to-disk").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
       cache_text_encoder_outputs_to_disk: $("cfg-cache-te").checked,
+      masked_loss_random_strength: $("cfg-masked-loss-random").checked ? 0.0 : undefined,
       ...($("cfg-disable-bucket-shuffle").checked && {
         disable_bucket_shuffle: true,
       }),
