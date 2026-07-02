@@ -856,11 +856,11 @@
                             </div>
                         </div>
 
-                        <div id="group-resume-training" style="display: none;">
+                        <div id="group-resume-training">
                             <h4>Resume Training</h4>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-auto-resume"> Auto-resume from last saved state</label>
-                                <small>Automatically resumes from the most recent saved state in the output folder.</small>
+                                <label><input type="checkbox" id="cfg-auto-resume" checked> Auto-resume from latest state/checkpoint</label>
+                                <small>Automatically resumes from the newest state folder; if none exists, LoRA jobs load the newest checkpoint save.</small>
                             </div>
                             <div class="form-group">
                                 <label>Resume State Folder</label>

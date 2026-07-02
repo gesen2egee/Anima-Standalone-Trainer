@@ -429,10 +429,10 @@ Object.assign(UI_TRANSLATIONS, {
     "zh-CN": "训练时保持 LLM adapter 权重冻结。建议开启，因为 adapter 已预训练，重训可能降低文本理解并造成 DDP graph 错误。",
   },
   "Resume Training": { "zh-TW": "恢復訓練", "zh-CN": "恢复训练" },
-  "Auto-resume from last saved state": { "zh-TW": "自動從最後儲存的 state 恢復", "zh-CN": "自动从最后保存的 state 恢复" },
-  "Automatically resumes from the most recent saved state in the output folder.": {
-    "zh-TW": "自動從輸出資料夾中最新的 state 恢復訓練。",
-    "zh-CN": "自动从输出文件夹中最新的 state 恢复训练。",
+  "Auto-resume from latest state/checkpoint": { "zh-TW": "自動從最新 State/Checkpoint 接續", "zh-CN": "自动从最新 State/Checkpoint 接续" },
+  "Automatically resumes from the newest state folder; if none exists, LoRA jobs load the newest checkpoint save.": {
+    "zh-TW": "自動從最新 State 資料夾接續；若沒有 State，LoRA 任務會載入最新 checkpoint 存檔。",
+    "zh-CN": "自动从最新 State 文件夹接续；若没有 State，LoRA 任务会载入最新 checkpoint 存档。",
   },
   "Resume State Folder": { "zh-TW": "恢復用 State 資料夾", "zh-CN": "恢复用 State 文件夹" },
   "Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.": {
@@ -1673,7 +1673,7 @@ function populateConfig(config) {
   $("cfg-unet-only").checked = n.network_train_unet_only ?? true;
   $("cfg-network-weights").value = n.network_weights || "";
   $("cfg-freeze-llm-adapter").checked = t.freeze_llm_adapter ?? true;
-  $("cfg-auto-resume").checked = n.auto_resume_last_state ?? false;
+  $("cfg-auto-resume").checked = n.auto_resume_last_state ?? true;
   $("cfg-resume").value = n.resume || "";
   $("cfg-resume").disabled = $("cfg-auto-resume").checked;
   $("cfg-network-dropout").value = n.network_dropout ?? 0;

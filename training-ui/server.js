@@ -7,6 +7,7 @@ const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 const { createJobQueue } = require('./lib/jobQueue');
+const { findAutoResumeSource } = require('./lib/autoResume');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 
 require('./lib/setup').runSetup();
@@ -451,28 +452,6 @@ function broadcastQueueChanged() {
     });
 }
 
-// Find the most recently modified state folder in a job's output directory
-function findLastStateDir(jobPath) {
-    const outputDir = path.join(jobPath, 'output');
-    if (!fs.existsSync(outputDir)) return null;
-    try {
-        const entries = fs.readdirSync(outputDir)
-            .filter(f => f.endsWith('-state'))
-            .map(f => {
-                const full = path.join(outputDir, f);
-                try {
-                    const st = fs.statSync(full);
-                    return st.isDirectory() ? { path: full, mtime: st.mtimeMs } : null;
-                } catch { return null; }
-            })
-            .filter(Boolean)
-            .sort((a, b) => b.mtime - a.mtime);
-        return entries.length > 0 ? entries[0].path : null;
-    } catch (err) {
-        return null;
-    }
-}
-
 // Build the full TOML config file for training, merging global model paths + job paths
 function buildTrainingConfig(jobName, jobPath) {
     const globalConfig = getGlobalConfig();
@@ -511,19 +490,28 @@ function buildTrainingConfig(jobName, jobPath) {
     };
     stripUiOnlyBackendArgs(merged.training_arguments);
 
+    const outputName = merged.training_arguments.output_name || jobName;
+    const autoResumeEnabled = jobConfig.network_arguments?.auto_resume_last_state !== false;
+    let autoResumeNetworkWeights = null;
+
     // Move resume from network_args to training_args
     if (jobConfig.network_arguments?.resume) {
         merged.training_arguments.resume = jobConfig.network_arguments.resume;
     }
 
-    // Auto-resume: detect last state if checkbox enabled and no explicit resume set
-    if (jobConfig.network_arguments?.auto_resume_last_state && !merged.training_arguments.resume) {
-        const lastState = findLastStateDir(jobPath);
-        if (lastState) {
-            merged.training_arguments.resume = lastState;
-            console.log(`[auto-resume] Detected last state: ${lastState}`);
+    // Auto-resume: prefer the latest state, then fall back to the latest LoRA checkpoint.
+    if (autoResumeEnabled && !merged.training_arguments.resume) {
+        const source = findAutoResumeSource(outputDir, outputName, {
+            allowCheckpoint: Boolean(jobConfig.network_arguments?.network_module && !jobConfig.network_arguments?.network_weights)
+        });
+        if (source?.type === 'state') {
+            merged.training_arguments.resume = source.path;
+            console.log(`[auto-resume] Detected last state: ${source.path}`);
+        } else if (source?.type === 'checkpoint') {
+            autoResumeNetworkWeights = source.path;
+            console.log(`[auto-resume] Detected last checkpoint: ${source.path}`);
         } else {
-            console.log(`[auto-resume] No saved state found in ${outputDir}, starting fresh.`);
+            console.log(`[auto-resume] No saved state or checkpoint found in ${outputDir}, starting fresh.`);
         }
     }
 
@@ -562,6 +550,9 @@ function buildTrainingConfig(jobName, jobPath) {
 
     // Network arguments
     merged.network_arguments = { ...jobConfig.network_arguments };
+    if (autoResumeNetworkWeights && !merged.network_arguments.network_weights) {
+        merged.network_arguments.network_weights = autoResumeNetworkWeights;
+    }
     delete merged.network_arguments.resume;
     delete merged.network_arguments.auto_resume_last_state;
 

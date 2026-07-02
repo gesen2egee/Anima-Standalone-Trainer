@@ -51,6 +51,7 @@ network_module = "networks.krona"
 network_dim = 16
 network_alpha = 16
 network_train_unet_only = true
+auto_resume_last_state = true
 network_args = [
   'exclude_patterns=[".*"]',
   'include_patterns=[".*(self_attn|cross_attn)\\.(v_proj|output_proj)"]',
@@ -75,4 +76,3 @@ model_guidance_prob = 1.0
 ciop_prob = 0.0
 ciop_noise_magnitude = 0.1
 ciop_noise_type = "gaussian"
-
