@@ -13,7 +13,7 @@ test("server wires automatic resume into training resume and LoRA checkpoint fal
   const serverJs = read("server.js");
 
   assert.match(serverJs, /findAutoResumeSource/);
-  assert.match(serverJs, /autoResumeEnabled\s*=\s*jobConfig\.network_arguments\?\.auto_resume_last_state\s*!==\s*false/);
+  assert.match(serverJs, /autoResumeEnabled\s*=\s*!\(\s*autoResumeUserSet\s*&&\s*jobConfig\.network_arguments\?\.auto_resume_last_state\s*===\s*false\s*\)/);
   assert.match(serverJs, /findAutoResumeSource\(outputDir,\s*outputName/);
   assert.match(serverJs, /source\??\.type\s*===\s*['"]state['"][\s\S]*merged\.training_arguments\.resume\s*=\s*source\.path/);
   assert.match(serverJs, /source\??\.type\s*===\s*['"]checkpoint['"][\s\S]*autoResumeNetworkWeights\s*=\s*source\.path/);
@@ -28,6 +28,6 @@ test("UI exposes automatic resume and defaults it on for new or legacy configs",
   assert.match(html, /id="group-resume-training"/);
   assert.doesNotMatch(html, /id="group-resume-training"\s+style="display:\s*none;"/);
   assert.match(html, /id="cfg-auto-resume"[^>]*checked/);
-  assert.match(appJs, /cfg-auto-resume"\)\.checked\s*=\s*n\.auto_resume_last_state\s*\?\?\s*true/);
+  assert.match(appJs, /cfg-auto-resume"\)\.checked\s*=\s*!\(n\.auto_resume_last_state_user_set\s*===\s*true\s*&&\s*n\.auto_resume_last_state\s*===\s*false\)/);
   assert.match(templateToml, /auto_resume_last_state\s*=\s*true/);
 });

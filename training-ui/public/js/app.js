@@ -1683,7 +1683,7 @@ function populateConfig(config) {
   $("cfg-unet-only").checked = n.network_train_unet_only ?? true;
   $("cfg-network-weights").value = n.network_weights || "";
   $("cfg-freeze-llm-adapter").checked = t.freeze_llm_adapter ?? true;
-  $("cfg-auto-resume").checked = n.auto_resume_last_state ?? true;
+  $("cfg-auto-resume").checked = !(n.auto_resume_last_state_user_set === true && n.auto_resume_last_state === false);
   $("cfg-resume").value = n.resume || "";
   $("cfg-resume").disabled = $("cfg-auto-resume").checked;
   $("cfg-network-dropout").value = n.network_dropout ?? 0;
@@ -2012,6 +2012,7 @@ function gatherConfig() {
     network_arguments: $("cfg-training-type").value === "full_finetune"
       ? {
           auto_resume_last_state: $("cfg-auto-resume").checked,
+          auto_resume_last_state_user_set: true,
           ...($("cfg-resume").value && !$("cfg-auto-resume").checked && { resume: $("cfg-resume").value }),
         }
       : {
@@ -2029,6 +2030,7 @@ function gatherConfig() {
             network_weights: $("cfg-network-weights").value,
           }),
           auto_resume_last_state: $("cfg-auto-resume").checked,
+          auto_resume_last_state_user_set: true,
           ...($("cfg-resume").value && !$("cfg-auto-resume").checked && { resume: $("cfg-resume").value }),
     },
     anima_arguments: {

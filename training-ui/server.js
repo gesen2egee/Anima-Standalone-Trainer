@@ -492,7 +492,8 @@ function buildTrainingConfig(jobName, jobPath) {
     stripUiOnlyBackendArgs(merged.training_arguments);
 
     const outputName = merged.training_arguments.output_name || jobName;
-    const autoResumeEnabled = jobConfig.network_arguments?.auto_resume_last_state !== false;
+    const autoResumeUserSet = jobConfig.network_arguments?.auto_resume_last_state_user_set === true;
+    const autoResumeEnabled = !(autoResumeUserSet && jobConfig.network_arguments?.auto_resume_last_state === false);
     let autoResumeNetworkWeights = null;
 
     // Move resume from network_args to training_args
@@ -556,6 +557,7 @@ function buildTrainingConfig(jobName, jobPath) {
     }
     delete merged.network_arguments.resume;
     delete merged.network_arguments.auto_resume_last_state;
+    delete merged.network_arguments.auto_resume_last_state_user_set;
 
     // Anima arguments
     if (jobConfig.anima_arguments) {
