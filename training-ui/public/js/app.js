@@ -1708,6 +1708,7 @@ function populateConfig(config) {
   $("cfg-model-guidance-zero-init-threshold").value = a.model_guidance_zero_init_threshold ?? 1.0;
   $("cfg-model-guidance-end-step").value = a.model_guidance_end_step ?? 0;
   $("cfg-model-guidance-prob").value = a.model_guidance_prob ?? 1.0;
+  $("cfg-differential-guidance-scale").value = a.differential_guidance_scale ?? 1.0;
   // CIOP
   $("cfg-ciop-prob").value = a.ciop_prob ?? 0.0;
   $("cfg-ciop-noise-magnitude").value = a.ciop_noise_magnitude ?? 0.1;
@@ -2088,6 +2089,7 @@ function gatherConfig() {
       model_guidance_zero_init_threshold: safeFloat($("cfg-model-guidance-zero-init-threshold").value),
       model_guidance_end_step: safeInt($("cfg-model-guidance-end-step").value),
       model_guidance_prob: safeFloat($("cfg-model-guidance-prob").value),
+      differential_guidance_scale: safeFloat($("cfg-differential-guidance-scale").value, 1.0),
       ciop_prob: safeFloat($("cfg-ciop-prob").value),
       ciop_noise_magnitude: safeFloat($("cfg-ciop-noise-magnitude").value),
       ciop_noise_type: $("cfg-ciop-noise-type").value,

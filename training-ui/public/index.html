@@ -614,7 +614,11 @@
                                 <label>CFG-Zero* Threshold</label>
                                 <input type="number" id="cfg-model-guidance-zero-init-threshold" value="1.0" step="0.01" min="0" max="1">
                             </div>
-                            <div class="form-group"></div>
+                            <div class="form-group">
+                                <label>Differential Guidance Scale</label>
+                                <input type="number" id="cfg-differential-guidance-scale" value="1.0" step="0.05" min="0">
+                                <small>1.0 keeps the target unchanged.</small>
+                            </div>
                         </div>
 
                         <h4 style="margin-top: 24px;">Coordinated Input-Output Perturbation (CIOP, AAAI-26)</h4>

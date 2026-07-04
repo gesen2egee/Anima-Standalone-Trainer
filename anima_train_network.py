@@ -416,6 +416,11 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         if apply_ciop:
             target = target + eps_out
 
+        target = anima_train_utils.apply_differential_guidance_target(
+            target,
+            model_pred,
+            getattr(args, "differential_guidance_scale", 1.0),
+        )
 
         # Loss weighting
         weighting = anima_train_utils.compute_loss_weighting_for_anima(weighting_scheme=args.weighting_scheme, sigmas=sigmas, args=args)

@@ -155,6 +155,12 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Probability of applying model guidance weight (0.0 to 1.0). Defaults to 1.0 (always applied).",
     )
     parser.add_argument(
+        "--differential_guidance_scale",
+        type=float,
+        default=1.0,
+        help="Scale target away from the current model prediction after guidance shaping. 1.0 disables extrapolation.",
+    )
+    parser.add_argument(
         "--ciop_prob",
         type=float,
         default=0.0,
@@ -163,6 +169,19 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
 
 
 # Loss weighting
+
+
+def apply_differential_guidance_target(
+    target: torch.Tensor,
+    model_pred: torch.Tensor,
+    scale: float,
+) -> torch.Tensor:
+    if scale < 0.0:
+        raise ValueError("differential_guidance_scale must be greater than or equal to 0.0")
+    if scale == 1.0:
+        return target
+    model_anchor = model_pred.detach()
+    return model_anchor + scale * (target - model_anchor)
 
 
 def compute_loss_weighting_for_anima(weighting_scheme: str, sigmas: torch.Tensor, args: Optional[argparse.Namespace] = None) -> torch.Tensor:

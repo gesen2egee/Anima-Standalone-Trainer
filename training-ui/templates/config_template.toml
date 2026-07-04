@@ -111,6 +111,7 @@ model_guidance_cfg_zero = false
 model_guidance_zero_init_threshold = 1
 model_guidance_end_step = 0
 model_guidance_prob = 1
+differential_guidance_scale = 1
 ciop_prob = 0
 ciop_noise_magnitude = 0
 ciop_noise_type = "gaussian"

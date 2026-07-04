@@ -62,6 +62,7 @@ test("advanced tab contains research-oriented training controls", () => {
     "cfg-model-guidance-min-weight",
     "cfg-model-guidance-cfg-zero",
     "cfg-model-guidance-zero-init-threshold",
+    "cfg-differential-guidance-scale",
     "cfg-ciop-prob",
     "cfg-ciop-noise-magnitude",
     "cfg-ciop-noise-type",
@@ -70,6 +71,7 @@ test("advanced tab contains research-oriented training controls", () => {
   assert.match(advanced, /Batch and Noise/);
   assert.match(advanced, /Loss Experiments/);
   assert.match(advanced, /Model Guidance/);
+  assert.match(advanced, /Differential Guidance Scale/);
   assert.match(advanced, /CIOP/);
 
   const dataset = extractElementById(html, "tab-dataset");
