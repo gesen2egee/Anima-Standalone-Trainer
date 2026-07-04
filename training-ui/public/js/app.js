@@ -3981,7 +3981,7 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-name").value = defaultName;
   $("new-job-output-name").value = defaultName;
   $("new-job-output-name").dataset.autoValue = defaultName;
-  $("new-job-network-module").value = "networks.krona";
+  $("new-job-network-module").value = "networks.cdka";
   $("new-job-image-dir").value = "";
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
