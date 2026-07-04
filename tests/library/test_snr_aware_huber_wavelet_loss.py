@@ -51,6 +51,31 @@ class SnrAwareHuberWaveletLossTest(unittest.TestCase):
 
         self.assertEqual(args.loss_type, "wavelet_l2")
 
+    def test_training_parser_accepts_ait_wavelet(self):
+        parser = argparse.ArgumentParser()
+        train_util.add_training_arguments(parser, False)
+        args = parser.parse_args(["--loss_type", "wavelet"])
+
+        self.assertEqual(args.loss_type, "wavelet")
+
+    def test_wavelet_matches_ait_noise_minus_prediction_residual(self):
+        latents = torch.zeros(1, 1, 4, 4)
+        noise = torch.ones_like(latents)
+        model_pred = torch.zeros_like(latents)
+        model_pred[:, :, 0, 0] = 0.25
+
+        loss = train_util.conditional_loss(
+            model_pred,
+            noise,
+            "wavelet",
+            "none",
+            latents=latents,
+            noise=noise,
+        )
+
+        expected = (train_util.haar_dwt_2d(noise - model_pred) - train_util.haar_dwt_2d(latents)).pow(2)
+        self.assertTrue(torch.equal(loss, expected))
+
     def test_wavelet_l2_matches_haar_squared_residual(self):
         latents = torch.zeros(1, 1, 4, 4)
         model_pred = torch.zeros_like(latents)

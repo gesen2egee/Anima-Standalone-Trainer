@@ -311,6 +311,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             # Apply input perturbation to noisy model input
             noisy_model_input = noisy_model_input + eps_in
 
+        self.current_noise = noise
         self.current_noisy_latents = noisy_model_input
         self.current_sigmas = sigmas
 

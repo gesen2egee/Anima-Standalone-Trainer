@@ -685,6 +685,7 @@ def train(args):
                     sigmas=sigmas,
                     noise_scheduler=noise_scheduler_copy,
                     args=args,
+                    noise=noise,
                     wavelet_prediction_type="velocity",
                 )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):

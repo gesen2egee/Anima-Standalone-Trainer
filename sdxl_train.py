@@ -774,6 +774,7 @@ def train(args):
                         sigmas=None,
                         noise_scheduler=noise_scheduler,
                         args=args,
+                        noise=noise,
                     )
                     if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                         loss = apply_masked_loss(loss, batch, getattr(args, "masked_loss_random_strength", None))
@@ -802,6 +803,7 @@ def train(args):
                         sigmas=None,
                         noise_scheduler=noise_scheduler,
                         args=args,
+                        noise=noise,
                     )
 
                 # Preserve-and-Personalize (P&P) LOSS

@@ -641,6 +641,7 @@ class TextualInversionTrainer:
                         sigmas=None,
                         noise_scheduler=noise_scheduler,
                         args=args,
+                        noise=noise,
                     )
                     if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                         loss = apply_masked_loss(loss, batch)

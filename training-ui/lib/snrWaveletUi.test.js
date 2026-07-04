@@ -12,6 +12,7 @@ function read(relPath) {
 test("UI exposes SNR-Aware Huber Wavelet loss controls", () => {
   const html = read("public/index.html");
   assert.match(html, /value="snr_aware_huber_wavelet"/);
+  assert.match(html, /value="wavelet"/);
   assert.match(html, /value="wavelet_l2"/);
   [
     "cfg-wavelet-loss-c-min",
@@ -27,6 +28,7 @@ test("UI exposes SNR-Aware Huber Wavelet loss controls", () => {
 
 test("UI loads and saves SNR-Aware Huber Wavelet config values", () => {
   const appJs = read("public/js/app.js");
+  assert.match(appJs, /lossType === "wavelet"/);
   assert.match(appJs, /wavelet_l2/);
   [
     "wavelet_loss_c_min",

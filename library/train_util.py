@@ -4585,8 +4585,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "--loss_type",
         type=str,
         default="l2",
-        choices=["l1", "l2", "huber", "smooth_l1", "cwmi", "snr_aware_huber_wavelet", "wavelet_l2"],
-        help="The type of loss function to use (L1, L2, Huber, smooth L1, CWMI, SNR-Aware Huber Wavelet, or Wavelet L2), default is L2 / 使用する損失関数の種類（L1、L2、Huber、smooth L1、CWMI、SNR-Aware Huber Wavelet、またはWavelet L2）、デフォルトはL2",
+        choices=["l1", "l2", "huber", "smooth_l1", "cwmi", "wavelet", "snr_aware_huber_wavelet", "wavelet_l2"],
+        help="The type of loss function to use (L1, L2, Huber, smooth L1, CWMI, AIT Wavelet, SNR-Aware Huber Wavelet, or Wavelet L2), default is L2 / 使用する損失関数の種類（L1、L2、Huber、smooth L1、CWMI、AIT Wavelet、SNR-Aware Huber Wavelet、またはWavelet L2）、デフォルトはL2",
     )
     parser.add_argument(
         "--huber_schedule",
@@ -7038,6 +7038,19 @@ def wavelet_l2_loss(
     return loss * getattr(args, "wavelet_loss_weight", 1.0)
 
 
+def ait_wavelet_loss(
+    model_pred: torch.Tensor,
+    latents: torch.Tensor,
+    noise: torch.Tensor,
+    args=None,
+):
+    latents = _match_latent_dims(latents, model_pred, "latents")
+    noise = _match_latent_dims(noise, model_pred, "noise")
+    z_pred = noise.float() - model_pred.float()
+    loss = (haar_dwt_2d(z_pred) - haar_dwt_2d(latents.float())) ** 2
+    return loss * getattr(args, "wavelet_loss_weight", 1.0)
+
+
 def conditional_loss(
     model_pred: torch.Tensor,
     target: torch.Tensor,
@@ -7051,6 +7064,7 @@ def conditional_loss(
     noise_scheduler=None,
     args=None,
     wavelet_prediction_type: Optional[str] = None,
+    noise: Optional[torch.Tensor] = None,
 ):
     """
     NOTE: if you're using the scheduled version, huber_c has to depend on the timesteps already
@@ -7075,6 +7089,14 @@ def conditional_loss(
         # Reshape huber_c to broadcast with model_pred (supports 4D and 5D tensors)
         huber_c = huber_c.view(-1, *([1] * (model_pred.ndim - 1)))
         loss = 2 * (torch.sqrt((model_pred - target) ** 2 + huber_c**2) - huber_c)
+        if reduction == "mean":
+            loss = torch.mean(loss)
+        elif reduction == "sum":
+            loss = torch.sum(loss)
+    elif loss_type == "wavelet":
+        if latents is None or noise is None:
+            raise ValueError("AIT Wavelet loss requires latents and noise.")
+        loss = ait_wavelet_loss(model_pred, latents, noise, args)
         if reduction == "mean":
             loss = torch.mean(loss)
         elif reduction == "sum":

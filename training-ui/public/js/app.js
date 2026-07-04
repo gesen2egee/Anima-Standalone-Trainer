@@ -1775,7 +1775,7 @@ function updateLossTypeUI() {
   const lossType = $("cfg-loss-type").value;
   const isCwmi = lossType === "cwmi";
   const isSnrWavelet = lossType === "snr_aware_huber_wavelet";
-  const isWavelet = isSnrWavelet || lossType === "wavelet_l2";
+  const isWavelet = lossType === "wavelet" || isSnrWavelet || lossType === "wavelet_l2";
   $("group-cwmi-fields").classList.toggle("hidden", !isCwmi);
   $("group-wavelet-loss-fields").classList.toggle("hidden", !isWavelet);
   document.querySelectorAll(".wavelet-huber-field").forEach((el) => {

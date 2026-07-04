@@ -255,6 +255,7 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, timesteps, sigmas = lumina_train_util.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
+        self.current_noise = noise
         self.current_noisy_latents = noisy_model_input
         self.current_sigmas = sigmas
 

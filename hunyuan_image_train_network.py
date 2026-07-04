@@ -540,6 +540,7 @@ class HunyuanImageNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, _, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
+        self.current_noise = noise
         self.current_noisy_latents = noisy_model_input
         self.current_sigmas = sigmas
         # bfloat16 is too low precision for 0-1000 TODO fix get_noisy_model_input_and_timesteps

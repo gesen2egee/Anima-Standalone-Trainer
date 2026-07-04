@@ -426,6 +426,7 @@ def train(args):
                         sigmas=None,
                         noise_scheduler=noise_scheduler,
                         args=args,
+                        noise=noise,
                     )
                     loss = loss.mean([1, 2, 3])
 
@@ -450,6 +451,7 @@ def train(args):
                         sigmas=None,
                         noise_scheduler=noise_scheduler,
                         args=args,
+                        noise=noise,
                     )
 
                 accelerator.backward(loss)

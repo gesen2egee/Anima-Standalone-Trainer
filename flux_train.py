@@ -684,6 +684,7 @@ def train(args):
                     sigmas=sigmas,
                     noise_scheduler=noise_scheduler,
                     args=args,
+                    noise=noise,
                     wavelet_prediction_type="velocity" if args.model_prediction_type == "raw" else "sample",
                 )
                 if weighting is not None:
