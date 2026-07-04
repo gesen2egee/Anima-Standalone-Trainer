@@ -106,6 +106,7 @@
                 <div class="tabs">
                     <button class="tab active" data-tab="training">Training</button>
                     <button class="tab" data-tab="dataset">Dataset</button>
+                    <button class="tab" data-tab="advanced">Advanced</button>
                     <button class="tab" data-tab="network">Network</button>
                     <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
@@ -279,6 +280,19 @@
                             </div>
                         </div>
 
+                        <div id="group-resume-training">
+                            <h4>Resume Training</h4>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-auto-resume" checked> Auto-resume from latest state/checkpoint</label>
+                                <small>Automatically resumes from the newest state folder; if none exists, LoRA jobs load the newest checkpoint save.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Resume State Folder</label>
+                                <input type="text" id="cfg-resume" placeholder="C:\path\to\saved_state">
+                                <small>Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.</small>
+                            </div>
+                        </div>
+
 
                         <div class="form-row">
                             <div class="form-group">
@@ -326,144 +340,9 @@
                                 <input type="number" id="cfg-workers" value="2" min="0" max="16">
                             </div>
                         </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>KNN Noise K</label>
-                                <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>CEP Noise</label>
-                                <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Loss Type</label>
-                                <select id="cfg-loss-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
-                                    <option value="l2">L2</option>
-                                    <option value="l1">L1</option>
-                                    <option value="huber">Huber</option>
-                                    <option value="smooth_l1">Smooth L1</option>
-                                    <option value="cwmi">CWMI</option>
-                                    <option value="snr_aware_huber_wavelet">SNR-Aware Huber Wavelet</option>
-                                    <option value="wavelet_l2">Wavelet L2</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>P&P Loss Weight</label>
-                                <input type="number" id="cfg-pnp-loss-weight" value="" placeholder="e.g. 0.0001 (LoRA) or 500 (DreamBooth)" min="0" step="0.0001">
-                                <small>Preserve-and-Personalize L2 weight. Leave blank or 0 to disable.</small>
-                            </div>
-                        </div>
-                        <div id="group-cwmi-fields" class="hidden">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>CWMI Lambda</label>
-                                    <input type="number" id="cfg-cwmi-lambda" value="0.1" min="0" max="1" step="0.01">
-                                    <small>Mixing factor: (1-lambda)*cwmi + lambda*l2</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>CWMI Levels</label>
-                                    <input type="number" id="cfg-cwmi-levels" value="4" min="1" step="1">
-                                    <small>Pyramid decomposition levels</small>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>CWMI Orientations</label>
-                                    <input type="number" id="cfg-cwmi-orientations" value="4" min="1" step="1">
-                                    <small>Number of orientations</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>CWMI Epsilon</label>
-                                    <input type="number" id="cfg-cwmi-eps" value="0.0005" min="0" step="0.0001">
-                                    <small>Epsilon for Cholesky stability</small>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="group-wavelet-loss-fields" class="hidden">
-                            <div class="form-row wavelet-huber-field">
-                                <div class="form-group">
-                                    <label>Wavelet C Min</label>
-                                    <input type="number" id="cfg-wavelet-loss-c-min" value="0.2" min="0" step="0.01">
-                                </div>
-                                <div class="form-group">
-                                    <label>Wavelet C Max</label>
-                                    <input type="number" id="cfg-wavelet-loss-c-max" value="1.0" min="0" step="0.01">
-                                </div>
-                            </div>
-                            <div class="form-row wavelet-huber-field">
-                                <div class="form-group">
-                                    <label>Wavelet Alpha</label>
-                                    <input type="number" id="cfg-wavelet-loss-alpha" value="0.5" min="0" step="0.01">
-                                </div>
-                                <div class="form-group">
-                                    <label>Wavelet Beta</label>
-                                    <input type="number" id="cfg-wavelet-loss-beta" value="0.5" min="0" step="0.01">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group wavelet-huber-field">
-                                    <label>Wavelet Gamma</label>
-                                    <input type="number" id="cfg-wavelet-loss-gamma" value="5.0" min="0" step="0.1">
-                                </div>
-                                <div class="form-group">
-                                    <label>Wavelet Weight</label>
-                                    <input type="number" id="cfg-wavelet-loss-weight" value="1.0" min="0" step="0.01">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Wavelet Prediction Type</label>
-                                    <select id="cfg-wavelet-loss-prediction-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
-                                        <option value="velocity">Velocity</option>
-                                        <option value="negative_velocity">Negative Velocity</option>
-                                        <option value="sample">Sample / x0</option>
-                                        <option value="x0">x0</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-persistent-workers" checked> Persistent DataLoader
                                 Workers</label>
-                            <small>Keeps workers alive between epochs (less startup lag).</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-gradient-checkpointing" checked> Gradient
-                                Checkpointing</label>
-                            <small>Trades compute for VRAM savings. Recommended on.</small>
-                        </div>
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-flash-attn"> Flash Attention</label>
-                            <small>Requires flash-attn package.</small>
-                        </div>
-                        <div id="group-torch-compile" class="form-group">
-                            <label><input type="checkbox" id="cfg-torch-compile"> Torch Compile</label>
-                            <small>Uses dynamo inductor backend. Slower first step, faster training after.</small>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group" style="flex: 1;">
-                                <label><input type="checkbox" id="cfg-lowram"> Low RAM Optimization</label>
-                                <small>Loads model to VRAM to save system RAM.</small>
-                            </div>
-                            <div id="group-blocks-to-swap" class="form-group" style="flex: 1;">
-                                <label>Blocks to Swap</label>
-                                <input type="number" id="cfg-blocks-to-swap" value="0" min="0" max="26">
-                                <small>Moves transformer blocks to RAM to save VRAM. 0=Off.</small>
-                            </div>
-                        </div>
-                        <div id="group-activation-offload" class="form-group">
-                            <label>Activation Offload</label>
-                            <select id="cfg-activation-offload">
-                                <option value="none">None</option>
-                                <option value="cpu">CPU Offload (blocking transfers)</option>
-                                <option value="unsloth">Unsloth Offload (async, faster)</option>
-                            </select>
-                            <small>Offloads activations to CPU during backward pass. Requires Gradient Checkpointing.</small>
                             <small>Keeps workers alive between epochs (less startup lag).</small>
                         </div>
 
@@ -578,9 +457,117 @@
                             </div>
                         </div>
 
-                        <!-- Model Guidance Training Section -->
-                        <h4 style="margin-top: 20px;">Model Guidance Training (arXiv:2502.12154)</h4>
-                        <div class="form-row">
+                    </div>
+
+                    <!-- Advanced Tab -->
+                    <div id="tab-advanced" class="tab-pane hidden">
+                        <h4>Batch and Noise</h4>
+                        <small>Specialized sampling and noise controls. Leave defaults unless you are comparing training behavior.</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label>KNN Noise K</label>
+                                <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>CEP Noise</label>
+                                <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
+                            </div>
+                        </div>
+
+                        <h4 style="margin-top: 24px;">Loss Experiments</h4>
+                        <small>Alternative loss functions and experimental loss weighting. Standard training can stay on L2 with P&P disabled.</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label>Loss Type</label>
+                                <select id="cfg-loss-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
+                                    <option value="l2">L2</option>
+                                    <option value="l1">L1</option>
+                                    <option value="huber">Huber</option>
+                                    <option value="smooth_l1">Smooth L1</option>
+                                    <option value="cwmi">CWMI</option>
+                                    <option value="snr_aware_huber_wavelet">SNR-Aware Huber Wavelet</option>
+                                    <option value="wavelet_l2">Wavelet L2</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>P&P Loss Weight</label>
+                                <input type="number" id="cfg-pnp-loss-weight" value="" placeholder="e.g. 0.0001 (LoRA) or 500 (DreamBooth)" min="0" step="0.0001">
+                                <small>Preserve-and-Personalize L2 weight. Leave blank or 0 to disable.</small>
+                            </div>
+                        </div>
+                        <div id="group-cwmi-fields" class="hidden">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>CWMI Lambda</label>
+                                    <input type="number" id="cfg-cwmi-lambda" value="0.1" min="0" max="1" step="0.01">
+                                    <small>Mixing factor: (1-lambda)*cwmi + lambda*l2</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>CWMI Levels</label>
+                                    <input type="number" id="cfg-cwmi-levels" value="4" min="1" step="1">
+                                    <small>Pyramid decomposition levels</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>CWMI Orientations</label>
+                                    <input type="number" id="cfg-cwmi-orientations" value="4" min="1" step="1">
+                                    <small>Number of orientations</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>CWMI Epsilon</label>
+                                    <input type="number" id="cfg-cwmi-eps" value="0.0005" min="0" step="0.0001">
+                                    <small>Epsilon for Cholesky stability</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="group-wavelet-loss-fields" class="hidden">
+                            <div class="form-row wavelet-huber-field">
+                                <div class="form-group">
+                                    <label>Wavelet C Min</label>
+                                    <input type="number" id="cfg-wavelet-loss-c-min" value="0.2" min="0" step="0.01">
+                                </div>
+                                <div class="form-group">
+                                    <label>Wavelet C Max</label>
+                                    <input type="number" id="cfg-wavelet-loss-c-max" value="1.0" min="0" step="0.01">
+                                </div>
+                            </div>
+                            <div class="form-row wavelet-huber-field">
+                                <div class="form-group">
+                                    <label>Wavelet Alpha</label>
+                                    <input type="number" id="cfg-wavelet-loss-alpha" value="0.5" min="0" step="0.01">
+                                </div>
+                                <div class="form-group">
+                                    <label>Wavelet Beta</label>
+                                    <input type="number" id="cfg-wavelet-loss-beta" value="0.5" min="0" step="0.01">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group wavelet-huber-field">
+                                    <label>Wavelet Gamma</label>
+                                    <input type="number" id="cfg-wavelet-loss-gamma" value="5.0" min="0" step="0.1">
+                                </div>
+                                <div class="form-group">
+                                    <label>Wavelet Weight</label>
+                                    <input type="number" id="cfg-wavelet-loss-weight" value="1.0" min="0" step="0.01">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Wavelet Prediction Type</label>
+                                    <select id="cfg-wavelet-loss-prediction-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
+                                        <option value="velocity">Velocity</option>
+                                        <option value="negative_velocity">Negative Velocity</option>
+                                        <option value="sample">Sample / x0</option>
+                                        <option value="x0">x0</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4 style="margin-top: 24px;">Model Guidance Training (arXiv:2502.12154)</h4>
+                        <small>Guidance loss controls for experimental alignment training. Keep weight at 0 to disable.</small>
+                        <div class="form-row" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>Model Guidance Weight</label>
                                 <input type="number" id="cfg-model-guidance-weight" value="0.0" step="0.05" min="0">
@@ -629,9 +616,9 @@
                             <div class="form-group"></div>
                         </div>
 
-                        <!-- CIOP Training Section -->
-                        <h4 style="margin-top: 20px;">Coordinated Input-Output Perturbation (CIOP, AAAI-26)</h4>
-                        <div class="form-row">
+                        <h4 style="margin-top: 24px;">Coordinated Input-Output Perturbation (CIOP, AAAI-26)</h4>
+                        <small>Input/output perturbation controls for robustness experiments. Probability 0 disables CIOP.</small>
+                        <div class="form-row" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>CIOP Probability</label>
                                 <input type="number" id="cfg-ciop-prob" value="0.0" step="0.05" min="0" max="1">
@@ -651,7 +638,6 @@
                                 <small>Noise distribution type.</small>
                             </div>
                         </div>
-
                     </div>
 
                     <!-- Dataset Tab -->
@@ -856,18 +842,6 @@
                             </div>
                         </div>
 
-                        <div id="group-resume-training">
-                            <h4>Resume Training</h4>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-auto-resume" checked> Auto-resume from latest state/checkpoint</label>
-                                <small>Automatically resumes from the newest state folder; if none exists, LoRA jobs load the newest checkpoint save.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Resume State Folder</label>
-                                <input type="text" id="cfg-resume" placeholder="C:\path\to\saved_state">
-                                <small>Resume training state (optimizer, scheduler, step count). Leave blank when auto-resume is enabled.</small>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Prompts Tab -->
