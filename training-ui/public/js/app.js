@@ -1295,6 +1295,43 @@ async function startQueue() {
   showToast("Queue started");
 }
 
+async function runCurrentJobFromTopButton(warningMsg = "") {
+  const queueState = await api("/api/queue");
+  const jobs = await loadJobs();
+  const runningJob = jobs.find((job) => job.running);
+  const queuedItems = Array.isArray(queueState.items) ? queueState.items : [];
+  const isQueued = queuedItems.includes(currentJob);
+
+  if (runningJob) {
+    if (!isQueued) {
+      await api(`/api/queue/jobs/${encodeURIComponent(currentJob)}`, {
+        method: "POST",
+      });
+      showToast("Job added to queue");
+      await loadJobs();
+    }
+    return;
+  }
+
+  if (!isQueued) {
+    await api(`/api/queue/jobs/${encodeURIComponent(currentJob)}`, {
+      method: "POST",
+    });
+  }
+  await api(`/api/queue/jobs/${encodeURIComponent(currentJob)}/move`, {
+    method: "POST",
+    body: { index: 0 },
+  });
+  await api("/api/queue/start", { method: "POST" });
+  await loadJobs();
+  const status = await api(`/api/jobs/${currentJob}/train/status`);
+  updateRunningState(status.running);
+  consoleOutput.textContent = "";
+  if (warningMsg) appendConsole(warningMsg);
+  document.querySelector('[data-tab="console"]').click();
+  showToast("Queue started");
+}
+
 async function pauseQueue() {
   await api("/api/queue/stop", { method: "POST" });
   await loadJobs();
@@ -4439,18 +4476,7 @@ $("btn-run").addEventListener("click", async () => {
   }
   // Auto-save first
   if (isDirty) await saveJob();
-  await api(`/api/queue/jobs/${encodeURIComponent(currentJob)}`, {
-    method: "POST",
-  });
-  await api("/api/queue/start", { method: "POST" });
-  await loadJobs();
-  const status = await api(`/api/jobs/${currentJob}/train/status`);
-  updateRunningState(status.running);
-  consoleOutput.textContent = "";
-  if (warningMsg) appendConsole(warningMsg);
-  // Auto-switch to console tab
-  document.querySelector('[data-tab="console"]').click();
-  showToast("Queue started");
+  await runCurrentJobFromTopButton(warningMsg);
 });
 // Generate
 $("btn-gen-sample").addEventListener("click", async () => {
