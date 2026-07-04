@@ -31,3 +31,13 @@ test("UI exposes automatic resume and defaults it on for new or legacy configs",
   assert.match(appJs, /cfg-auto-resume"\)\.checked\s*=\s*!\(n\.auto_resume_last_state_user_set\s*===\s*true\s*&&\s*n\.auto_resume_last_state\s*===\s*false\)/);
   assert.match(templateToml, /auto_resume_last_state\s*=\s*true/);
 });
+
+test("automatic resume also enables state saving for future step resume", () => {
+  const html = read("public/index.html");
+  const serverJs = read("server.js");
+  const templateToml = read("templates/config_template.toml");
+
+  assert.match(html, /id="cfg-save-state"[^>]*checked/);
+  assert.match(templateToml, /save_state\s*=\s*true/);
+  assert.match(serverJs, /if\s*\(\s*autoResumeEnabled\s*\)\s*{\s*merged\.training_arguments\.save_state\s*=\s*true;/);
+});

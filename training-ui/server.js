@@ -496,6 +496,10 @@ function buildTrainingConfig(jobName, jobPath) {
     const autoResumeEnabled = !(autoResumeUserSet && jobConfig.network_arguments?.auto_resume_last_state === false);
     let autoResumeNetworkWeights = null;
 
+    if (autoResumeEnabled) {
+        merged.training_arguments.save_state = true;
+    }
+
     // Move resume from network_args to training_args
     if (jobConfig.network_arguments?.resume) {
         merged.training_arguments.resume = jobConfig.network_arguments.resume;

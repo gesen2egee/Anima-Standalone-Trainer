@@ -1492,7 +1492,7 @@ function populateConfig(config) {
   $("cfg-save-every-steps").value = t.save_every_n_steps ?? 200;
   $("cfg-save-last-steps").value = t.save_last_n_steps ?? "";
   $("cfg-save-last-epochs").value = t.save_last_n_epochs ?? "";
-  $("cfg-save-state").checked = t.save_state ?? false;
+  $("cfg-save-state").checked = t.save_state ?? true;
   $("cfg-save-state-end").checked = t.save_state_on_train_end ?? false;
   $("cfg-save-last-steps-state").value = t.save_last_n_steps_state ?? "";
   $("cfg-save-last-epochs-state").value = t.save_last_n_epochs_state ?? "";
