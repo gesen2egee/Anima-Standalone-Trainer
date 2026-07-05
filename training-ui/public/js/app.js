@@ -54,6 +54,7 @@ const originalAttrs = new WeakMap();
 
 const UI_TRANSLATIONS = {
   "🎯 Jobs": { "zh-TW": "🎯 工作", "zh-CN": "🎯 任务" },
+  "Jobs": { "zh-TW": "工作", "zh-CN": "任务" },
   "+ New": { "zh-TW": "+ 新增", "zh-CN": "+ 新建" },
   "Language": { "zh-TW": "語言", "zh-CN": "语言" },
   "⚙️ Global Settings": { "zh-TW": "⚙️ 全域設定", "zh-CN": "⚙️ 全局设置" },
@@ -63,6 +64,8 @@ const UI_TRANSLATIONS = {
     "zh-CN": "创建新的训练任务，或从侧边栏选择一个任务",
   },
   "Job Name": { "zh-TW": "工作名稱", "zh-CN": "任务名称" },
+  "Batch import first-level folders": { "zh-TW": "批次讀取第一層資料夾", "zh-CN": "批量读取第一层文件夹" },
+  "Auto balance repeats": { "zh-TW": "自動平衡 repeats", "zh-CN": "自动平衡 repeats" },
   "💾 Save": { "zh-TW": "💾 儲存", "zh-CN": "💾 保存" },
   "Discard": { "zh-TW": "放棄變更", "zh-CN": "放弃更改" },
   "Clone": { "zh-TW": "複製", "zh-CN": "克隆" },
@@ -4433,6 +4436,8 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-image-dir").value = "";
   $("new-job-image-dir-status").textContent = "No folder selected.";
   $("new-job-image-dir-status").classList.remove("warning", "ok");
+  $("new-job-batch-import").checked = false;
+  $("new-job-auto-balance").checked = false;
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();
@@ -4477,6 +4482,8 @@ async function createJobFromModal({ autoTag = false } = {}) {
         network_module: $("new-job-network-module").value,
         image_dir: imageDir,
         trigger_words: $("new-job-trigger-words").value.trim(),
+        batch_import: $("new-job-batch-import").checked,
+        auto_balance_repeats: $("new-job-auto-balance").checked,
         max_train_steps: safeInt($("new-job-max-steps").value, 3000),
       },
     });

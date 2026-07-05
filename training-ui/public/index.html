@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Anima LoRA Training</title>
+    <link rel="icon" type="image/png" href="app-icon.png">
+    <link rel="apple-touch-icon" href="app-icon.png">
     <link rel="stylesheet" href="css/style.css">
     <script>
         // FAST LOAD: Apply theme/background before rendering body to prevent flicker
@@ -41,7 +43,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="header-title">
-                    <h1>🎯 Jobs</h1>
+                    <h1><img src="app-icon.png" alt="" class="app-title-icon"> Jobs</h1>
                 </div>
                 <button id="btn-new-job" class="btn btn-primary btn-sm">+ New</button>
             </div>
@@ -1463,6 +1465,10 @@ custom_cli_args = ""</textarea>
                     <button type="button" id="btn-new-job-select-image-dir" class="btn btn-secondary" title="Select folder">📂</button>
                 </div>
                 <small id="new-job-image-dir-status" class="folder-inspection-status">No folder selected.</small>
+            </div>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="new-job-batch-import"> Batch import first-level folders</label>
+                <label><input type="checkbox" id="new-job-auto-balance"> Auto balance repeats</label>
             </div>
             <div class="form-group">
                 <label>Max Steps</label>

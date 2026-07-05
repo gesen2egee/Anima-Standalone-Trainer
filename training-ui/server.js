@@ -10,6 +10,7 @@ const { createJobQueue } = require('./lib/jobQueue');
 const { findAutoResumeSource } = require('./lib/autoResume');
 const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
+const { buildNewJobSubsets } = require('./lib/newJobDataset');
 
 require('./lib/setup').runSetup();
 
@@ -966,7 +967,16 @@ app.get('/api/jobs', (req, res) => {
 // Create new job
 app.post('/api/jobs', (req, res) => {
     try {
-        const { name, output_name, network_module, image_dir, max_train_steps, trigger_words } = req.body;
+        const {
+            name,
+            output_name,
+            network_module,
+            image_dir,
+            max_train_steps,
+            trigger_words,
+            batch_import,
+            auto_balance_repeats
+        } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
 
         const safeName = sanitizeName(name);
@@ -1002,7 +1012,8 @@ app.post('/api/jobs', (req, res) => {
 
         const datasetConfig = getDefaultDataset();
         const triggerCaptionPrefix = normalizeCaptionPrefixFromTriggerWords(trigger_words);
-        if ((image_dir && String(image_dir).trim()) || triggerCaptionPrefix) {
+        const shouldConfigureDataset = (image_dir && String(image_dir).trim()) || triggerCaptionPrefix;
+        if (shouldConfigureDataset) {
             const datasets = Array.isArray(datasetConfig.datasets)
                 ? datasetConfig.datasets
                 : datasetConfig.datasets
@@ -1014,14 +1025,15 @@ app.post('/api/jobs', (req, res) => {
                 : firstDataset.subsets
                     ? [firstDataset.subsets]
                     : [{}];
-            subsets[0] = { ...(subsets[0] || {}) };
-            if (image_dir && String(image_dir).trim()) {
-                subsets[0].image_dir = stripQuotes(String(image_dir).trim());
-            }
-            if (triggerCaptionPrefix) {
-                subsets[0].caption_prefix = triggerCaptionPrefix;
-            }
-            firstDataset.subsets = subsets;
+            const generatedSubsets = buildNewJobSubsets({
+                imageDir: image_dir,
+                triggerCaptionPrefix,
+                batchImport: batch_import === true,
+                autoBalanceRepeats: auto_balance_repeats === true,
+                baseSubset: subsets[0] || {},
+                toNativePath: p => toNativePath(stripQuotes(String(p || '').trim()))
+            });
+            firstDataset.subsets = generatedSubsets.length > 0 ? generatedSubsets : subsets;
             datasets[0] = firstDataset;
             datasetConfig.datasets = datasets;
         }

@@ -54,6 +54,23 @@ test("new job creation sends trigger words and can auto tag with defaults", () =
   assert.match(appJs, /include_general:\s*true/);
 });
 
+test("new job modal can batch import first-level folders and auto balance repeats", () => {
+  const html = read("public/index.html");
+  const appJs = read("public/js/app.js");
+  const serverJs = read("server.js");
+  const block = routeBlock(serverJs, "/api/jobs");
+
+  assert.match(html, /id="new-job-batch-import"/);
+  assert.match(html, /id="new-job-auto-balance"/);
+  assert.match(appJs, /\$\("new-job-batch-import"\)\.checked = false/);
+  assert.match(appJs, /\$\("new-job-auto-balance"\)\.checked = false/);
+  assert.match(appJs, /batch_import:\s*\$\("new-job-batch-import"\)\.checked/);
+  assert.match(appJs, /auto_balance_repeats:\s*\$\("new-job-auto-balance"\)\.checked/);
+  assert.match(serverJs, /buildNewJobSubsets/);
+  assert.match(block, /batch_import/);
+  assert.match(block, /auto_balance_repeats/);
+});
+
 test("server writes trigger words into first subset caption prefix", () => {
   const serverJs = read("server.js");
   const block = routeBlock(serverJs, "/api/jobs");
@@ -61,5 +78,6 @@ test("server writes trigger words into first subset caption prefix", () => {
   assert.match(serverJs, /function normalizeCaptionPrefixFromTriggerWords\(value\)/);
   assert.match(block, /trigger_words/);
   assert.match(block, /normalizeCaptionPrefixFromTriggerWords\(trigger_words\)/);
-  assert.match(block, /caption_prefix\s*=\s*triggerCaptionPrefix/);
+  assert.match(block, /triggerCaptionPrefix/);
+  assert.match(block, /buildNewJobSubsets/);
 });
