@@ -78,6 +78,13 @@ const UI_TRANSLATIONS = {
   "Optimizer": { "zh-TW": "優化器", "zh-CN": "优化器" },
   "LR Scheduler": { "zh-TW": "學習率排程", "zh-CN": "学习率调度" },
   "LR Warmup Steps": { "zh-TW": "學習率預熱步數", "zh-CN": "学习率预热步数" },
+  "Warmup Stable Decay": { "zh-TW": "Warmup Stable Decay", "zh-CN": "Warmup Stable Decay" },
+  "Min LR Ratio": { "zh-TW": "最小 LR 比率", "zh-CN": "最小 LR 比率" },
+  "Decay Steps": { "zh-TW": "Decay Steps", "zh-CN": "Decay Steps" },
+  "Number of lr_decay_steps used by warmup_stable_decay.": {
+    "zh-TW": "warmup_stable_decay 使用的 lr_decay_steps 數值。",
+    "zh-CN": "warmup_stable_decay 使用的 lr_decay_steps 数值。",
+  },
   "Weight Decay": { "zh-TW": "Weight Decay", "zh-CN": "Weight Decay" },
   "Seed": { "zh-TW": "Seed", "zh-CN": "Seed" },
   "Duration": { "zh-TW": "訓練長度", "zh-CN": "训练长度" },
@@ -1494,6 +1501,7 @@ function populateConfig(config) {
   $("cfg-lr-warmup").value = t.lr_warmup_steps ?? 0.1;
   $("cfg-lr-scheduler-cycles").value = t.lr_scheduler_num_cycles ?? 1;
   $("cfg-lr-min-ratio").value = t.lr_scheduler_min_lr_ratio ?? 0;
+  $("cfg-lr-decay-steps").value = t.lr_decay_steps ?? 0;
   $("cfg-seed").value = t.seed ?? 42;
   // Extract weight decay
   let wdValue = "";
@@ -1800,13 +1808,18 @@ function updateOptimizerOptions() {
 }
 function updateLrSchedulerOptions() {
   const scheduler = $("cfg-lr-scheduler").value;
+  const isWarmupStableDecay = scheduler === "warmup_stable_decay";
   $("group-lr-scheduler-cycles").classList.toggle(
     "hidden",
     scheduler !== "cosine_with_restarts",
   );
   $("group-lr-min-ratio").classList.toggle(
     "hidden",
-    scheduler !== "cosine_with_min_lr",
+    scheduler !== "cosine_with_min_lr" && !isWarmupStableDecay,
+  );
+  $("group-lr-decay-steps").classList.toggle(
+    "hidden",
+    scheduler !== "warmup_stable_decay",
   );
 }
 function updateLossTypeUI() {
@@ -1909,8 +1922,13 @@ function gatherConfig() {
           ? safeInt($("cfg-lr-scheduler-cycles").value)
           : undefined,
       lr_scheduler_min_lr_ratio:
-        $("cfg-lr-scheduler").value === "cosine_with_min_lr"
+        $("cfg-lr-scheduler").value === "cosine_with_min_lr" ||
+          $("cfg-lr-scheduler").value === "warmup_stable_decay"
           ? safeFloat($("cfg-lr-min-ratio").value)
+          : undefined,
+      lr_decay_steps:
+        $("cfg-lr-scheduler").value === "warmup_stable_decay"
+          ? safeInt($("cfg-lr-decay-steps").value)
           : undefined,
       lr_warmup_steps: safeFloat($("cfg-lr-warmup").value),
       // Hardware
