@@ -46,12 +46,30 @@ test("new job creation sends trigger words and can auto tag with defaults", () =
   assert.match(appJs, /async function createJobFromModal\(\{ autoTag = false \} = \{\}\)/);
   assert.match(appJs, /trigger_words:\s*\$\("new-job-trigger-words"\)\.value\.trim\(\)/);
   assert.match(appJs, /\$\("btn-create-job-auto-tag"\)\.addEventListener\("click", \(\) => createJobFromModal\(\{ autoTag: true \}\)\)/);
-  assert.match(appJs, /async function runNewJobDefaultTagger\(jobName, imageDir\)/);
+  assert.match(appJs, /async function runNewJobDefaultTagger\(jobName\)/);
   assert.match(appJs, /\/api\/jobs\/\$\{encodeURIComponent\(jobName\)\}\/tag-captions/);
   assert.match(appJs, /caption_extension:\s*"\.txt"/);
   assert.match(appJs, /include_char:\s*true/);
   assert.match(appJs, /include_rating:\s*true/);
   assert.match(appJs, /include_general:\s*true/);
+  assert.match(appJs, /updateNewJobImageDirStatus\(\)/);
+  assert.match(appJs, /closeModal\("modal-new-job"\)/);
+  assert.doesNotMatch(appJs.match(/async function runNewJobDefaultTagger\(jobName\)[\s\S]*?\n\}/)?.[0] || "", /image_dir:/);
+});
+
+test("create and auto tag keeps modal open until tagger progress finishes", () => {
+  const appJs = read("public/js/app.js");
+  const createBlock = appJs.match(/async function createJobFromModal\(\{ autoTag = false \} = \{\}\) \{[\s\S]*?\n\}/);
+  const modalClickBlock = appJs.match(/document\.querySelectorAll\("\.modal"\)[\s\S]*?\n\}\);/);
+
+  assert.ok(createBlock, "create job helper should exist");
+  assert.ok(modalClickBlock, "modal backdrop handler should exist");
+  assert.match(createBlock[0], /if \(autoTag\)[\s\S]*await runNewJobDefaultTagger\(result\.name\)/);
+  assert.match(createBlock[0], /if \(autoTag\)[\s\S]*await updateNewJobImageDirStatus\(\)/);
+  assert.match(createBlock[0], /if \(autoTag\)[\s\S]*closeModal\("modal-new-job"\)/);
+  assert.doesNotMatch(createBlock[0], /closeModal\("modal-new-job"\);\s*await loadJobs\(\);\s*await selectJob/);
+  assert.match(modalClickBlock[0], /modal\.id === "modal-new-job"/);
+  assert.match(modalClickBlock[0], /return/);
 });
 
 test("new job modal can batch import first-level folders and auto balance repeats", () => {

@@ -20,6 +20,8 @@ test("batch import reads only first-level numbered folders into subsets", () => 
   writeImage(path.join(root, "12_alice"), "a.png");
   writeImage(path.join(root, "03_bob"), "b.jpg");
   writeImage(path.join(root, "12_alice", "7_nested"), "nested.png");
+  writeImage(path.join(root, "05_nested_only", "nested"), "skip.png");
+  writeImage(path.join(root, "06_gif_only"), "skip.gif");
   writeImage(path.join(root, "not_a_subset"), "skip.png");
 
   const subsets = buildNewJobSubsets({
@@ -81,4 +83,20 @@ test("single child folder fallback is used when selected folder has no images", 
   assert.strictEqual(subsets[0].image_dir, child);
   assert.strictEqual(subsets[0].num_repeats, 1);
   assert.strictEqual(subsets[0].caption_prefix, "hero,");
+});
+
+test("single folder keeps current folder when it has direct images", () => {
+  const root = makeTempDir();
+  const child = path.join(root, "images");
+  writeImage(root, "root.png");
+  writeImage(child, "child.png");
+
+  const subsets = buildNewJobSubsets({
+    imageDir: root,
+    batchImport: false,
+    triggerCaptionPrefix: "hero,",
+  });
+
+  assert.strictEqual(subsets.length, 1);
+  assert.strictEqual(subsets[0].image_dir, root);
 });

@@ -560,9 +560,16 @@ def compose_caption_text(
     return ", ".join(part for part in parts if part)
 
 
-def iter_image_paths(image_dir: Union[str, os.PathLike]) -> Iterable[Path]:
+def iter_image_paths(image_dir: Union[str, os.PathLike], image_list: Optional[Union[str, os.PathLike]] = None) -> Iterable[Path]:
+    if image_list:
+        for line in Path(image_list).read_text(encoding="utf-8").splitlines():
+            path = Path(line.strip())
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                yield path
+        return
+
     root = Path(image_dir)
-    for path in sorted(root.rglob("*")):
+    for path in sorted(root.iterdir()):
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
             yield path
 
@@ -575,10 +582,11 @@ def write_captions_for_directory(
     include_char: bool = True,
     include_rating: bool = True,
     include_general: bool = True,
+    image_list: Optional[Union[str, os.PathLike]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, int]:
     thresholds = thresholds or DEFAULT_THRESHOLDS
-    image_paths = list(iter_image_paths(image_dir))
+    image_paths = list(iter_image_paths(image_dir, image_list))
     written = 0
     failed = 0
     if progress_callback:
@@ -628,6 +636,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-char", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-rating", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-general", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--image-list", default=None)
     return parser
 
 
@@ -646,6 +655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             include_char=args.include_char,
             include_rating=args.include_rating,
             include_general=args.include_general,
+            image_list=args.image_list,
             progress_callback=emit,
         )
         emit({"type": "done", **result})

@@ -27,4 +27,7 @@ test("multilabel caption API launches the project venv python tagger", () => {
   assert.match(block, /include_char/);
   assert.match(block, /include_rating/);
   assert.match(block, /include_general/);
+  assert.match(block, /resolveTaggerTargetsForJob/);
+  assert.match(block, /--image-list/);
+  assert.match(block, /matched_folder_count/);
 });

@@ -1013,13 +1013,15 @@ async function selectFolderPath(preferredFolder = "") {
   localStorage.setItem(LAST_IMAGE_FOLDER_KEY, selectedPath);
   return selectedPath;
 }
-async function inspectImageFolder(imageDir, captionExtension = ".txt") {
+async function inspectImageFolder(imageDir, captionExtension = ".txt", options = {}) {
   if (!imageDir) return null;
   return api("/api/system/inspect-image-folder", {
     method: "POST",
     body: {
       path: imageDir,
       caption_extension: captionExtension || ".txt",
+      batch_import: options.batchImport === true,
+      auto_balance_repeats: options.autoBalanceRepeats === true,
     },
   });
 }
@@ -1030,9 +1032,10 @@ function formatFolderInspection(summary) {
   if (!summary.has_images) return "0 images found. Please choose a folder with images.";
   const missing = summary.missing_caption || 0;
   const empty = summary.empty_caption || 0;
-  return `${summary.image_count} images, ${missing} missing caption, ${empty} empty caption.`;
+  const folders = summary.matched_folder_count || 0;
+  return `${folders} matched folder${folders === 1 ? "" : "s"}, ${summary.image_count} images, ${missing} missing caption, ${empty} empty caption.`;
 }
-async function updateFolderInspectionStatus(imageDir, captionExtension, statusEl) {
+async function updateFolderInspectionStatus(imageDir, captionExtension, statusEl, options = {}) {
   if (!statusEl) return null;
   if (!imageDir) {
     statusEl.textContent = "No folder selected.";
@@ -1042,7 +1045,7 @@ async function updateFolderInspectionStatus(imageDir, captionExtension, statusEl
   statusEl.textContent = "Checking folder...";
   statusEl.classList.remove("warning", "ok");
   try {
-    const summary = await inspectImageFolder(imageDir, captionExtension);
+    const summary = await inspectImageFolder(imageDir, captionExtension, options);
     statusEl.textContent = formatFolderInspection(summary);
     const hasIssue =
       !summary?.has_images || summary.missing_caption > 0 || summary.empty_caption > 0;
@@ -1061,6 +1064,10 @@ function updateNewJobImageDirStatus() {
     $("new-job-image-dir").value.trim(),
     ".txt",
     $("new-job-image-dir-status"),
+    {
+      batchImport: $("new-job-batch-import")?.checked === true,
+      autoBalanceRepeats: $("new-job-auto-balance")?.checked === true,
+    },
   );
 }
 async function selectNewJobImageDir() {
@@ -2735,6 +2742,11 @@ async function runSubsetTagger(card, idx) {
         `打標完成：成功 ${doneEvent.written} / ${doneEvent.total}，失敗 ${doneEvent.failed}`,
         toastType,
       );
+      await updateFolderInspectionStatus(
+        imageDir,
+        captionExtension,
+        card.querySelector(".sub-image-dir-status"),
+      );
     } else {
       showToast("打標完成", "success");
     }
@@ -3146,14 +3158,14 @@ function appendConsole(text) {
     consoleOutput.scrollTop = consoleOutput.scrollHeight;
   });
 }
-async function runNewJobDefaultTagger(jobName, imageDir) {
+async function runNewJobDefaultTagger(jobName) {
+  const statusEl = $("new-job-image-dir-status");
   const res = await fetch(
     `/api/jobs/${encodeURIComponent(jobName)}/tag-captions`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        image_dir: imageDir,
         caption_extension: ".txt",
         include_char: true,
         include_rating: true,
@@ -3186,6 +3198,12 @@ async function runNewJobDefaultTagger(jobName, imageDir) {
       if (!line.trim()) continue;
       const event = JSON.parse(line);
       if (event.type === "error") throw new Error(event.error || "Tagger failed");
+      if (event.type === "start" && statusEl) {
+        statusEl.textContent = `自動打標中：0 / ${event.total}`;
+      }
+      if (event.type === "progress" && statusEl) {
+        statusEl.textContent = `自動打標中：${event.current} / ${event.total}`;
+      }
       if (event.type === "done") doneEvent = event;
     }
   }
@@ -3199,6 +3217,9 @@ async function runNewJobDefaultTagger(jobName, imageDir) {
   if (!doneEvent) {
     showToast("自動打標完成", "success");
     return;
+  }
+  if (statusEl) {
+    statusEl.textContent = `自動打標完成：成功 ${doneEvent.written} / ${doneEvent.total}，失敗 ${doneEvent.failed}`;
   }
   const toastType = doneEvent.failed ? "danger" : "success";
   showToast(
@@ -4491,18 +4512,22 @@ async function createJobFromModal({ autoTag = false } = {}) {
         max_train_steps: safeInt($("new-job-max-steps").value, 3000),
       },
     });
-    closeModal("modal-new-job");
-    await loadJobs();
-    await selectJob(result.name);
     showToast("Job created");
     if (autoTag) {
       showToast("自動打標中...");
       try {
-        await runNewJobDefaultTagger(result.name, imageDir);
+        await runNewJobDefaultTagger(result.name);
+        await updateNewJobImageDirStatus();
+        closeModal("modal-new-job");
       } catch (err) {
         showToast(`自動打標失敗：${err.message}`, "danger");
+        return;
       }
+    } else {
+      closeModal("modal-new-job");
     }
+    await loadJobs();
+    await selectJob(result.name);
   } catch (err) {
     showToast(`建立任務失敗：${err.message}`, "danger");
   } finally {
@@ -4514,6 +4539,8 @@ $("btn-create-job").addEventListener("click", () => createJobFromModal());
 $("btn-create-job-auto-tag").addEventListener("click", () => createJobFromModal({ autoTag: true }));
 $("btn-new-job-select-image-dir").addEventListener("click", selectNewJobImageDir);
 $("new-job-image-dir").addEventListener("change", updateNewJobImageDirStatus);
+$("new-job-batch-import").addEventListener("change", updateNewJobImageDirStatus);
+$("new-job-auto-balance").addEventListener("change", updateNewJobImageDirStatus);
 // Load GPUs from server
 async function loadGPUs() {
   const container = $("cfg-gpu-selection");
@@ -5126,6 +5153,7 @@ $("btn-reset-config").addEventListener("click", () => {
 document.querySelectorAll(".modal").forEach((modal) => {
   modal.addEventListener("click", (e) => {
     if (e.target === modal) {
+      if (modal.id === "modal-new-job") return;
       modal.classList.add("hidden");
     }
   });

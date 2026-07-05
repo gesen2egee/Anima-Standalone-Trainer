@@ -11,6 +11,12 @@ const { findAutoResumeSource } = require('./lib/autoResume');
 const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 const { buildNewJobSubsets } = require('./lib/newJobDataset');
+const {
+    inspectDatasetImageFolders,
+    listSdScriptsImages,
+    normalizeCaptionExtension,
+    resolveDatasetImageFolders
+} = require('./lib/datasetImageMatch');
 
 require('./lib/setup').runSetup();
 
@@ -364,75 +370,13 @@ async function getRunningTrainingJobNameFresh() {
     return null;
 }
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
-
-function normalizeCaptionExtension(value) {
-    const ext = String(value || '.txt').trim() || '.txt';
-    return ext.startsWith('.') ? ext : `.${ext}`;
-}
-
-async function collectImageFiles(dir) {
-    const files = [];
-    if (!dir || !fs.existsSync(dir)) return files;
-    const pendingDirs = [dir];
-    while (pendingDirs.length) {
-        const currentDir = pendingDirs.pop();
-        let entries = [];
-        try {
-            entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
-        } catch (_) {
-            continue;
-        }
-        entries.forEach(entry => {
-            const fullPath = path.join(currentDir, entry.name);
-            if (entry.isDirectory()) {
-                pendingDirs.push(fullPath);
-            } else if (IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-                files.push(fullPath);
-            }
-        });
-    }
-    return files;
-}
-
 async function inspectImageFolder(folderPath, captionExtension = '.txt') {
-    const nativePath = toNativePath(stripQuotes(String(folderPath || '').trim()));
-    const captionExt = normalizeCaptionExtension(captionExtension);
-    const result = {
-        path: folderPath || '',
-        native_path: nativePath || '',
-        exists: false,
-        is_directory: false,
-        has_images: false,
-        image_count: 0,
-        missing_caption: 0,
-        empty_caption: 0,
-        caption_extension: captionExt
-    };
-
-    if (!nativePath || !fs.existsSync(nativePath)) return result;
-
-    const stat = await fs.promises.stat(nativePath);
-    result.exists = true;
-    result.is_directory = stat.isDirectory();
-    if (!result.is_directory) return result;
-
-    const imageFiles = await collectImageFiles(nativePath);
-    result.image_count = imageFiles.length;
-    result.has_images = imageFiles.length > 0;
-    for (const imagePath of imageFiles) {
-        const captionPath = path.join(
-            path.dirname(imagePath),
-            `${path.basename(imagePath, path.extname(imagePath))}${captionExt}`
-        );
-        if (!fs.existsSync(captionPath)) {
-            result.missing_caption += 1;
-            continue;
-        }
-        const content = (await fs.promises.readFile(captionPath, 'utf8')).trim();
-        if (!content) result.empty_caption += 1;
-    }
-    return result;
+    return inspectDatasetImageFolders({
+        imageDir: folderPath,
+        captionExtension,
+        batchImport: false,
+        toNativePath: p => toNativePath(stripQuotes(String(p || '').trim()))
+    });
 }
 
 function selectFolderDialog(initialPath = '') {
@@ -568,7 +512,9 @@ if (-not [string]::IsNullOrWhiteSpace($selected)) {
         child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
         child.on('error', reject);
         child.on('close', code => {
-            if (code === 0) return resolve(stdout.trim());
+            const selectedPath = stdout.trim();
+            if (selectedPath) return resolve(selectedPath);
+            if (code === 0) return resolve('');
             reject(new Error(stderr.trim() || `Folder picker exited with code ${code}`));
         });
     });
@@ -1219,6 +1165,7 @@ app.post('/api/jobs', (req, res) => {
         const datasetConfig = getDefaultDataset();
         const triggerCaptionPrefix = normalizeCaptionPrefixFromTriggerWords(trigger_words);
         const shouldConfigureDataset = (image_dir && String(image_dir).trim()) || triggerCaptionPrefix;
+        let datasetMatch = null;
         if (shouldConfigureDataset) {
             const datasets = Array.isArray(datasetConfig.datasets)
                 ? datasetConfig.datasets
@@ -1231,6 +1178,12 @@ app.post('/api/jobs', (req, res) => {
                 : firstDataset.subsets
                     ? [firstDataset.subsets]
                     : [{}];
+            datasetMatch = resolveDatasetImageFolders({
+                imageDir: image_dir,
+                batchImport: batch_import === true,
+                autoBalanceRepeats: auto_balance_repeats === true,
+                toNativePath: p => toNativePath(stripQuotes(String(p || '').trim()))
+            });
             const generatedSubsets = buildNewJobSubsets({
                 imageDir: image_dir,
                 triggerCaptionPrefix,
@@ -1253,7 +1206,22 @@ app.post('/api/jobs', (req, res) => {
             fs.writeFileSync(path.join(jobPath, 'sample_prompts.txt'), '', 'utf8');
         }
 
-        res.json({ name: safeName, path: jobPath, useFallback });
+        res.json({
+            name: safeName,
+            path: jobPath,
+            useFallback,
+            dataset_match: datasetMatch ? {
+                mode: datasetMatch.mode,
+                matched_folder_count: datasetMatch.matchedFolderCount,
+                image_count: datasetMatch.totalImages,
+                folders: datasetMatch.folders.map(folder => ({
+                    image_dir: folder.imageDir,
+                    image_count: folder.imageCount,
+                    repeats: folder.repeats,
+                    trigger_words: folder.triggerWords
+                }))
+            } : null
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1343,6 +1311,64 @@ app.put('/api/jobs/:name', (req, res) => {
     }
 });
 
+function toArrayConfig(value) {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+}
+
+function summarizeMatchedFolders(folders) {
+    return folders.map(folder => ({
+        image_dir: folder.imageDir,
+        image_count: folder.imagePaths.length
+    }));
+}
+
+function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '') {
+    const requested = stripQuotes(String(requestedImageDir || '').trim());
+    const folders = [];
+
+    if (requested) {
+        const nativeDir = toNativePath(requested);
+        folders.push({
+            imageDir: requested,
+            nativeImageDir: nativeDir,
+            imagePaths: listSdScriptsImages(nativeDir)
+        });
+    } else {
+        const datasetPath = path.join(jobPath, 'dataset.toml');
+        if (!fs.existsSync(datasetPath)) {
+            return { imagePaths: [], folders: [], matchedFolderCount: 0 };
+        }
+        const datasetConfig = TOML.parse(fs.readFileSync(datasetPath, 'utf8'));
+        for (const dataset of toArrayConfig(datasetConfig.datasets)) {
+            for (const subset of toArrayConfig(dataset.subsets)) {
+                if (!subset?.image_dir) continue;
+                const imageDir = stripQuotes(String(subset.image_dir).trim());
+                const nativeDir = toNativePath(imageDir);
+                const imagePaths = listSdScriptsImages(nativeDir);
+                if (imagePaths.length < 1) continue;
+                folders.push({ imageDir, nativeImageDir: nativeDir, imagePaths });
+            }
+        }
+    }
+
+    const seen = new Set();
+    const imagePaths = [];
+    for (const folder of folders) {
+        for (const imagePath of folder.imagePaths) {
+            if (seen.has(imagePath)) continue;
+            seen.add(imagePath);
+            imagePaths.push(imagePath);
+        }
+    }
+
+    return {
+        imagePaths,
+        folders: folders.filter(folder => folder.imagePaths.length > 0),
+        matchedFolderCount: folders.filter(folder => folder.imagePaths.length > 0).length
+    };
+}
+
 app.post('/api/jobs/:name/tag-captions', async (req, res) => {
     try {
         const jobPath = getJobPath(req.params.name);
@@ -1350,18 +1376,22 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
             return res.status(404).json({ error: 'Job not found' });
         }
 
-        const imageDir = toNativePath(stripQuotes(String(req.body.image_dir || '').trim()));
-        const caption_extension = String(req.body.caption_extension || '.txt').trim();
+        const requestedImageDir = stripQuotes(String(req.body.image_dir || '').trim());
+        const caption_extension = normalizeCaptionExtension(req.body.caption_extension || '.txt');
         const include_char = req.body.include_char !== false;
         const include_rating = req.body.include_rating !== false;
         const include_general = req.body.include_general !== false;
         const repoId = String(req.body.repo_id || 'Makki2104/animetimm/eva02_large_patch14_448.dbv4-full').trim();
 
-        if (!imageDir) {
-            return res.status(400).json({ error: 'Image directory is required' });
+        const targets = resolveTaggerTargetsForJob(jobPath, requestedImageDir);
+        if (requestedImageDir) {
+            const nativeRequestedDir = toNativePath(requestedImageDir);
+            if (!fs.existsSync(nativeRequestedDir) || !fs.statSync(nativeRequestedDir).isDirectory()) {
+                return res.status(400).json({ error: `Image directory not found: ${nativeRequestedDir}` });
+            }
         }
-        if (!fs.existsSync(imageDir) || !fs.statSync(imageDir).isDirectory()) {
-            return res.status(400).json({ error: `Image directory not found: ${imageDir}` });
+        if (targets.imagePaths.length < 1) {
+            return res.status(400).json({ error: 'No sd-scripts matched images found for tagging' });
         }
         if (!/^\.[A-Za-z0-9_-]+$/.test(caption_extension)) {
             return res.status(400).json({ error: 'Caption extension must look like .txt' });
@@ -1379,9 +1409,15 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
             return res.status(500).json({ error: `Tagger script not found: ${taggerScript}` });
         }
 
+        const taggerLogsDir = path.join(jobPath, 'logs');
+        fs.mkdirSync(taggerLogsDir, { recursive: true });
+        const imageListPath = path.join(taggerLogsDir, `tagger_images_${Date.now()}.txt`);
+        fs.writeFileSync(imageListPath, targets.imagePaths.join('\n'), 'utf8');
+
         const args = [
             taggerScript,
-            '--image-dir', imageDir,
+            '--image-dir', targets.folders[0]?.nativeImageDir || jobPath,
+            '--image-list', imageListPath,
             '--caption-extension', caption_extension,
             '--repo-id', repoId,
         ];
@@ -1407,7 +1443,11 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
         let hasDone = false;
         const writeEvent = event => {
             if (!res.writableEnded) {
-                res.write(`${JSON.stringify(event)}\n`);
+                res.write(`${JSON.stringify({
+                    ...event,
+                    matched_folder_count: targets.matchedFolderCount,
+                    matched_folders: summarizeMatchedFolders(targets.folders)
+                })}\n`);
             }
         };
         child.stdout.on('data', chunk => {
@@ -1431,6 +1471,7 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
             if (!res.writableEnded) res.end();
         });
         child.on('close', code => {
+            fs.promises.unlink(imageListPath).catch(() => {});
             if (stdoutBuffer.trim()) {
                 try {
                     const event = JSON.parse(stdoutBuffer.trim());
@@ -2617,8 +2658,14 @@ app.post('/api/system/select-folder', async (req, res) => {
 
 app.post('/api/system/inspect-image-folder', async (req, res) => {
     try {
-        const { path: folderPath, caption_extension } = req.body;
-        res.json(await inspectImageFolder(folderPath, caption_extension));
+        const { path: folderPath, caption_extension, batch_import, auto_balance_repeats } = req.body;
+        res.json(await inspectDatasetImageFolders({
+            imageDir: folderPath,
+            captionExtension: caption_extension,
+            batchImport: batch_import === true,
+            autoBalanceRepeats: auto_balance_repeats === true,
+            toNativePath: p => toNativePath(stripQuotes(String(p || '').trim()))
+        }));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -25,6 +25,8 @@ test("new job and dataset image folders expose picker buttons and caption status
 
 test("folder selection updates image dir fields and immediately checks captions", () => {
   const appJs = read("public/js/app.js");
+  const newJobSelectBlock = appJs.match(/async function selectNewJobImageDir\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const subsetSelectBlock = appJs.match(/async function selectSubsetImageDir\(card, subset\) \{[\s\S]*?\n\}/)?.[0] || "";
 
   assert.match(appJs, /async function selectFolderPath\([^)]*\)/);
   assert.match(appJs, /LAST_IMAGE_FOLDER_KEY/);
@@ -38,9 +40,11 @@ test("folder selection updates image dir fields and immediately checks captions"
   assert.match(appJs, /updateNewJobImageDirStatus/);
   assert.match(appJs, /selectSubsetImageDir/);
   assert.match(appJs, /updateSubsetImageDirStatus/);
-  assert.doesNotMatch(appJs, /await updateNewJobImageDirStatus\(\)/);
-  assert.doesNotMatch(appJs, /await updateSubsetImageDirStatus\(card, subset\)/);
+  assert.doesNotMatch(newJobSelectBlock, /await updateNewJobImageDirStatus\(\)/);
+  assert.doesNotMatch(subsetSelectBlock, /await updateSubsetImageDirStatus\(card, subset\)/);
   assert.match(appJs, /missing_caption/);
   assert.match(appJs, /empty_caption/);
   assert.match(appJs, /image_count/);
+  assert.match(appJs, /matched_folder_count/);
+  assert.match(appJs, /batch_import/);
 });

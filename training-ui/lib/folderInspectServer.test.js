@@ -18,13 +18,14 @@ function routeBlock(source, method, route) {
 
 test("server can select and inspect image folders for caption coverage", () => {
   const serverJs = read("server.js");
+  const helperJs = read("lib/datasetImageMatch.js");
   const selectBlock = routeBlock(serverJs, "post", "/api/system/select-folder");
   const inspectBlock = routeBlock(serverJs, "post", "/api/system/inspect-image-folder");
   const pickerBlock = serverJs.match(/function selectFolderDialog\([\s\S]*?\n\}/)?.[0] || "";
 
   assert.match(serverJs, /function selectFolderDialog\(/);
   assert.match(serverJs, /async function inspectImageFolder\(/);
-  assert.match(serverJs, /async function collectImageFiles\(/);
+  assert.match(serverJs, /inspectDatasetImageFolders/);
   assert.match(pickerBlock, /new Promise/);
   assert.match(serverJs, /spawn\(/);
   assert.match(serverJs, /IFileOpenDialog/);
@@ -37,14 +38,15 @@ test("server can select and inspect image folders for caption coverage", () => {
   assert.match(selectBlock, /initial_path/);
   assert.match(selectBlock, /selectFolderDialog\(/);
   assert.match(selectBlock, /await selectFolderDialog\(/);
-  assert.match(inspectBlock, /inspectImageFolder\(/);
-  assert.match(inspectBlock, /await inspectImageFolder\(/);
+  assert.match(inspectBlock, /inspectDatasetImageFolders\(/);
+  assert.match(inspectBlock, /await inspectDatasetImageFolders\(/);
   assert.match(inspectBlock, /async \(req, res\)/);
   assert.match(inspectBlock, /caption_extension/);
-  assert.match(serverJs, /fs\.promises\.readdir/);
-  assert.match(serverJs, /fs\.promises\.readFile/);
+  assert.match(helperJs, /fs\.promises\.readdir/);
+  assert.match(helperJs, /fs\.promises\.readFile/);
   assert.doesNotMatch(inspectBlock, /readdirSync|readFileSync|statSync/);
-  assert.match(serverJs, /image_count/);
-  assert.match(serverJs, /missing_caption/);
-  assert.match(serverJs, /empty_caption/);
+  assert.match(helperJs, /image_count/);
+  assert.match(helperJs, /matched_folder_count/);
+  assert.match(helperJs, /missing_caption/);
+  assert.match(helperJs, /empty_caption/);
 });

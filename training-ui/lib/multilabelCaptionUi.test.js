@@ -43,3 +43,13 @@ test("dataset tagger button calls multilabel caption API", () => {
   assert.match(appJs, /include_rating:\s*includeRating/);
   assert.match(appJs, /include_general:\s*includeGeneral/);
 });
+
+test("dataset tagger refreshes folder caption status after completion", () => {
+  const appJs = read("public/js/app.js");
+  const start = appJs.indexOf("async function runSubsetTagger");
+  const end = appJs.indexOf("\n// ==========================================\n//  Save", start);
+  const block = appJs.slice(start, end);
+
+  assert.match(block, /await updateFolderInspectionStatus\(/);
+  assert.match(block, /imageDir,\s*captionExtension,\s*card\.querySelector\("\.sub-image-dir-status"\)/);
+});
