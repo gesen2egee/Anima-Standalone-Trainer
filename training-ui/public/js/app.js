@@ -24,12 +24,15 @@ let lastSavedDataset = null;
 let lastSavedPrompts = [];
 let lastSavedNegativePrompt = "";
 let samplesPollTimer = null;
+let samplesRefreshTimer = null;
 let isDraggingBg = false;
 let bgPosPercent = { x: 50, y: 50 };
 let currentSubsets = [];
 let archRegistry = null; // Loaded from /api/architectures
 let currentCliBaseCommand = "";
 let currentCliToml = "";
+let currentCliDatasetToml = "";
+let currentCliSampleText = "";
 // --- DOM Refs ---
 const $ = (id) => document.getElementById(id);
 const queuedJobListEl = $("queued-job-list");
@@ -76,6 +79,10 @@ const UI_TRANSLATIONS = {
   "CLI Preview": { "zh-TW": "CLI 預覽", "zh-CN": "CLI 预览" },
   "Command": { "zh-TW": "指令", "zh-CN": "指令" },
   "TOML": { "zh-TW": "TOML", "zh-CN": "TOML" },
+  "Config TOML": { "zh-TW": "Config TOML", "zh-CN": "Config TOML" },
+  "Dataset TOML": { "zh-TW": "Dataset TOML", "zh-CN": "Dataset TOML" },
+  "sample.txt": { "zh-TW": "sample.txt", "zh-CN": "sample.txt" },
+  "sample_prompts.txt": { "zh-TW": "sample_prompts.txt", "zh-CN": "sample_prompts.txt" },
   "Actual CLI Command": { "zh-TW": "實際 CLI 指令", "zh-CN": "实际 CLI 指令" },
   "Merged Config TOML": { "zh-TW": "合併後 Config TOML", "zh-CN": "合并后 Config TOML" },
   "Custom CLI Args (TOML)": { "zh-TW": "自訂 CLI 參數 (TOML)", "zh-CN": "自定义 CLI 参数 (TOML)" },
@@ -86,6 +93,14 @@ const UI_TRANSLATIONS = {
   "Generated from the same merged TOML config passed to the training CLI.": {
     "zh-TW": "由實際傳給訓練 CLI 的同一份 merged TOML config 產生。",
     "zh-CN": "由实际传给训练 CLI 的同一份 merged TOML config 生成。",
+  },
+  "Generated from the dataset TOML used by this job.": {
+    "zh-TW": "由此 job 使用的 dataset TOML 產生。",
+    "zh-CN": "由此 job 使用的 dataset TOML 生成。",
+  },
+  "Sample prompt file used when sampling is enabled.": {
+    "zh-TW": "啟用 sampling 時使用的 sample prompt 檔案。",
+    "zh-CN": "启用 sampling 时使用的 sample prompt 文件。",
   },
   "Saved to config.toml and appended to the command with one space at the end.": {
     "zh-TW": "會儲存到 config.toml，並用一個空格接在指令最後。",
@@ -980,6 +995,81 @@ async function api(url, opts = {}) {
   }
   return res.json();
 }
+async function selectFolderPath() {
+  const result = await api("/api/system/select-folder", { method: "POST" });
+  return (result.path || "").trim();
+}
+async function inspectImageFolder(imageDir, captionExtension = ".txt") {
+  if (!imageDir) return null;
+  return api("/api/system/inspect-image-folder", {
+    method: "POST",
+    body: {
+      path: imageDir,
+      caption_extension: captionExtension || ".txt",
+    },
+  });
+}
+function formatFolderInspection(summary) {
+  if (!summary) return "No folder selected.";
+  if (!summary.exists) return "Folder not found.";
+  if (!summary.is_directory) return "Path is not a folder.";
+  if (!summary.has_images) return "0 images found. Please choose a folder with images.";
+  const missing = summary.missing_caption || 0;
+  const empty = summary.empty_caption || 0;
+  return `${summary.image_count} images, ${missing} missing caption, ${empty} empty caption.`;
+}
+async function updateFolderInspectionStatus(imageDir, captionExtension, statusEl) {
+  if (!statusEl) return null;
+  if (!imageDir) {
+    statusEl.textContent = "No folder selected.";
+    statusEl.classList.remove("warning", "ok");
+    return null;
+  }
+  statusEl.textContent = "Checking folder...";
+  statusEl.classList.remove("warning", "ok");
+  try {
+    const summary = await inspectImageFolder(imageDir, captionExtension);
+    statusEl.textContent = formatFolderInspection(summary);
+    const hasIssue =
+      !summary?.has_images || summary.missing_caption > 0 || summary.empty_caption > 0;
+    statusEl.classList.toggle("warning", hasIssue);
+    statusEl.classList.toggle("ok", !hasIssue);
+    return summary;
+  } catch (err) {
+    statusEl.textContent = `Folder check failed: ${err.message}`;
+    statusEl.classList.add("warning");
+    statusEl.classList.remove("ok");
+    return null;
+  }
+}
+function updateNewJobImageDirStatus() {
+  return updateFolderInspectionStatus(
+    $("new-job-image-dir").value.trim(),
+    ".txt",
+    $("new-job-image-dir-status"),
+  );
+}
+async function selectNewJobImageDir() {
+  const selected = await selectFolderPath();
+  if (!selected) return;
+  $("new-job-image-dir").value = selected;
+  await updateNewJobImageDirStatus();
+}
+function updateSubsetImageDirStatus(card, subset) {
+  return updateFolderInspectionStatus(
+    subset.image_dir || "",
+    $("cfg-caption-ext")?.value || ".txt",
+    card.querySelector(".sub-image-dir-status"),
+  );
+}
+async function selectSubsetImageDir(card, subset) {
+  const selected = await selectFolderPath();
+  if (!selected) return;
+  subset.image_dir = selected;
+  card.querySelector(".sub-image-dir").value = selected;
+  checkDirty();
+  await updateSubsetImageDirStatus(card, subset);
+}
 // ==========================================
 //  WebSocket
 // ==========================================
@@ -1006,8 +1096,13 @@ function connectWS() {
       if (msg.job !== currentJob) return;
       if (msg.type === "log") {
         appendConsole(msg.data);
+        scheduleSamplesRefresh();
       } else if (msg.type === "status") {
-        if (msg.data === "generating") return; // Ignore generation status for Training button
+        if (msg.data === "generating") {
+          scheduleSamplesRefresh(0);
+          return; // Ignore generation status for Training button
+        }
+        if (msg.data === "completed") scheduleSamplesRefresh(0);
         updateRunningState(msg.data === "running");
         loadJobs();
       }
@@ -1451,6 +1546,10 @@ function clearCurrentJobSelection() {
     clearInterval(samplesPollTimer);
     samplesPollTimer = null;
   }
+  if (samplesRefreshTimer) {
+    clearTimeout(samplesRefreshTimer);
+    samplesRefreshTimer = null;
+  }
   $("btn-save").classList.add("hidden");
   $("btn-discard").classList.add("hidden");
   jobEditor.classList.add("hidden");
@@ -1464,6 +1563,10 @@ async function selectJob(name) {
   if (samplesPollTimer) {
     clearInterval(samplesPollTimer);
     samplesPollTimer = null;
+  }
+  if (samplesRefreshTimer) {
+    clearTimeout(samplesRefreshTimer);
+    samplesRefreshTimer = null;
   }
   localStorage.setItem("lastJob", name);
   jobTitle.textContent = name;
@@ -1936,13 +2039,21 @@ async function loadCliCommandPreview() {
     const data = await api(`/api/jobs/${encodeURIComponent(currentJob)}/cli-command`);
     currentCliBaseCommand = data.base_command || data.command || "";
     currentCliToml = data.toml || "";
+    currentCliDatasetToml = data.dataset_toml || "";
+    currentCliSampleText = data.sample_prompts || "";
     $("cfg-cli-toml").value = currentCliToml;
+    $("cfg-cli-dataset-toml").value = currentCliDatasetToml;
+    $("cfg-cli-sample-txt").value = currentCliSampleText;
     updateCliCommandPreview();
   } catch (err) {
     currentCliBaseCommand = "";
     currentCliToml = "";
+    currentCliDatasetToml = "";
+    currentCliSampleText = "";
     $("cfg-cli-command").value = `Failed to build CLI command: ${err.message}`;
     $("cfg-cli-toml").value = `Failed to build TOML preview: ${err.message}`;
+    $("cfg-cli-dataset-toml").value = `Failed to build dataset TOML preview: ${err.message}`;
+    $("cfg-cli-sample-txt").value = `Failed to load sample prompts: ${err.message}`;
   }
 }
 function updateCliCommandPreview() {
@@ -2337,10 +2448,11 @@ function renderSubsets() {
             <div class="subset-body" style="display: ${isCollapsed ? "none" : "block"}">
                 <div class="form-group">
                     <label style="font-size: 0.8rem;">Image Directory</label>
-                    <div style="display: flex; gap: 8px;">
+                    <div class="path-input-row">
                         <input type="text" class="sub-image-dir" value="${escapeHtml(subset.image_dir)}" placeholder="C:\\path\\to\\images" style="flex: 1;">
-                        <button class="btn btn-secondary btn-open-dir" title="Open folder">📂</button>
+                        <button type="button" class="btn btn-secondary btn-select-sub-image-dir" title="Select folder">📂</button>
                     </div>
+                    <small class="folder-inspection-status sub-image-dir-status">No folder selected.</small>
                 </div>
                 <div class="form-row" style="margin-top: 10px;">
                     <div class="form-group">
@@ -2468,25 +2580,17 @@ function renderSubsets() {
           input.addEventListener("change", updateSubset);
         }
       });
+      card.querySelector(".sub-image-dir").addEventListener("change", () => {
+        subset.image_dir = card.querySelector(".sub-image-dir").value.trim();
+        updateSubsetImageDirStatus(card, subset);
+      });
       card
-        .querySelector(".btn-open-dir")
-        .addEventListener("click", async () => {
-          const dir = subset.image_dir.trim();
-          if (!dir) {
-            showToast("Please enter a directory path first");
-            return;
-          }
-          const result = await api("/api/system/open-folder", {
-            method: "POST",
-            body: { path: dir },
-          });
-          if (result.error) {
-            showToast("Error: " + result.error);
-          }
-        });
+        .querySelector(".btn-select-sub-image-dir")
+        .addEventListener("click", () => selectSubsetImageDir(card, subset));
       card
         .querySelector(".btn-run-subset-tagger")
         .addEventListener("click", () => runSubsetTagger(card, idx));
+      updateSubsetImageDirStatus(card, subset);
     }
     if (!isLastOne) {
       card
@@ -2995,11 +3099,6 @@ function appendConsole(text) {
   if (consoleOutput.textContent.startsWith("Waiting")) {
     consoleOutput.textContent = "";
   }
-  const wasNearBottom =
-    consoleOutput.scrollHeight -
-    consoleOutput.scrollTop -
-    consoleOutput.clientHeight <
-    100;
   // Standard Terminal logic: \r overwrites the CURRENT line.
   // We split current content and process the last line surgically.
   let fullText = consoleOutput.textContent + text;
@@ -3025,9 +3124,9 @@ function appendConsole(text) {
     }
   }
   consoleOutput.textContent = fullText;
-  if (wasNearBottom) {
+  requestAnimationFrame(() => {
     consoleOutput.scrollTop = consoleOutput.scrollHeight;
-  }
+  });
 }
 async function runNewJobDefaultTagger(jobName, imageDir) {
   const res = await fetch(
@@ -3131,6 +3230,14 @@ let sampleState = {
   allImages: [], // flat list for index lookup
   isExplicitMultiSelect: false,
 };
+function scheduleSamplesRefresh(delay = 1200) {
+  if (!currentJob) return;
+  if (samplesRefreshTimer) clearTimeout(samplesRefreshTimer);
+  samplesRefreshTimer = setTimeout(() => {
+    samplesRefreshTimer = null;
+    loadSamples(true).catch((err) => console.warn("Failed to refresh samples:", err));
+  }, delay);
+}
 async function loadSamples(isUpdate = false) {
   if (!currentJob) return;
   const images = await api(`/api/jobs/${currentJob}/samples`);
@@ -4312,6 +4419,8 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-network-module").value = "networks.cdka";
   $("new-job-image-dir").value = "";
   $("new-job-trigger-words").value = "";
+  $("new-job-image-dir-status").textContent = "No folder selected.";
+  $("new-job-image-dir-status").classList.remove("warning", "ok");
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();
@@ -4369,6 +4478,8 @@ async function createJobFromModal({ autoTag = false } = {}) {
 }
 $("btn-create-job").addEventListener("click", () => createJobFromModal());
 $("btn-create-job-auto-tag").addEventListener("click", () => createJobFromModal({ autoTag: true }));
+$("btn-new-job-select-image-dir").addEventListener("click", selectNewJobImageDir);
+$("new-job-image-dir").addEventListener("change", updateNewJobImageDirStatus);
 // Load GPUs from server
 async function loadGPUs() {
   const container = $("cfg-gpu-selection");

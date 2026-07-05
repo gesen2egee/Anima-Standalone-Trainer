@@ -111,8 +111,8 @@
                     <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
                     <button class="tab" data-tab="samples">Samples</button>
-                    <button class="tab" data-tab="cli">CLI</button>
                     <button class="tab" data-tab="console">Console</button>
+                    <button class="tab" data-tab="cli">CLI</button>
                     <button class="tab" data-tab="tensorboard">📊 TensorBoard</button>
                     <button class="tab" data-tab="settings">⚙️</button>
                 </div>
@@ -483,6 +483,41 @@
                             </div>
                         </div>
 
+                        <h4 style="margin-top: 24px;">Masking</h4>
+                        <small>Alpha and generated mask controls. These affect dataset subsets and latent caching.</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-alpha-mask" checked> Alpha Mask</label>
+                                <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-automask"> Automask</label>
+                                <small>Generate an alpha mask during latent caching with remove background. Source images are not changed.</small>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-masked-loss-random"> Random Mask Strength</label>
+                                <small>Randomize loss weight for masked-out areas between 0.0 and 1.0.</small>
+                            </div>
+                        </div>
+                        <div id="automask-panel" class="form-row hidden">
+                            <div class="form-group">
+                                <label>Mask Alpha</label>
+                                <input type="number" id="cfg-automask-alpha" value="128" min="1" max="255">
+                            </div>
+                            <div class="form-group">
+                                <label>Mask Shrink</label>
+                                <input type="number" id="cfg-automask-shrink" value="1" min="0" max="64">
+                            </div>
+                            <div class="form-group">
+                                <label>Mask Blur</label>
+                                <input type="number" id="cfg-automask-blur" value="3" min="0" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label>Mask Model</label>
+                                <input type="text" id="cfg-automask-model" value="base-nightly" placeholder="base-nightly">
+                            </div>
+                        </div>
+
                         <h4 style="margin-top: 24px;">Loss Experiments</h4>
                         <small>Alternative loss functions and experimental loss weighting. Standard training can stay on L2 with P&P disabled.</small>
                         <div class="form-row" style="margin-top: 12px;">
@@ -690,40 +725,6 @@
                                 <label>Caption Extension</label>
                                 <input type="text" id="cfg-caption-ext" value=".txt" placeholder=".txt">
                             </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-alpha-mask" checked> Alpha Mask</label>
-                            <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-automask"> Automask</label>
-                            <small>Generate an alpha mask during latent caching with remove background. Source images are not changed.</small>
-                        </div>
-
-                        <div id="automask-panel" class="form-row hidden">
-                            <div class="form-group">
-                                <label>Mask Alpha</label>
-                                <input type="number" id="cfg-automask-alpha" value="128" min="1" max="255">
-                            </div>
-                            <div class="form-group">
-                                <label>Mask Shrink</label>
-                                <input type="number" id="cfg-automask-shrink" value="1" min="0" max="64">
-                            </div>
-                            <div class="form-group">
-                                <label>Mask Blur</label>
-                                <input type="number" id="cfg-automask-blur" value="3" min="0" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label>Mask Model</label>
-                                <input type="text" id="cfg-automask-model" value="base-nightly" placeholder="base-nightly">
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-masked-loss-random"> Random Mask Strength</label>
-                            <small>Randomize loss weight for masked-out areas (mask=0) between 0.0 and 1.0.</small>
                         </div>
 
                         <h4>Frequency-Aware Dropout</h4>
@@ -1331,7 +1332,9 @@
                         <h4>CLI Preview</h4>
                         <div class="cli-subtabs" role="tablist" aria-label="CLI Preview">
                             <button type="button" class="cli-subtab active" data-cli-subtab="command">Command</button>
-                            <button type="button" class="cli-subtab" data-cli-subtab="toml">TOML</button>
+                            <button type="button" class="cli-subtab" data-cli-subtab="config-toml">Config TOML</button>
+                            <button type="button" class="cli-subtab" data-cli-subtab="dataset-toml">Dataset TOML</button>
+                            <button type="button" class="cli-subtab" data-cli-subtab="sample-txt">sample.txt</button>
                         </div>
                         <div id="cli-subtab-command" class="cli-subtab-panel active">
                             <div class="form-group">
@@ -1340,11 +1343,25 @@
                                 <small>Generated from the saved job config. Save changes to refresh the base command.</small>
                             </div>
                         </div>
-                        <div id="cli-subtab-toml" class="cli-subtab-panel hidden">
+                        <div id="cli-subtab-config-toml" class="cli-subtab-panel hidden">
                             <div class="form-group">
                                 <label>Merged Config TOML</label>
                                 <textarea id="cfg-cli-toml" rows="16" readonly spellcheck="false"></textarea>
                                 <small>Generated from the same merged TOML config passed to the training CLI.</small>
+                            </div>
+                        </div>
+                        <div id="cli-subtab-dataset-toml" class="cli-subtab-panel hidden">
+                            <div class="form-group">
+                                <label>Dataset TOML</label>
+                                <textarea id="cfg-cli-dataset-toml" rows="16" readonly spellcheck="false"></textarea>
+                                <small>Generated from the dataset TOML used by this job.</small>
+                            </div>
+                        </div>
+                        <div id="cli-subtab-sample-txt" class="cli-subtab-panel hidden">
+                            <div class="form-group">
+                                <label>sample_prompts.txt</label>
+                                <textarea id="cfg-cli-sample-txt" rows="16" readonly spellcheck="false"></textarea>
+                                <small>Sample prompt file used when sampling is enabled.</small>
                             </div>
                         </div>
                         <div class="form-group">
@@ -1435,13 +1452,17 @@ custom_cli_args = ""</textarea>
                 </select>
             </div>
             <div class="form-group">
-                <label>Dataset 1 Image Folder</label>
-                <input type="text" id="new-job-image-dir" placeholder="D:\datasets\my_images">
-            </div>
-            <div class="form-group">
                 <label>Trigger Words</label>
                 <input type="text" id="new-job-trigger-words" placeholder="character_name">
                 <small>Automatically appends a comma and writes it into Caption Prefix.</small>
+            </div>
+            <div class="form-group">
+                <label>Dataset 1 Image Folder</label>
+                <div class="path-input-row">
+                    <input type="text" id="new-job-image-dir" placeholder="D:\datasets\my_images">
+                    <button type="button" id="btn-new-job-select-image-dir" class="btn btn-secondary" title="Select folder">📂</button>
+                </div>
+                <small id="new-job-image-dir-status" class="folder-inspection-status">No folder selected.</small>
             </div>
             <div class="form-group">
                 <label>Max Steps</label>

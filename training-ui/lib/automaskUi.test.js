@@ -9,13 +9,20 @@ function read(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), "utf8");
 }
 
-test("dataset tab exposes automask controls near alpha mask", () => {
+test("advanced tab exposes mask controls outside dataset tab", () => {
   const html = read("public/index.html");
+  const advancedIndex = html.indexOf('id="tab-advanced"');
+  const datasetIndex = html.indexOf('id="tab-dataset"');
   const alphaIndex = html.indexOf('id="cfg-alpha-mask"');
   const automaskIndex = html.indexOf('id="cfg-automask"');
+  const maskedLossIndex = html.indexOf('id="cfg-masked-loss-random"');
 
+  assert.ok(advancedIndex >= 0, "missing advanced tab");
+  assert.ok(datasetIndex > advancedIndex, "dataset tab should follow advanced tab");
   assert.ok(alphaIndex >= 0, "missing alpha mask control");
+  assert.ok(alphaIndex > advancedIndex && alphaIndex < datasetIndex, "alpha mask should live in advanced tab");
   assert.ok(automaskIndex > alphaIndex, "automask should appear after alpha mask");
+  assert.ok(maskedLossIndex > automaskIndex && maskedLossIndex < datasetIndex, "random mask strength should live with mask controls");
 
   [
     "cfg-automask",

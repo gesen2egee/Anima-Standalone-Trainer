@@ -179,6 +179,83 @@ function normalizeCustomCliArgs(value) {
     return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
+
+function normalizeCaptionExtension(value) {
+    const ext = String(value || '.txt').trim() || '.txt';
+    return ext.startsWith('.') ? ext : `.${ext}`;
+}
+
+function collectImageFiles(dir) {
+    const files = [];
+    if (!dir || !fs.existsSync(dir)) return files;
+    fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            files.push(...collectImageFiles(fullPath));
+        } else if (IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+            files.push(fullPath);
+        }
+    });
+    return files;
+}
+
+function inspectImageFolder(folderPath, captionExtension = '.txt') {
+    const nativePath = toNativePath(stripQuotes(String(folderPath || '').trim()));
+    const captionExt = normalizeCaptionExtension(captionExtension);
+    const result = {
+        path: folderPath || '',
+        native_path: nativePath || '',
+        exists: false,
+        is_directory: false,
+        has_images: false,
+        image_count: 0,
+        missing_caption: 0,
+        empty_caption: 0,
+        caption_extension: captionExt
+    };
+
+    if (!nativePath || !fs.existsSync(nativePath)) return result;
+
+    const stat = fs.statSync(nativePath);
+    result.exists = true;
+    result.is_directory = stat.isDirectory();
+    if (!result.is_directory) return result;
+
+    const imageFiles = collectImageFiles(nativePath);
+    result.image_count = imageFiles.length;
+    result.has_images = imageFiles.length > 0;
+    imageFiles.forEach(imagePath => {
+        const captionPath = path.join(
+            path.dirname(imagePath),
+            `${path.basename(imagePath, path.extname(imagePath))}${captionExt}`
+        );
+        if (!fs.existsSync(captionPath)) {
+            result.missing_caption += 1;
+            return;
+        }
+        const content = fs.readFileSync(captionPath, 'utf8').trim();
+        if (!content) result.empty_caption += 1;
+    });
+    return result;
+}
+
+function selectFolderDialog() {
+    if (!isWindows && !isWSL) return '';
+    const command = [
+        'Add-Type -AssemblyName System.Windows.Forms',
+        '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+        '$dialog.Description = "Select image folder"',
+        '$dialog.ShowNewFolderButton = $true',
+        'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output $dialog.SelectedPath }'
+    ].join('; ');
+    const exe = isWSL ? 'powershell.exe' : 'powershell.exe';
+    return execFileSync(exe, ['-NoProfile', '-STA', '-Command', command], {
+        encoding: 'utf8',
+        windowsHide: true
+    }).trim();
+}
+
 function getJobPath(name) {
     return path.join(getJobsDir(), sanitizeName(name));
 }
@@ -878,11 +955,19 @@ app.get('/api/jobs/:name/cli-command', (req, res) => {
         const mergedConfigPath = path.join(jobPath, '_merged_config.toml');
         const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
         if (launch.error) return res.status(400).json({ error: launch.error });
+        const datasetPath = path.join(jobPath, 'dataset.toml');
+        const samplePromptsPath = path.join(jobPath, 'sample_prompts.txt');
+        const datasetConfig = fs.existsSync(datasetPath)
+            ? TOML.parse(fs.readFileSync(datasetPath, 'utf8'))
+            : getDefaultDataset();
+        const previewDataset = isWSL ? convertPathsInObject(datasetConfig) : datasetConfig;
 
         res.json({
             command: launch.trainScript,
             base_command: launch.baseTrainScript,
             toml: TOML.stringify(mergedConfig),
+            dataset_toml: TOML.stringify(previewDataset),
+            sample_prompts: fs.existsSync(samplePromptsPath) ? fs.readFileSync(samplePromptsPath, 'utf8') : '',
             custom_cli_args: launch.customCliArgs
         });
     } catch (err) {
@@ -2159,6 +2244,24 @@ app.post('/api/system/open-folder', (req, res) => {
         } else {
             res.status(404).json({ error: 'Folder not found' });
         }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/system/select-folder', (req, res) => {
+    try {
+        const selectedPath = selectFolderDialog();
+        res.json({ path: selectedPath || '' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/system/inspect-image-folder', (req, res) => {
+    try {
+        const { path: folderPath, caption_extension } = req.body;
+        res.json(inspectImageFolder(folderPath, caption_extension));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

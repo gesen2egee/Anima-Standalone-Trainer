@@ -943,12 +943,15 @@ body {
 
 .console-output {
     flex: 1;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow: auto;
     padding: 16px;
     font-family: 'SF Mono', Consolas, 'Courier New', monospace;
     font-size: 0.8rem;
     line-height: 1.6;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     word-break: break-all;
     color: var(--text-secondary);
     background: var(--bg-primary);
@@ -1483,6 +1486,32 @@ body {
 ::-webkit-scrollbar {
     width: 18px;
     height: 18px;
+}
+
+.path-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.path-input-row input {
+    min-width: 0;
+    flex: 1;
+}
+
+.folder-inspection-status {
+    display: block;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.folder-inspection-status.warning {
+    color: var(--warning, #f5a623);
+}
+
+.folder-inspection-status.ok {
+    color: var(--success, #3fb950);
 }
 
 ::-webkit-scrollbar-track {

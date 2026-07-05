@@ -18,8 +18,11 @@ function routeBlock(source, route) {
 
 test("new job modal exposes trigger words and auto tag action", () => {
   const html = read("public/index.html");
+  const triggerIndex = html.indexOf('id="new-job-trigger-words"');
+  const imageDirIndex = html.indexOf('id="new-job-image-dir"');
 
   assert.match(html, /id="new-job-trigger-words"/);
+  assert.ok(triggerIndex >= 0 && triggerIndex < imageDirIndex, "trigger words should be above image folder");
   assert.match(html, /id="btn-create-job-auto-tag"/);
   assert.match(html, /Create \+ Auto Tag/);
 });
