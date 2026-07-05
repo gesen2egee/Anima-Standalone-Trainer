@@ -252,6 +252,26 @@ def test_release_automask_remover_clears_cuda_cache(monkeypatch):
     assert calls == ["gc", "cuda"]
 
 
+def test_automask_remover_uses_caption_device_selection(monkeypatch):
+    from library import train_util
+
+    created = []
+
+    class FakeRemover:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(train_util.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "transparent_background", type("FakeModule", (), {"Remover": FakeRemover}))
+    train_util.release_automask_remover()
+
+    remover = train_util._get_automask_remover(AutomaskSettings(enabled=True, model="base-nightly"))
+
+    assert isinstance(remover, FakeRemover)
+    assert created == [{"device": "cuda", "mode": "base-nightly"}]
+    train_util.release_automask_remover()
+
+
 def test_training_parser_accepts_automask_arguments():
     from library import train_util
 

@@ -139,7 +139,8 @@ def _get_automask_remover(settings: AutomaskSettings):
 
     from transparent_background import Remover
 
-    AUTOMASK_REMOVER = Remover(mode=settings.model)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    AUTOMASK_REMOVER = Remover(device=device, mode=settings.model)
     AUTOMASK_REMOVER_MODEL = settings.model
     return AUTOMASK_REMOVER
 
