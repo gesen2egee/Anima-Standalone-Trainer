@@ -997,7 +997,9 @@ async function api(url, opts = {}) {
 }
 async function selectFolderPath() {
   const result = await api("/api/system/select-folder", { method: "POST" });
-  return (result.path || "").trim();
+  const selectedPath = (result.path || "").trim();
+  if (!selectedPath) showToast("沒有選到資料夾，請再試一次。", "warning");
+  return selectedPath;
 }
 async function inspectImageFolder(imageDir, captionExtension = ".txt") {
   if (!imageDir) return null;

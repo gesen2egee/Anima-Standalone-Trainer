@@ -27,6 +27,7 @@ test("folder selection updates image dir fields and immediately checks captions"
   const appJs = read("public/js/app.js");
 
   assert.match(appJs, /async function selectFolderPath\(\)/);
+  assert.match(appJs, /showToast\("沒有選到資料夾，請再試一次。", "warning"\)/);
   assert.match(appJs, /btn-new-job-select-image-dir/);
   assert.match(appJs, /updateNewJobImageDirStatus/);
   assert.match(appJs, /selectSubsetImageDir/);
