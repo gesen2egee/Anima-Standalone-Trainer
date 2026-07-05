@@ -52,3 +52,23 @@ test("direct training stop uses the shared queue-aware stop helper", () => {
   assert.match(block, /stopTrainingJob\(jobName/);
   assert.doesNotMatch(block, /runningJobs\.delete\(jobName\)/);
 });
+
+test("training status falls back to real process detection when memory state is stale", () => {
+  const serverJs = read("server.js");
+  const jobsBlock = serverJs.match(/app\.get\('\/api\/jobs'[\s\S]*?\n\}\);/);
+  const statusBlock = serverJs.match(/app\.get\('\/api\/jobs\/:name\/train\/status'[\s\S]*?\n\}\);/);
+
+  assert.ok(jobsBlock, "jobs list route should exist");
+  assert.ok(statusBlock, "train status route should exist");
+  assert.match(serverJs, /function getDetectedTrainingProcesses\(/);
+  assert.match(serverJs, /_merged_config\.toml/);
+  assert.match(serverJs, /err\.stdout/);
+  assert.match(serverJs, /function isJobTraining\(/);
+  assert.match(serverJs, /memoryJob\?\.type === 'training'/);
+  assert.match(jobsBlock[0], /running:\s*isJobTraining\(d\.name/);
+  assert.match(statusBlock[0], /const isRunning = isJobTraining\(jobName\)/);
+  assert.match(serverJs, /function getRunningTrainingJobName\(\)[\s\S]*getDetectedTrainingProcesses\(\)/);
+  assert.match(serverJs, /function stopTrainingJob\(jobName\)[\s\S]*getTrainingProcessInfo\(jobName\)/);
+  assert.match(serverJs, /const runningTraining = getRunningTrainingJobName\(\)/);
+  assert.match(serverJs, /Another training job is already running/);
+});

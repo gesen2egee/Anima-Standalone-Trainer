@@ -34,6 +34,7 @@ const GLOBAL_CONFIG_PATH = path.join(__dirname, 'global_config.toml');
 const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
 const ARCHITECTURES_PATH = path.join(__dirname, 'architectures.json');
 const QUEUE_STATE_PATH = path.join(__dirname, 'queue_state.json');
+const TRAINING_PROCESS_STATE_PATH = path.join(__dirname, 'training_process_state.json');
 
 // Load architecture registry
 const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
@@ -153,6 +154,7 @@ if (!fs.existsSync(GLOBAL_CONFIG_PATH) && fs.existsSync(TEMPLATE_CONFIG_PATH)) {
 
 // Track running processes
 const runningJobs = new Map();
+let detectedTrainingCache = { time: 0, jobs: new Map() };
 
 // WebSocket clients per job
 const wsClients = new Map(); // jobName -> Set<ws>
@@ -178,6 +180,121 @@ function normalizeCaptionPrefixFromTriggerWords(value) {
 
 function normalizeCustomCliArgs(value) {
     return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function isPidAlive(pid) {
+    const numericPid = Number.parseInt(pid, 10);
+    if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
+    try {
+        process.kill(numericPid, 0);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function readTrainingProcessState() {
+    try {
+        if (!fs.existsSync(TRAINING_PROCESS_STATE_PATH)) return {};
+        return JSON.parse(fs.readFileSync(TRAINING_PROCESS_STATE_PATH, 'utf8'));
+    } catch (_) {
+        return {};
+    }
+}
+
+function writeTrainingProcessState(jobName, data) {
+    const state = readTrainingProcessState();
+    state[jobName] = data;
+    fs.writeFileSync(TRAINING_PROCESS_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function clearTrainingProcessState(jobName) {
+    const state = readTrainingProcessState();
+    if (!state[jobName]) return;
+    delete state[jobName];
+    fs.writeFileSync(TRAINING_PROCESS_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function getStoredTrainingProcess(jobName) {
+    const stored = readTrainingProcessState()[jobName];
+    if (!stored) return null;
+    if (!isPidAlive(stored.pid)) {
+        clearTrainingProcessState(jobName);
+        return null;
+    }
+    return { ...stored, source: 'state' };
+}
+
+function parseMergedConfigPathFromCommandLine(commandLine) {
+    const match = String(commandLine || '').match(/--config_file=\\?"?(.+?_merged_config\.toml)\\?"?/i);
+    return match ? match[1].replace(/\\"/g, '"').replace(/^"+|"+$/g, '') : '';
+}
+
+function getDetectedTrainingProcesses() {
+    const now = Date.now();
+    if (now - detectedTrainingCache.time < 2000) return detectedTrainingCache.jobs;
+
+    const jobs = new Map();
+    try {
+        let raw = '';
+        if (isWindows) {
+            const script = [
+                '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+                'Get-CimInstance Win32_Process -Filter "CommandLine LIKE \'%_merged_config.toml%\'" |',
+                'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'
+            ].join('\n');
+            try {
+                raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+                    encoding: 'utf8',
+                    timeout: 5000,
+                    windowsHide: true
+                }).trim();
+            } catch (err) {
+                raw = String(err.stdout || '').trim();
+            }
+        } else {
+            raw = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: 5000 });
+        }
+
+        const processes = isWindows
+            ? (raw ? JSON.parse(raw) : [])
+            : raw.split(/\r?\n/).filter(Boolean).map(line => {
+                const match = line.trim().match(/^(\d+)\s+(.+)$/);
+                return match ? { ProcessId: Number.parseInt(match[1], 10), CommandLine: match[2] } : null;
+            }).filter(Boolean);
+
+        (Array.isArray(processes) ? processes : [processes]).forEach(proc => {
+            const commandLine = proc?.CommandLine || '';
+            const mergedConfigPath = parseMergedConfigPathFromCommandLine(commandLine);
+            if (!mergedConfigPath) return;
+            const jobName = path.basename(path.dirname(mergedConfigPath));
+            if (!jobName) return;
+            const pid = Number.parseInt(proc.ProcessId || proc.PID || proc.pid, 10);
+            if (!Number.isFinite(pid) || pid <= 0) return;
+            jobs.set(jobName, {
+                jobName,
+                pid,
+                commandLine,
+                mergedConfigPath,
+                source: 'process'
+            });
+        });
+    } catch (_) { }
+
+    detectedTrainingCache = { time: now, jobs };
+    return jobs;
+}
+
+function getTrainingProcessInfo(jobName) {
+    const memoryJob = runningJobs.get(jobName);
+    if (memoryJob?.type === 'training') return { ...memoryJob, jobName, source: 'memory' };
+    const stored = getStoredTrainingProcess(jobName);
+    if (stored) return stored;
+    return getDetectedTrainingProcesses().get(jobName) || null;
+}
+
+function isJobTraining(jobName) {
+    return !!getTrainingProcessInfo(jobName);
 }
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
@@ -435,18 +552,29 @@ function getRunningTrainingJobName() {
     for (const [name, job] of runningJobs.entries()) {
         if (job.type === 'training') return name;
     }
+    for (const [name] of getDetectedTrainingProcesses().entries()) {
+        return name;
+    }
+    for (const [name, info] of Object.entries(readTrainingProcessState())) {
+        if (isPidAlive(info?.pid)) return name;
+        clearTrainingProcessState(name);
+    }
     return null;
 }
 
 function stopTrainingJob(jobName) {
-    const job = runningJobs.get(jobName);
+    const job = getTrainingProcessInfo(jobName);
     if (!job) return null;
 
+    const memoryJob = runningJobs.get(jobName);
+    if (memoryJob) memoryJob.stopRequested = true;
     job.stopRequested = true;
     broadcastStatus(jobName, 'stopping');
 
     if (job.pid) {
-        killProcess(job.pid, 8000).catch(() => {});
+        killProcess(job.pid, 8000)
+            .then(() => clearTrainingProcessState(jobName))
+            .catch(() => {});
     }
 
     return job;
@@ -945,7 +1073,7 @@ app.get('/api/jobs', (req, res) => {
                 return {
                     name: d.name,
                     hasConfig,
-                    running: runningJobs.has(d.name),
+                    running: isJobTraining(d.name),
                     queued: queuedJobs.has(d.name),
                     queueIndex: queueState.items.indexOf(d.name),
                     queueActive: queueState.active === d.name,
@@ -1987,8 +2115,12 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (!fs.existsSync(configPath)) {
             return res.status(404).json({ error: 'Job not found' });
         }
-        if (runningJobs.has(jobName)) {
+        const runningTraining = getRunningTrainingJobName();
+        if (runningTraining === jobName || isJobTraining(jobName)) {
             return res.status(400).json({ error: 'Job already running' });
+        }
+        if (runningTraining) {
+            return res.status(400).json({ error: `Another training job is already running: ${runningTraining}` });
         }
         if (fromQueue && !trainingQueue.getState().items.includes(jobName)) {
             trainingQueue.enqueue(jobName);
@@ -2077,6 +2209,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             appendLog(Buffer.from(msg));
             logStream.end();
             runningJobs.delete(jobName);
+            clearTrainingProcessState(jobName);
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 if (completedSuccessfully) {
@@ -2102,6 +2235,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             appendLog(Buffer.from(`\nERROR: ${err.message}\n`));
             const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
+            if (!isPidAlive(proc.pid)) clearTrainingProcessState(jobName);
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 queueAutoRunning = false;
@@ -2112,14 +2246,24 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             }
         });
 
+        const startTime = Date.now();
         runningJobs.set(jobName, {
             process: proc,
             pid: proc.pid,
-            startTime: Date.now(),
+            startTime,
             logBuffer,
             type: 'training',
             gpuIds: currentGpuIds,
             fromQueue
+        });
+        writeTrainingProcessState(jobName, {
+            jobName,
+            pid: proc.pid,
+            startTime,
+            type: 'training',
+            gpuIds: currentGpuIds,
+            fromQueue,
+            mergedConfigPath
         });
 
         if (fromQueue) {
@@ -2136,7 +2280,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 app.get('/api/jobs/:name/train/status', (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
-        const isRunning = runningJobs.has(jobName);
+        const isRunning = isJobTraining(jobName);
         res.json({ running: isRunning });
     } catch (err) {
         res.status(500).json({ error: err.message });
