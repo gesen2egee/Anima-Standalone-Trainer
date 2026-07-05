@@ -111,6 +111,7 @@
                     <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
                     <button class="tab" data-tab="samples">Samples</button>
+                    <button class="tab" data-tab="cli">CLI</button>
                     <button class="tab" data-tab="console">Console</button>
                     <button class="tab" data-tab="tensorboard">📊 TensorBoard</button>
                     <button class="tab" data-tab="settings">⚙️</button>
@@ -1322,6 +1323,25 @@
                         </div>
                         <div id="samples-empty" class="samples-empty">
                             <p>No sample images yet. They will appear here during training.</p>
+                        </div>
+                    </div>
+
+                    <!-- CLI Tab -->
+                    <div id="tab-cli" class="tab-pane hidden">
+                        <h4>CLI Command</h4>
+                        <div class="form-group">
+                            <label>Actual CLI Command</label>
+                            <textarea id="cfg-cli-command" rows="10" readonly spellcheck="false"></textarea>
+                            <small>Generated from the saved job config. Save changes to refresh the base command.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Custom CLI Args (TOML)</label>
+                            <textarea id="cfg-custom-cli-args-toml" rows="4" spellcheck="false">[ui_arguments]
+custom_cli_args = ""</textarea>
+                            <small>Saved to config.toml and appended to the command with one space at the end.</small>
+                        </div>
+                        <div class="form-group">
+                            <button id="btn-refresh-cli-command" class="btn btn-ghost">Refresh CLI Command</button>
                         </div>
                     </div>
 

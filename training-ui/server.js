@@ -175,6 +175,10 @@ function normalizeCaptionPrefixFromTriggerWords(value) {
     return /,\s*$/.test(triggerWords) ? triggerWords : `${triggerWords},`;
 }
 
+function normalizeCustomCliArgs(value) {
+    return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
 function getJobPath(name) {
     return path.join(getJobsDir(), sanitizeName(name));
 }
@@ -859,6 +863,32 @@ app.get('/api/jobs/:name', (req, res) => {
     }
 });
 
+app.get('/api/jobs/:name/cli-command', (req, res) => {
+    try {
+        const jobName = sanitizeName(req.params.name);
+        const jobPath = getJobPath(jobName);
+        if (!fs.existsSync(jobPath)) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+
+        const mergedConfig = buildTrainingConfig(jobName, jobPath);
+        if (isWSL) {
+            Object.assign(mergedConfig, convertPathsInObject(mergedConfig));
+        }
+        const mergedConfigPath = path.join(jobPath, '_merged_config.toml');
+        const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
+        if (launch.error) return res.status(400).json({ error: launch.error });
+
+        res.json({
+            command: launch.trainScript,
+            base_command: launch.baseTrainScript,
+            custom_cli_args: launch.customCliArgs
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Update job config
 app.put('/api/jobs/:name', (req, res) => {
     try {
@@ -1276,6 +1306,54 @@ function buildLaunchConfig(gpuIds, mergedConfig, mergedConfigPath, jobArch) {
         accelerateFlags += ' --dynamo_backend inductor';
 
     return { gpuEnv, accelerateFlags };
+}
+
+function buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath) {
+    const configPath = path.join(jobPath, 'config.toml');
+    const jobConfig = TOML.parse(fs.readFileSync(configPath, 'utf8'));
+    const globalConfig = getGlobalConfig();
+    const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
+    const venv = getVenvPaths(venvPath);
+    const jobArch = getArchForJob(mergedConfig);
+    const hasNetwork = !!(mergedConfig.network_arguments && mergedConfig.network_arguments.network_module);
+
+    let currentGpuIds = '';
+    try {
+        currentGpuIds = jobConfig.gpu_ids ? jobConfig.gpu_ids.toString().trim() : '';
+    } catch (err) {
+        console.warn("Failed to parse config for GPU options:", err);
+    }
+
+    const launch = buildLaunchConfig(currentGpuIds, mergedConfig, mergedConfigPath, jobArch);
+    if (launch.error) return { error: launch.error };
+    const { gpuEnv, accelerateFlags } = launch;
+
+    const scriptName = hasNetwork ? jobArch.scripts.train_network : jobArch.scripts.train;
+    const targetScript = path.join(ROOT_DIR, scriptName);
+    const baseTrainCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${accelerateFlags} "${targetScript}" --config_file="${mergedConfigPath}"`;
+    const customCliArgs = normalizeCustomCliArgs(jobConfig.ui_arguments?.custom_cli_args);
+    const trainCmd = customCliArgs ? `${baseTrainCmd} ${customCliArgs}` : baseTrainCmd;
+
+    const isMultiGpu = currentGpuIds && currentGpuIds.split(',').map(s => s.trim()).filter(s => s.length > 0).length > 1;
+    const trainEnvVars = [
+        buildEnvVar('PYTHONIOENCODING', 'utf-8'),
+        buildEnvVar('TOKENIZERS_PARALLELISM', 'false'),
+        buildEnvVar('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True'),
+        gpuEnv,
+        mergedConfig.training_arguments?.step_profile ? buildEnvVar('STEP_PROFILE', '1') : '',
+        mergedConfig.training_arguments?.profile_microbatch ? buildEnvVar('PROFILE_MICROBATCH', '1') : '',
+        (isWindows && isMultiGpu) ? buildEnvVar('USE_LIBUV', '0') : '',
+        (isWindows && isMultiGpu) ? buildEnvVar('MASTER_ADDR', '127.0.0.1') : '',
+        (isWindows && isMultiGpu) ? buildEnvVar('MASTER_PORT', '29500') : ''
+    ].filter(Boolean).join('\n');
+
+    return {
+        baseTrainCmd,
+        trainCmd,
+        baseTrainScript: buildShellScript(venv.activate, trainEnvVars, baseTrainCmd),
+        trainScript: buildShellScript(venv.activate, trainEnvVars, trainCmd),
+        customCliArgs
+    };
 }
 
 function buildShellScript(activatePath, envVars, command) {
@@ -1731,44 +1809,9 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
         if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
-        // Get venv path from global config
-        const globalConfig = getGlobalConfig();
-        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
-        const venv = getVenvPaths(venvPath);
-
-        const jobArch = getArchForJob(mergedConfig);
-        const hasNetwork = !!(mergedConfig.network_arguments && mergedConfig.network_arguments.network_module);
-
-        let currentGpuIds = '';
-        try {
-            const rawConfig = TOML.parse(fs.readFileSync(configPath, 'utf8'));
-            currentGpuIds = rawConfig.gpu_ids ? rawConfig.gpu_ids.toString().trim() : '';
-        } catch (err) {
-            console.warn("Failed to parse config for GPU options:", err);
-        }
-
-        const launch = buildLaunchConfig(currentGpuIds, mergedConfig, mergedConfigPath, jobArch);
+        const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
         if (launch.error) return res.status(400).json({ error: launch.error });
-        const { gpuEnv, accelerateFlags } = launch;
-
-        const scriptName = hasNetwork ? jobArch.scripts.train_network : jobArch.scripts.train;
-        const targetScript = path.join(ROOT_DIR, scriptName);
-        const trainCmd = `python -m accelerate.commands.launch --num_cpu_threads_per_process 1 ${accelerateFlags} "${targetScript}" --config_file="${mergedConfigPath}"`;
-
-        // Spawn training process
-        const isMultiGpu = currentGpuIds && currentGpuIds.split(',').map(s => s.trim()).filter(s => s.length > 0).length > 1;
-        const trainEnvVars = [
-            buildEnvVar('PYTHONIOENCODING', 'utf-8'),
-            buildEnvVar('TOKENIZERS_PARALLELISM', 'false'),
-            buildEnvVar('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True'),
-            gpuEnv,
-            mergedConfig.training_arguments?.step_profile ? buildEnvVar('STEP_PROFILE', '1') : '',
-            mergedConfig.training_arguments?.profile_microbatch ? buildEnvVar('PROFILE_MICROBATCH', '1') : '',
-            (isWindows && isMultiGpu) ? buildEnvVar('USE_LIBUV', '0') : '',
-            (isWindows && isMultiGpu) ? buildEnvVar('MASTER_ADDR', '127.0.0.1') : '',
-            (isWindows && isMultiGpu) ? buildEnvVar('MASTER_PORT', '29500') : ''
-        ].filter(Boolean).join('\n');
-        const trainScript = buildShellScript(venv.activate, trainEnvVars, trainCmd);
+        const { trainScript } = launch;
 
         const scriptPath = path.join(jobPath, isWindows ? 'launch_command.ps1' : 'launch_command.sh');
         fs.writeFileSync(scriptPath, trainScript, 'utf8');

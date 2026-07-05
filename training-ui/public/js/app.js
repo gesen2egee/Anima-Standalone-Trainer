@@ -28,6 +28,7 @@ let isDraggingBg = false;
 let bgPosPercent = { x: 50, y: 50 };
 let currentSubsets = [];
 let archRegistry = null; // Loaded from /api/architectures
+let currentCliBaseCommand = "";
 // --- DOM Refs ---
 const $ = (id) => document.getElementById(id);
 const queuedJobListEl = $("queued-job-list");
@@ -70,6 +71,19 @@ const UI_TRANSLATIONS = {
   "Multi-GPUs": { "zh-TW": "多 GPU", "zh-CN": "多 GPU" },
   "Prompts": { "zh-TW": "提示詞", "zh-CN": "提示词" },
   "Samples": { "zh-TW": "樣本", "zh-CN": "样本" },
+  "CLI": { "zh-TW": "CLI", "zh-CN": "CLI" },
+  "CLI Command": { "zh-TW": "CLI 指令", "zh-CN": "CLI 指令" },
+  "Actual CLI Command": { "zh-TW": "實際 CLI 指令", "zh-CN": "实际 CLI 指令" },
+  "Custom CLI Args (TOML)": { "zh-TW": "自訂 CLI 參數 (TOML)", "zh-CN": "自定义 CLI 参数 (TOML)" },
+  "Generated from the saved job config. Save changes to refresh the base command.": {
+    "zh-TW": "由已儲存的 job config 產生。儲存變更後會刷新基礎指令。",
+    "zh-CN": "由已保存的 job config 生成。保存变更后会刷新基础指令。",
+  },
+  "Saved to config.toml and appended to the command with one space at the end.": {
+    "zh-TW": "會儲存到 config.toml，並用一個空格接在指令最後。",
+    "zh-CN": "会保存到 config.toml，并用一个空格接在指令最后。",
+  },
+  "Refresh CLI Command": { "zh-TW": "重新整理 CLI 指令", "zh-CN": "刷新 CLI 指令" },
   "Console": { "zh-TW": "主控台", "zh-CN": "控制台" },
   "📊 TensorBoard": { "zh-TW": "📊 TensorBoard", "zh-CN": "📊 TensorBoard" },
   "Optimization": { "zh-TW": "最佳化", "zh-CN": "优化" },
@@ -1455,6 +1469,7 @@ async function selectJob(name) {
     const data = await api(`/api/jobs/${name}`);
     populateConfig(data.config);
     populateDataset(data.dataset);
+    await loadCliCommandPreview();
     // Load prompts
     await loadPrompts();
     // Check run status
@@ -1507,7 +1522,9 @@ function populateConfig(config) {
   const t = config.training_arguments || {};
   const n = config.network_arguments || {};
   const a = config.anima_arguments || {};
+  const ui = config.ui_arguments || {};
   const networkModule = n.network_module || "networks.krona";
+  $("cfg-custom-cli-args-toml").value = renderCliCustomArgsToml(ui.custom_cli_args || "");
   // Training
   $("cfg-learning-rate").value = t.learning_rate || getNetworkModuleLearningRate(networkModule);
   $("cfg-text-encoder-lr").value = t.text_encoder_lr ?? "0";
@@ -1881,6 +1898,35 @@ function safeFloat(val, fallback = 0.0) {
   const p = parseFloat(val);
   return isNaN(p) ? fallback : p;
 }
+function escapeTomlString(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function unescapeTomlString(value) {
+  return String(value || "").replace(/\\(["\\])/g, "$1");
+}
+function renderCliCustomArgsToml(value = "") {
+  return `[ui_arguments]\ncustom_cli_args = "${escapeTomlString(value)}"`;
+}
+function parseCliCustomArgsToml(value) {
+  const match = String(value || "").match(/custom_cli_args\s*=\s*"((?:\\.|[^"\\])*)"/);
+  if (!match) return "";
+  return unescapeTomlString(match[1]).replace(/[\r\n]+/g, " ").trim();
+}
+async function loadCliCommandPreview() {
+  if (!currentJob) return;
+  try {
+    const data = await api(`/api/jobs/${encodeURIComponent(currentJob)}/cli-command`);
+    currentCliBaseCommand = data.base_command || data.command || "";
+    updateCliCommandPreview();
+  } catch (err) {
+    currentCliBaseCommand = "";
+    $("cfg-cli-command").value = `Failed to build CLI command: ${err.message}`;
+  }
+}
+function updateCliCommandPreview() {
+  const customCliArgs = parseCliCustomArgsToml($("cfg-custom-cli-args-toml").value);
+  $("cfg-cli-command").value = currentCliBaseCommand + (customCliArgs ? ` ${customCliArgs}` : "");
+}
 function optionalPositiveInt(id) {
   const raw = $(id).value;
   if (raw === "" || raw === null || raw === undefined) return undefined;
@@ -1905,6 +1951,9 @@ function gatherConfig() {
     optimizerArgs.push(`decouple=${isDecoupled ? "True" : "False"}`);
   }
   const config = {
+    ui_arguments: {
+      custom_cli_args: parseCliCustomArgsToml($("cfg-custom-cli-args-toml").value),
+    },
     training_arguments: {
       output_name: $("cfg-output-name").value,
       save_model_as: $("cfg-save-format").value,
@@ -2578,6 +2627,7 @@ async function saveJob() {
     method: "PUT",
     body: { config, dataset },
   });
+  await loadCliCommandPreview();
   // Save Prompts
   await savePrompts();
   // Update last saved state
@@ -2620,6 +2670,7 @@ function discardChanges() {
     () => {
       populateConfig(lastSavedConfig);
       populateDataset(lastSavedDataset);
+      updateCliCommandPreview();
       currentPrompts = JSON.parse(JSON.stringify(lastSavedPrompts));
       renderPrompts();
       isDirty = false;
@@ -5061,6 +5112,8 @@ async function init() {
   // Optimizer custom bindings
   $("cfg-optimizer").addEventListener("change", updateOptimizerOptions);
   $("cfg-lr-scheduler").addEventListener("change", updateLrSchedulerOptions);
+  $("cfg-custom-cli-args-toml").addEventListener("input", updateCliCommandPreview);
+  $("btn-refresh-cli-command").addEventListener("click", loadCliCommandPreview);
   // Activation offload <-> blocks to swap mutual exclusivity
   $("cfg-activation-offload").addEventListener(
     "change",
