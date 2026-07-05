@@ -2411,6 +2411,7 @@ async function runSubsetTagger(card, idx) {
   const button = card.querySelector(".btn-run-subset-tagger");
   const status = card.querySelector(".sub-tagger-status");
   const progress = card.querySelector(".sub-tagger-progress");
+  let latestError = "";
 
   if (!imageDir) {
     showToast("請先設定圖片資料夾", "danger");
@@ -2433,14 +2434,15 @@ async function runSubsetTagger(card, idx) {
     }
     if (event.type === "progress") {
       setProgress(event.current, event.total);
+      if (event.error) latestError = event.error;
       setStatus(
-        `${event.current}/${event.total} 成功 ${event.written} 失敗 ${event.failed}`,
+        `${event.current}/${event.total} 成功 ${event.written} 失敗 ${event.failed}${latestError ? `，最後錯誤：${latestError}` : ""}`,
       );
       return;
     }
     if (event.type === "done") {
       setProgress(event.total, event.total);
-      setStatus(`完成 ${event.written}/${event.total}，失敗 ${event.failed}`);
+      setStatus(`完成 ${event.written}/${event.total}，失敗 ${event.failed}${latestError ? `，最後錯誤：${latestError}` : ""}`);
       return;
     }
     if (event.type === "error") {

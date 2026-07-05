@@ -10,7 +10,7 @@ from typing import Any, BinaryIO, Callable, Dict, Iterable, Mapping, Optional, S
 import numpy as np
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError
-from PIL import Image
+from PIL import Image, ImageColor
 
 ImageTyping = Union[str, os.PathLike, bytes, bytearray, BinaryIO, Image.Image]
 
@@ -41,6 +41,21 @@ DEFAULT_REPO_ID = "Makki2104/animetimm/eva02_large_patch14_448.dbv4-full"
 DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 FMT_UNSET = object()
+_DLL_DIRECTORY_HANDLES = []
+
+
+@lru_cache(maxsize=1)
+def preload_torch_cuda_dlls() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import torch
+    except Exception:
+        return
+
+    torch_lib = Path(torch.__file__).resolve().parent / "lib"
+    if torch_lib.exists() and hasattr(os, "add_dll_directory"):
+        _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(torch_lib)))
 
 
 def remove_underline(tag: str) -> str:
@@ -196,6 +211,64 @@ class PillowCenterCrop:
         return image.crop((left, top, left + crop_w, top + crop_h))
 
 
+def _parse_size(size: Union[int, Sequence[int]]) -> Tuple[int, int]:
+    if isinstance(size, int):
+        return size, size
+    if isinstance(size, (list, tuple)) and len(size) == 2:
+        return int(size[0]), int(size[1])
+    raise TypeError("Size must be int or tuple/list of two ints")
+
+
+def _parse_color_to_rgba(color: Union[str, int, Sequence[int]]) -> Tuple[int, int, int, int]:
+    if isinstance(color, str):
+        rgba = ImageColor.getrgb(color)
+        return tuple([*rgba, *((255,) * (4 - len(rgba)))])
+    if isinstance(color, int):
+        return color, color, color, 255
+    if isinstance(color, (list, tuple)):
+        return tuple([*color, *((255,) * (4 - len(color)))])
+    raise TypeError(f"Invalid color type: {type(color)}")
+
+
+def _parse_color_to_mode(color: Union[str, int, Sequence[int]], mode: str) -> Any:
+    rgba = _parse_color_to_rgba(color)
+    if mode == "L":
+        return int(0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2])
+    if mode == "LA":
+        gray = int(0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2])
+        return gray, rgba[3]
+    if mode == "RGB":
+        return rgba[:3]
+    if mode == "RGBA":
+        return rgba
+    return rgba[:3] if len(mode) >= 3 else rgba[0]
+
+
+class PillowPadToSize:
+    def __init__(
+        self,
+        size: Union[int, Sequence[int]],
+        background_color: Union[str, int, Sequence[int]] = "white",
+        interpolation: str = "bilinear",
+    ):
+        self.size = _parse_size(size)
+        self.background_color = background_color
+        self.interpolation = PillowResize.RESAMPLE[str(interpolation).lower()]
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"pic should be PIL Image. Got {type(image)}")
+        target_w, target_h = self.size
+        original_w, original_h = image.size
+        ratio = min(target_w / original_w, target_h / original_h)
+        new_w = round(original_w * ratio)
+        new_h = round(original_h * ratio)
+        resized = image.resize((new_w, new_h), self.interpolation)
+        canvas = Image.new(image.mode, (target_w, target_h), _parse_color_to_mode(self.background_color, image.mode))
+        canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2))
+        return canvas
+
+
 class PillowToTensor:
     def __call__(self, image: Image.Image) -> np.ndarray:
         if image.mode == "I":
@@ -235,6 +308,7 @@ def create_pillow_transforms(config: Union[list, dict]) -> Any:
     creators = {
         "resize": lambda item: PillowResize(**item),
         "center_crop": lambda item: PillowCenterCrop(**item),
+        "pad_to_size": lambda item: PillowPadToSize(**item),
         "to_tensor": lambda item: PillowToTensor(),
         "maybe_to_tensor": lambda item: PillowMaybeToTensor(),
         "normalize": lambda item: PillowNormalize(**item),
@@ -251,6 +325,7 @@ def create_pillow_transforms(config: Union[list, dict]) -> Any:
 
 
 def get_onnx_provider(provider: Optional[str] = None) -> str:
+    preload_torch_cuda_dlls()
     import onnxruntime as ort
 
     aliases = {"gpu": "CUDAExecutionProvider", "trt": "TensorrtExecutionProvider"}
@@ -266,6 +341,7 @@ def get_onnx_provider(provider: Optional[str] = None) -> str:
 
 
 def open_onnx_model(path: str, provider: Optional[str] = None):
+    preload_torch_cuda_dlls()
     import onnxruntime as ort
 
     selected = get_onnx_provider(provider or os.environ.get("ONNX_MODE"))

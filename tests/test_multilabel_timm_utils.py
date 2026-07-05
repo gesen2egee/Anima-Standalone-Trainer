@@ -1,5 +1,7 @@
 import unittest
 
+from PIL import Image
+
 
 class MultilabelTimmUtilsTest(unittest.TestCase):
     def test_tags_to_text_matches_imgutils_spacing_without_escape(self):
@@ -46,6 +48,23 @@ class MultilabelTimmUtilsTest(unittest.TestCase):
             caption,
             "hu tao (genshin impact), sensitive, 1girl, long hair",
         )
+
+    def test_create_pillow_transforms_supports_pad_to_size(self):
+        from library.multilabel_timm import create_pillow_transforms
+
+        transform = create_pillow_transforms({
+            "type": "pad_to_size",
+            "size": [8, 8],
+            "background_color": "white",
+            "interpolation": "bilinear",
+        })
+
+        image = Image.new("RGB", (8, 4), (0, 0, 0))
+        padded = transform(image)
+
+        self.assertEqual(padded.size, (8, 8))
+        self.assertEqual(padded.getpixel((0, 0)), (255, 255, 255))
+        self.assertEqual(padded.getpixel((4, 4)), (0, 0, 0))
 
 
 if __name__ == "__main__":
