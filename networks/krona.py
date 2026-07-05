@@ -102,7 +102,7 @@ class KronaModule(torch.nn.Module):
         w2_init = kwargs.get("w2_init", "kaiming_uniform")
         if w2_init is not None:
             w2_init = str(w2_init).strip("'\"").lower()
-        cdka_alpha = kwargs.get("cdka_alpha", 16.0)
+        cdka_alpha = kwargs.get("cdka_alpha", None)
         if cdka_alpha is not None and str(cdka_alpha).lower() in ("none", "null", ""):
             cdka_alpha = None
 
