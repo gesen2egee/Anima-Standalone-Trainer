@@ -1,4 +1,7 @@
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest import mock
 
 from PIL import Image
 
@@ -65,6 +68,33 @@ class MultilabelTimmUtilsTest(unittest.TestCase):
         self.assertEqual(padded.size, (8, 8))
         self.assertEqual(padded.getpixel((0, 0)), (255, 255, 255))
         self.assertEqual(padded.getpixel((4, 4)), (0, 0, 0))
+
+    def test_main_unloads_models_after_caption_writer_finishes(self):
+        from library import multilabel_timm
+
+        with mock.patch.object(
+            multilabel_timm,
+            "write_captions_for_directory",
+            return_value={"total": 0, "written": 0, "failed": 0},
+        ), mock.patch.object(multilabel_timm, "unload_multilabel_timm_models") as unload:
+            with redirect_stdout(StringIO()):
+                exit_code = multilabel_timm.main(["--image-dir", "."])
+
+        self.assertEqual(exit_code, 0)
+        unload.assert_called_once()
+
+    def test_unload_clears_model_cache_and_instances(self):
+        from library import multilabel_timm
+
+        model = multilabel_timm._open_model_for_repo("owner/repo")
+        self.assertIs(multilabel_timm._open_model_for_repo("owner/repo"), model)
+        self.assertGreater(multilabel_timm._open_model_for_repo.cache_info().currsize, 0)
+        self.assertTrue(multilabel_timm._OPEN_MODEL_INSTANCES)
+
+        multilabel_timm.unload_multilabel_timm_models()
+
+        self.assertEqual(multilabel_timm._open_model_for_repo.cache_info().currsize, 0)
+        self.assertFalse(multilabel_timm._OPEN_MODEL_INSTANCES)
 
 
 if __name__ == "__main__":

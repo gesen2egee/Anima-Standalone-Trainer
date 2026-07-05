@@ -1,5 +1,6 @@
 import argparse
 import csv
+import gc
 import json
 import os
 import re
@@ -42,6 +43,7 @@ DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 FMT_UNSET = object()
 _DLL_DIRECTORY_HANDLES = []
+_OPEN_MODEL_INSTANCES: Dict[Tuple[str, Optional[str]], "MultiLabelTIMMModel"] = {}
 
 
 @lru_cache(maxsize=1)
@@ -378,6 +380,13 @@ class MultiLabelTIMMModel:
     def _get_hf_token(self) -> Optional[str]:
         return self.hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
+    def unload(self) -> None:
+        self._model = None
+        self._tags = None
+        self._preprocess = None
+        self._category_names = {}
+        self._default_category_thresholds = None
+
     def _open_model(self):
         if self._model is None:
             self._model = open_onnx_model(_hf_download(self.repo_id, "model.onnx", self._get_hf_token()))
@@ -491,7 +500,24 @@ def _resolve_threshold(category, category_name, indexed_rows, thresholds, use_ta
 
 @lru_cache(maxsize=4)
 def _open_model_for_repo(repo_id: str, hf_token: Optional[str] = None) -> MultiLabelTIMMModel:
-    return MultiLabelTIMMModel(repo_id=repo_id, hf_token=hf_token)
+    model = MultiLabelTIMMModel(repo_id=repo_id, hf_token=hf_token)
+    _OPEN_MODEL_INSTANCES[(repo_id, hf_token)] = model
+    return model
+
+
+def unload_multilabel_timm_models() -> None:
+    for model in list(_OPEN_MODEL_INSTANCES.values()):
+        model.unload()
+    _OPEN_MODEL_INSTANCES.clear()
+    _open_model_for_repo.cache_clear()
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
 
 
 def multilabel_timm_predict(
@@ -611,18 +637,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     def emit(event: Dict[str, Any]) -> None:
         print(json.dumps(event, ensure_ascii=False), flush=True)
 
-    result = write_captions_for_directory(
-        image_dir=args.image_dir,
-        caption_extension=args.caption_extension,
-        repo_id=args.repo_id,
-        thresholds={"general": args.general_threshold, "character": args.character_threshold},
-        include_char=args.include_char,
-        include_rating=args.include_rating,
-        include_general=args.include_general,
-        progress_callback=emit,
-    )
-    emit({"type": "done", **result})
-    return 0 if result["failed"] == 0 else 1
+    try:
+        result = write_captions_for_directory(
+            image_dir=args.image_dir,
+            caption_extension=args.caption_extension,
+            repo_id=args.repo_id,
+            thresholds={"general": args.general_threshold, "character": args.character_threshold},
+            include_char=args.include_char,
+            include_rating=args.include_rating,
+            include_general=args.include_general,
+            progress_callback=emit,
+        )
+        emit({"type": "done", **result})
+        return 0 if result["failed"] == 0 else 1
+    finally:
+        unload_multilabel_timm_models()
 
 
 if __name__ == "__main__":
