@@ -16,6 +16,7 @@ const DEFAULT_KEEP_TAGS = [
   "blending", ".*blur.*", ".*_profile", ".*cover", "multiple_.*", "ranguage",
   ".*_(medium)", "monochrome", "greyscale", "sketch",
 ].join(", ");
+const LAST_IMAGE_FOLDER_KEY = "anima_last_image_folder";
 let currentJob = null;
 let ws = null;
 let isDirty = false;
@@ -995,10 +996,18 @@ async function api(url, opts = {}) {
   }
   return res.json();
 }
-async function selectFolderPath() {
-  const result = await api("/api/system/select-folder", { method: "POST" });
+async function selectFolderPath(preferredFolder = "") {
+  const lastFolder = String(preferredFolder || localStorage.getItem(LAST_IMAGE_FOLDER_KEY) || "").trim();
+  const result = await api("/api/system/select-folder", {
+    method: "POST",
+    body: { initial_path: lastFolder },
+  });
   const selectedPath = (result.path || "").trim();
-  if (!selectedPath) showToast("沒有選到資料夾，請再試一次。", "warning");
+  if (!selectedPath) {
+    showToast("沒有選到資料夾，請再試一次。", "warning");
+    return "";
+  }
+  localStorage.setItem(LAST_IMAGE_FOLDER_KEY, selectedPath);
   return selectedPath;
 }
 async function inspectImageFolder(imageDir, captionExtension = ".txt") {
@@ -1052,7 +1061,7 @@ function updateNewJobImageDirStatus() {
   );
 }
 async function selectNewJobImageDir() {
-  const selected = await selectFolderPath();
+  const selected = await selectFolderPath($("new-job-image-dir").value.trim());
   if (!selected) return;
   $("new-job-image-dir").value = selected;
   await updateNewJobImageDirStatus();
@@ -1065,7 +1074,7 @@ function updateSubsetImageDirStatus(card, subset) {
   );
 }
 async function selectSubsetImageDir(card, subset) {
-  const selected = await selectFolderPath();
+  const selected = await selectFolderPath(subset.image_dir || "");
   if (!selected) return;
   subset.image_dir = selected;
   card.querySelector(".sub-image-dir").value = selected;

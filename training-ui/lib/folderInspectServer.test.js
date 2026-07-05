@@ -28,8 +28,12 @@ test("server can select and inspect image folders for caption coverage", () => {
   assert.match(serverJs, /spawn\(/);
   assert.match(serverJs, /IFileOpenDialog/);
   assert.match(serverJs, /FOS_PICKFOLDERS/);
+  assert.match(serverJs, /SHCreateItemFromParsingName/);
+  assert.match(serverJs, /SetDefaultFolder/);
+  assert.match(serverJs, /Console\]::WriteLine/);
   assert.doesNotMatch(serverJs, /FolderBrowserDialog/);
   assert.doesNotMatch(pickerBlock, /execFileSync/);
+  assert.match(selectBlock, /initial_path/);
   assert.match(selectBlock, /selectFolderDialog\(/);
   assert.match(selectBlock, /await selectFolderDialog\(/);
   assert.match(inspectBlock, /inspectImageFolder\(/);

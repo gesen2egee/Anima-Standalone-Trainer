@@ -26,9 +26,15 @@ test("new job and dataset image folders expose picker buttons and caption status
 test("folder selection updates image dir fields and immediately checks captions", () => {
   const appJs = read("public/js/app.js");
 
-  assert.match(appJs, /async function selectFolderPath\(\)/);
+  assert.match(appJs, /async function selectFolderPath\([^)]*\)/);
+  assert.match(appJs, /LAST_IMAGE_FOLDER_KEY/);
+  assert.match(appJs, /localStorage\.getItem\(LAST_IMAGE_FOLDER_KEY\)/);
+  assert.match(appJs, /initial_path:\s*lastFolder/);
+  assert.match(appJs, /localStorage\.setItem\(LAST_IMAGE_FOLDER_KEY,\s*selectedPath\)/);
   assert.match(appJs, /showToast\("沒有選到資料夾，請再試一次。", "warning"\)/);
   assert.match(appJs, /btn-new-job-select-image-dir/);
+  assert.match(appJs, /selectFolderPath\(\$\("new-job-image-dir"\)\.value\.trim\(\)\)/);
+  assert.match(appJs, /selectFolderPath\(subset\.image_dir \|\| ""\)/);
   assert.match(appJs, /updateNewJobImageDirStatus/);
   assert.match(appJs, /selectSubsetImageDir/);
   assert.match(appJs, /updateSubsetImageDirStatus/);

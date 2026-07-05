@@ -240,12 +240,13 @@ function inspectImageFolder(folderPath, captionExtension = '.txt') {
     return result;
 }
 
-function selectFolderDialog() {
+function selectFolderDialog(initialPath = '') {
     return new Promise((resolve, reject) => {
         if (!isWindows && !isWSL) return resolve('');
         const command = String.raw`
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $OutputEncoding = [Console]::OutputEncoding
+$initialPath = [Environment]::GetEnvironmentVariable("ANIMA_INITIAL_FOLDER")
 $code = @'
 using System;
 using System.Runtime.InteropServices;
@@ -305,13 +306,39 @@ public class CommonFolderPicker
     const uint FOS_PATHMUSTEXIST = 0x00000800;
     const uint SIGDN_FILESYSPATH = 0x80058000;
 
-    public static string Pick()
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
+        IntPtr pbc,
+        ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+
+    static void ApplyInitialFolder(IFileOpenDialog dialog, string initialPath)
+    {
+        if (String.IsNullOrWhiteSpace(initialPath) || !System.IO.Directory.Exists(initialPath)) return;
+
+        try
+        {
+            Guid shellItemGuid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
+            IShellItem folder;
+            SHCreateItemFromParsingName(initialPath, IntPtr.Zero, ref shellItemGuid, out folder);
+            dialog.SetDefaultFolder(folder);
+            dialog.SetFolder(folder);
+        }
+        catch
+        {
+            // Ignore invalid or unavailable initial folders and let the dialog choose its default.
+        }
+    }
+
+    public static string Pick(string initialPath)
     {
         IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialog();
         uint options;
         dialog.GetOptions(out options);
         dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST);
         dialog.SetTitle("Select image folder");
+        ApplyInitialFolder(dialog, initialPath);
         int hr = dialog.Show(IntPtr.Zero);
         if (hr != 0) return "";
 
@@ -326,12 +353,19 @@ public class CommonFolderPicker
 }
 '@
 Add-Type -TypeDefinition $code
-[CommonFolderPicker]::Pick()
+$selected = [CommonFolderPicker]::Pick($initialPath)
+if (-not [string]::IsNullOrWhiteSpace($selected)) {
+    [Console]::WriteLine($selected)
+}
 `;
         const exe = 'powershell.exe';
         const child = spawn(exe, ['-NoProfile', '-STA', '-Command', command], {
             windowsHide: false,
-            stdio: ['ignore', 'pipe', 'pipe']
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+                ...process.env,
+                ANIMA_INITIAL_FOLDER: String(initialPath || '').trim()
+            }
         });
         let stdout = '';
         let stderr = '';
@@ -2340,7 +2374,7 @@ app.post('/api/system/open-folder', (req, res) => {
 
 app.post('/api/system/select-folder', async (req, res) => {
     try {
-        const selectedPath = await selectFolderDialog();
+        const selectedPath = await selectFolderDialog(req.body?.initial_path || '');
         res.json({ path: selectedPath || '' });
     } catch (err) {
         res.status(500).json({ error: err.message });
