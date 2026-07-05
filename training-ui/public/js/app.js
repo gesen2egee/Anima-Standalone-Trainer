@@ -2463,7 +2463,7 @@ async function runSubsetTagger(card, idx) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_dir: imageDir,
-          caption_extension,
+          caption_extension: captionExtension,
           include_char: includeChar,
           include_rating: includeRating,
           include_general: includeGeneral,

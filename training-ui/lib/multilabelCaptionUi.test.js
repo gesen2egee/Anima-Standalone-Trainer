@@ -38,4 +38,8 @@ test("dataset tagger button calls multilabel caption API", () => {
   assert.match(appJs, /include_char/);
   assert.match(appJs, /include_rating/);
   assert.match(appJs, /include_general/);
+  assert.match(appJs, /caption_extension:\s*captionExtension/);
+  assert.match(appJs, /include_char:\s*includeChar/);
+  assert.match(appJs, /include_rating:\s*includeRating/);
+  assert.match(appJs, /include_general:\s*includeGeneral/);
 });
