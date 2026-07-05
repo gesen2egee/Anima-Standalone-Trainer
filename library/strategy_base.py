@@ -7,6 +7,7 @@ from typing import Any, List, Optional, Tuple, Union, Callable
 import numpy as np
 import torch
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection
+from library.automask import AutomaskSettings, alpha_mask_from_uint8, alpha_mask_to_uint8, metadata_matches
 
 
 # TODO remove circular import by moving ImageInfo to a separate file
@@ -470,6 +471,14 @@ class LatentsCachingStrategy:
                 return False
             if apply_alpha_mask and ("alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz):
                 return False
+            from library import train_util
+
+            automask_settings = train_util.get_automask_settings_for_caching()
+            if automask_settings.enabled:
+                if "alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz:
+                    return False
+                if not metadata_matches(npz, automask_settings):
+                    return False
         except Exception as e:
             logger.error(f"Error loading file: {npz_path}")
             raise e
@@ -534,7 +543,14 @@ class LatentsCachingStrategy:
 
             if self.cache_to_disk:
                 self.save_latents_to_disk(
-                    info.latents_npz, latents, original_size, crop_ltrb, flipped_latent, alpha_mask, key_reso_suffix
+                    info.latents_npz,
+                    latents,
+                    original_size,
+                    crop_ltrb,
+                    flipped_latent,
+                    alpha_mask,
+                    key_reso_suffix,
+                    automask_settings=train_util.get_automask_settings_for_caching(),
                 )
             else:
                 info.latents_original_size = original_size
@@ -607,6 +623,8 @@ class LatentsCachingStrategy:
         crop_ltrb = npz["crop_ltrb" + key_reso_suffix].tolist()
         flipped_latents = npz["latents_flipped" + key_reso_suffix] if "latents_flipped" + key_reso_suffix in npz else None
         alpha_mask = npz["alpha_mask" + key_reso_suffix] if "alpha_mask" + key_reso_suffix in npz else None
+        if alpha_mask is not None:
+            alpha_mask = alpha_mask_from_uint8(alpha_mask)
         return latents, original_size, crop_ltrb, flipped_latents, alpha_mask
 
     def save_latents_to_disk(
@@ -618,6 +636,7 @@ class LatentsCachingStrategy:
         flipped_latents_tensor=None,
         alpha_mask=None,
         key_reso_suffix="",
+        automask_settings: AutomaskSettings | None = None,
     ):
         """
         Args:
@@ -641,11 +660,26 @@ class LatentsCachingStrategy:
                 kwargs[key] = npz[key]
 
         # TODO float() is needed if vae is in bfloat16. Remove it if vae is float16.
-        kwargs["latents" + key_reso_suffix] = latents_tensor.float().cpu().numpy()
+        if isinstance(latents_tensor, torch.Tensor):
+            kwargs["latents" + key_reso_suffix] = latents_tensor.float().cpu().numpy()
+        else:
+            kwargs["latents" + key_reso_suffix] = np.asarray(latents_tensor, dtype=np.float32)
         kwargs["original_size" + key_reso_suffix] = np.array(original_size)
         kwargs["crop_ltrb" + key_reso_suffix] = np.array(crop_ltrb)
         if flipped_latents_tensor is not None:
-            kwargs["latents_flipped" + key_reso_suffix] = flipped_latents_tensor.float().cpu().numpy()
+            if isinstance(flipped_latents_tensor, torch.Tensor):
+                kwargs["latents_flipped" + key_reso_suffix] = flipped_latents_tensor.float().cpu().numpy()
+            else:
+                kwargs["latents_flipped" + key_reso_suffix] = np.asarray(flipped_latents_tensor, dtype=np.float32)
+        automask_settings = (automask_settings or AutomaskSettings()).normalized()
         if alpha_mask is not None:
-            kwargs["alpha_mask" + key_reso_suffix] = alpha_mask.float().cpu().numpy()
+            if automask_settings.enabled:
+                kwargs["alpha_mask" + key_reso_suffix] = alpha_mask_to_uint8(alpha_mask)
+                for key, value in automask_settings.to_metadata().items():
+                    kwargs[key] = np.array(value)
+            else:
+                if isinstance(alpha_mask, torch.Tensor):
+                    kwargs["alpha_mask" + key_reso_suffix] = alpha_mask.float().cpu().numpy()
+                else:
+                    kwargs["alpha_mask" + key_reso_suffix] = np.asarray(alpha_mask, dtype=np.float32)
         np.savez(npz_path, **kwargs)

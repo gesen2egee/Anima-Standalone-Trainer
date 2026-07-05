@@ -139,6 +139,15 @@ const UI_TRANSLATIONS = {
   "Gradient Accumulation": { "zh-TW": "Gradient Accumulation", "zh-CN": "Gradient Accumulation" },
   "Caption Extension": { "zh-TW": "Caption 副檔名", "zh-CN": "Caption 扩展名" },
   "Alpha Mask": { "zh-TW": "Alpha Mask", "zh-CN": "Alpha Mask" },
+  "Automask": { "zh-TW": "Automask", "zh-CN": "Automask" },
+  "Generate an alpha mask during latent caching with remove background. Source images are not changed.": {
+    "zh-TW": "在 cache latents 時用 remove background 產生 alpha mask，不會修改原圖。",
+    "zh-CN": "在 cache latents 时用 remove background 生成 alpha mask，不会修改原图。",
+  },
+  "Mask Alpha": { "zh-TW": "Mask 透明度", "zh-CN": "Mask 透明度" },
+  "Mask Shrink": { "zh-TW": "Mask 內縮", "zh-CN": "Mask 内缩" },
+  "Mask Blur": { "zh-TW": "Mask 模糊", "zh-CN": "Mask 模糊" },
+  "Mask Model": { "zh-TW": "Mask 模型", "zh-CN": "Mask 模型" },
   "Enable Aspect Ratio Bucketing": { "zh-TW": "啟用長寬比分桶", "zh-CN": "启用宽高比分桶" },
   "Do Not Upscale": { "zh-TW": "不要放大圖片", "zh-CN": "不要放大图片" },
   "Images": { "zh-TW": "圖片", "zh-CN": "图片" },
@@ -1586,6 +1595,12 @@ function populateConfig(config) {
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
+  $("cfg-automask").checked = t.automask ?? false;
+  $("cfg-automask-alpha").value = t.automask_alpha ?? 128;
+  $("cfg-automask-shrink").value = t.automask_shrink ?? 1;
+  $("cfg-automask-blur").value = t.automask_blur ?? 3;
+  $("cfg-automask-model").value = t.automask_model || "base-nightly";
+  updateAutomaskUI();
   $("cfg-masked-loss-random").checked =
     t.masked_loss_random_strength !== undefined && t.masked_loss_random_strength !== null;
   $("cfg-disable-bucket-shuffle").checked = t.disable_bucket_shuffle ?? false;
@@ -1846,6 +1861,9 @@ function updateActivationOffloadUI() {
     $("cfg-gradient-checkpointing").checked = true;
   }
 }
+function updateAutomaskUI() {
+  $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked);
+}
 // Helpers for safe parsing
 function safeInt(val, fallback = 0) {
   if (val === "" || val === null || val === undefined) return fallback;
@@ -1974,6 +1992,11 @@ function gatherConfig() {
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
       cache_text_encoder_outputs_to_disk: $("cfg-cache-te").checked,
+      automask: $("cfg-automask").checked,
+      automask_alpha: safeInt($("cfg-automask-alpha").value, 128),
+      automask_shrink: safeInt($("cfg-automask-shrink").value, 1),
+      automask_blur: safeFloat($("cfg-automask-blur").value, 3),
+      automask_model: $("cfg-automask-model").value.trim() || "base-nightly",
       masked_loss_random_strength: $("cfg-masked-loss-random").checked ? 0.0 : undefined,
       ...($("cfg-disable-bucket-shuffle").checked && {
         disable_bucket_shuffle: true,
@@ -2168,7 +2191,7 @@ function gatherDataset() {
               fad_curriculum: s.fad_curriculum,
             };
             if (s.is_reg) subset.is_reg = true;
-            if ($("cfg-alpha-mask").checked) subset.alpha_mask = true;
+            if ($("cfg-alpha-mask").checked || $("cfg-automask").checked) subset.alpha_mask = true;
             return subset;
           }),
         };
@@ -4119,6 +4142,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 $("cfg-enable-sampling").addEventListener("change", (e) => {
   $("group-sample-every").classList.toggle("hidden", !e.target.checked);
 });
+$("cfg-automask").addEventListener("change", updateAutomaskUI);
 document.querySelectorAll('input[name="duration-unit"]').forEach((el) => {
   el.addEventListener("change", updateDurationUnit);
 });

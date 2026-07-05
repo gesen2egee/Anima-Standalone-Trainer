@@ -25,6 +25,11 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.training_arguments.loss_type, "wavelet");
   assert.strictEqual(config.training_arguments.pnp_loss_weight, 0.000001);
   assert.strictEqual(config.training_arguments.cache_latents_to_disk, false);
+  assert.strictEqual(config.training_arguments.automask, false);
+  assert.strictEqual(config.training_arguments.automask_alpha, 128);
+  assert.strictEqual(config.training_arguments.automask_shrink, 1);
+  assert.strictEqual(config.training_arguments.automask_blur, 3);
+  assert.strictEqual(config.training_arguments.automask_model, "base-nightly");
   assert.strictEqual(config.network_arguments.network_module, "networks.cdka");
   assert.deepStrictEqual(config.network_arguments.network_args, [
     'exclude_patterns=[".*"]',

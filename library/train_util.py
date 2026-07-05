@@ -70,6 +70,12 @@ import cv2
 import safetensors.torch
 from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
+from library.automask import (
+    AutomaskSettings,
+    alpha_mask_from_uint8,
+    fill_transparent_rgb_with_white,
+    generate_automask_alpha,
+)
 import library.model_util as model_util
 import library.huggingface_util as huggingface_util
 import library.sai_model_spec as sai_model_spec
@@ -85,6 +91,9 @@ logger = logging.getLogger(__name__)
 from library.original_unet import UNet2DConditionModel
 
 HIGH_VRAM = False
+AUTOMASK_SETTINGS = AutomaskSettings()
+AUTOMASK_REMOVER = None
+AUTOMASK_REMOVER_MODEL = None
 
 # checkpointファイル名
 EPOCH_STATE_NAME = "{}-{:06d}-state"
@@ -98,6 +107,40 @@ DEFAULT_STEP_NAME = "at"
 STEP_STATE_NAME = "{}-step{:08d}-state"
 STEP_FILE_NAME = "{}-step{:08d}"
 STEP_DIFFUSERS_DIR_NAME = "{}-step{:08d}"
+
+
+def set_automask_settings_for_caching(settings: AutomaskSettings, remover=None):
+    global AUTOMASK_SETTINGS, AUTOMASK_REMOVER, AUTOMASK_REMOVER_MODEL
+    AUTOMASK_SETTINGS = (settings or AutomaskSettings()).normalized()
+    AUTOMASK_REMOVER = remover
+    AUTOMASK_REMOVER_MODEL = AUTOMASK_SETTINGS.model if remover is not None else None
+
+
+def get_automask_settings_for_caching() -> AutomaskSettings:
+    return AUTOMASK_SETTINGS
+
+
+def configure_automask_from_args(args: argparse.Namespace):
+    settings = AutomaskSettings(
+        enabled=bool(getattr(args, "automask", False)),
+        alpha=int(getattr(args, "automask_alpha", 128)),
+        shrink=int(getattr(args, "automask_shrink", 1)),
+        blur=float(getattr(args, "automask_blur", 3.0)),
+        model=str(getattr(args, "automask_model", "base-nightly") or "base-nightly"),
+    )
+    set_automask_settings_for_caching(settings)
+
+
+def _get_automask_remover(settings: AutomaskSettings):
+    global AUTOMASK_REMOVER, AUTOMASK_REMOVER_MODEL
+    if AUTOMASK_REMOVER is not None and AUTOMASK_REMOVER_MODEL == settings.model:
+        return AUTOMASK_REMOVER
+
+    from transparent_background import Remover
+
+    AUTOMASK_REMOVER = Remover(mode=settings.model)
+    AUTOMASK_REMOVER_MODEL = settings.model
+    return AUTOMASK_REMOVER
 
 # region dataset
 
@@ -3432,8 +3475,11 @@ def load_images_and_masks_for_caching(
     alpha_masks: List[np.ndarray] = []
     original_sizes: List[Tuple[int, int]] = []
     crop_ltrbs: List[Tuple[int, int, int, int]] = []
+    automask_settings = get_automask_settings_for_caching()
+    use_automask = bool(automask_settings.enabled)
+    load_with_alpha = bool(use_alpha_mask or use_automask)
     for info in image_infos:
-        image = load_image(info.absolute_path, use_alpha_mask) if info.image is None else np.array(info.image, np.uint8)
+        image = load_image(info.absolute_path, load_with_alpha) if info.image is None else np.array(info.image, np.uint8)
         # TODO 画像のメタデータが壊れていて、メタデータから割り当てたbucketと実際の画像サイズが一致しない場合があるのでチェック追加要
         image, original_size, crop_ltrb = trim_and_resize_if_required(
             random_crop, image, info.bucket_reso, info.resized_size, resize_interpolation=info.resize_interpolation
@@ -3442,7 +3488,16 @@ def load_images_and_masks_for_caching(
         original_sizes.append(original_size)
         crop_ltrbs.append(crop_ltrb)
 
-        if use_alpha_mask:
+        if use_automask:
+            filled = fill_transparent_rgb_with_white(Image.fromarray(image))
+            alpha_image = generate_automask_alpha(
+                filled,
+                remover=_get_automask_remover(automask_settings),
+                settings=automask_settings,
+            )
+            image = np.array(filled, dtype=np.uint8)
+            alpha_mask = torch.FloatTensor(alpha_mask_from_uint8(np.array(alpha_image, dtype=np.uint8)))
+        elif use_alpha_mask:
             if image.shape[2] == 4:
                 alpha_mask = image[:, :, 3]  # [H,W]
                 alpha_mask = alpha_mask.astype(np.float32) / 255.0
@@ -3475,8 +3530,11 @@ def cache_batch_latents(
     """
     images = []
     alpha_masks: List[np.ndarray] = []
+    automask_settings = get_automask_settings_for_caching()
+    use_automask = bool(automask_settings.enabled)
+    load_with_alpha = bool(use_alpha_mask or use_automask)
     for info in image_infos:
-        image = load_image(info.absolute_path, use_alpha_mask) if info.image is None else np.array(info.image, np.uint8)
+        image = load_image(info.absolute_path, load_with_alpha) if info.image is None else np.array(info.image, np.uint8)
         # TODO 画像のメタデータが壊れていて、メタデータから割り当てたbucketと実際の画像サイズが一致しない場合があるのでチェック追加要
         image, original_size, crop_ltrb = trim_and_resize_if_required(
             random_crop, image, info.bucket_reso, info.resized_size, resize_interpolation=info.resize_interpolation
@@ -3485,7 +3543,16 @@ def cache_batch_latents(
         info.latents_original_size = original_size
         info.latents_crop_ltrb = crop_ltrb
 
-        if use_alpha_mask:
+        if use_automask:
+            filled = fill_transparent_rgb_with_white(Image.fromarray(image))
+            alpha_image = generate_automask_alpha(
+                filled,
+                remover=_get_automask_remover(automask_settings),
+                settings=automask_settings,
+            )
+            image = np.array(filled, dtype=np.uint8)
+            alpha_mask = torch.FloatTensor(alpha_mask_from_uint8(np.array(alpha_image, dtype=np.uint8)))
+        elif use_alpha_mask:
             if image.shape[2] == 4:
                 alpha_mask = image[:, :, 3]  # [H,W]
                 alpha_mask = alpha_mask.astype(np.float32) / 255.0
@@ -4689,6 +4756,35 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         action="store_true",
         help="disable low VRAM optimization. e.g. do not clear CUDA cache after each latent caching (for machines which have bigger VRAM) "
         + "/ VRAMが少ない環境向け最適化を無効にする。たとえば各latentのキャッシュ後のCUDAキャッシュクリアを行わない等（VRAMが多い環境向け）",
+    )
+    parser.add_argument(
+        "--automask",
+        action="store_true",
+        help="generate alpha masks during latent caching using transparent-background without modifying source images",
+    )
+    parser.add_argument(
+        "--automask_alpha",
+        type=int,
+        default=128,
+        help="minimum alpha value for automask background areas, 1-255",
+    )
+    parser.add_argument(
+        "--automask_shrink",
+        type=int,
+        default=1,
+        help="automask edge shrink pixels before blur",
+    )
+    parser.add_argument(
+        "--automask_blur",
+        type=float,
+        default=3.0,
+        help="automask Gaussian blur radius",
+    )
+    parser.add_argument(
+        "--automask_model",
+        type=str,
+        default="base-nightly",
+        help="transparent-background Remover mode for automask",
     )
 
     parser.add_argument(
@@ -6011,6 +6107,9 @@ def get_scheduler_fix(args, optimizer: Optimizer, num_processes: int):
 
 
 def prepare_dataset_args(args: argparse.Namespace, support_metadata: bool):
+    if hasattr(args, "automask"):
+        configure_automask_from_args(args)
+
     # backward compatibility
     if args.caption_extention is not None:
         args.caption_extension = args.caption_extention
