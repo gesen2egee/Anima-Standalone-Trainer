@@ -18,14 +18,16 @@ test("default config template follows my_job_v1 training and network defaults", 
   const config = parseTemplate("templates/config_template.toml");
 
   assert.strictEqual(config.training_arguments.learning_rate, 0.0001);
-  assert.strictEqual(config.training_arguments.lr_scheduler, "cosine");
+  assert.strictEqual(config.training_arguments.lr_scheduler, "warmup_stable_decay");
+  assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0.1);
+  assert.strictEqual(config.training_arguments.lr_decay_steps, 0);
   assert.strictEqual(config.training_arguments.train_batch_size, 2);
   assert.strictEqual(config.training_arguments.knn_noise_k, 64);
   assert.strictEqual(config.training_arguments.cep_noise, 0.01);
   assert.strictEqual(config.training_arguments.loss_type, "wavelet");
   assert.strictEqual(config.training_arguments.pnp_loss_weight, 0.000001);
-  assert.strictEqual(config.training_arguments.cache_latents_to_disk, false);
-  assert.strictEqual(config.training_arguments.automask, false);
+  assert.strictEqual(config.training_arguments.cache_latents_to_disk, true);
+  assert.strictEqual(config.training_arguments.automask, true);
   assert.strictEqual(config.training_arguments.automask_alpha, 128);
   assert.strictEqual(config.training_arguments.automask_shrink, 1);
   assert.strictEqual(config.training_arguments.automask_blur, 3);
@@ -38,6 +40,7 @@ test("default config template follows my_job_v1 training and network defaults", 
     "allora=True",
   ]);
   assert.strictEqual(config.anima_arguments.timestep_sampling, "uniform");
+  assert.strictEqual(config.anima_arguments.differential_guidance_scale, 3);
   assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0);
 });
 
@@ -51,8 +54,8 @@ test("default dataset template follows my_job_v1 dataset defaults", () => {
   assert.deepStrictEqual(firstDataset.resolution, [768, 768]);
   assert.strictEqual(firstDataset.batch_size, 2);
   assert.strictEqual(firstDataset.fad_curriculum_start, 0.05);
-  assert.strictEqual(firstDataset.fad_curriculum_end, 0.4);
-  assert.strictEqual(firstSubset.keep_tokens, 2);
+  assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
+  assert.strictEqual(firstSubset.keep_tokens, 1);
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
   assert.strictEqual(firstSubset.caption_tag_dropout_rate, 0);

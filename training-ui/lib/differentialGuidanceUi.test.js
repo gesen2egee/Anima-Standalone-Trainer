@@ -17,5 +17,5 @@ test("UI loads and saves Differential Guidance scale", () => {
 
 test("default training template contains Differential Guidance default", () => {
   const template = read("templates/config_template.toml");
-  assert.match(template, /differential_guidance_scale = 1/);
+  assert.match(template, /differential_guidance_scale = 3/);
 });
