@@ -1,0 +1,553 @@
+import argparse
+import csv
+import json
+import os
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, BinaryIO, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Union
+
+import numpy as np
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
+from PIL import Image
+
+ImageTyping = Union[str, os.PathLike, bytes, bytearray, BinaryIO, Image.Image]
+
+RE_SPECIAL = re.compile(r"([\\()])")
+KAOMOJIS = {
+    "0_0",
+    "(o)_(o)",
+    "+_+",
+    "+_-",
+    "._.",
+    "<o>_<o>",
+    "<|>_<|>",
+    "=_=",
+    ">_<",
+    "3_3",
+    "6_9",
+    ">_o",
+    "@_@",
+    "^_^",
+    "o_o",
+    "u_u",
+    "x_x",
+    "|_|",
+    "||_||",
+}
+
+DEFAULT_REPO_ID = "Makki2104/animetimm/eva02_large_patch14_448.dbv4-full"
+DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+FMT_UNSET = object()
+
+
+def remove_underline(tag: str) -> str:
+    tag = tag.strip()
+    return tag if tag in KAOMOJIS else tag.replace("_", " ")
+
+
+def tags_to_text(
+    tags: Mapping[str, float],
+    use_spaces: bool = False,
+    use_escape: bool = True,
+    include_score: bool = False,
+    score_descend: bool = True,
+) -> str:
+    text_items = []
+    tags_pairs = tags.items()
+    if score_descend:
+        tags_pairs = sorted(tags_pairs, key=lambda x: (-x[1], x[0]))
+    for tag, score in tags_pairs:
+        text = remove_underline(tag) if use_spaces else tag
+        if use_escape:
+            text = re.sub(RE_SPECIAL, r"\\\1", text)
+        if include_score:
+            text = f"({text}:{score:.3f})"
+        text_items.append(text)
+    return ", ".join(text_items)
+
+
+def split_hf_repo_id(repo_id: str) -> Tuple[str, Optional[str]]:
+    parts = repo_id.split("/")
+    if len(parts) > 2:
+        return "/".join(parts[:2]), "/".join(parts[2:])
+    return repo_id, None
+
+
+def _hf_download(repo_id: str, filename: str, token: Optional[str] = None) -> str:
+    base_repo_id, subfolder = split_hf_repo_id(repo_id)
+    return hf_hub_download(
+        repo_id=base_repo_id,
+        repo_type="model",
+        filename=filename,
+        subfolder=subfolder,
+        token=token,
+    )
+
+
+def _has_alpha_channel(image: Image.Image) -> bool:
+    if image.mode in ("RGBA", "LA", "PA"):
+        return True
+    if getattr(image, "palette", None):
+        try:
+            image.palette.getcolor((0, 0, 0, 0))
+            return True
+        except ValueError:
+            pass
+    return "transparency" in image.info
+
+
+def load_image(image: ImageTyping, mode: Optional[str] = None, force_background: Optional[str] = "white") -> Image.Image:
+    if isinstance(image, (str, os.PathLike, bytes, bytearray)) or hasattr(image, "read"):
+        image = Image.open(image)
+    elif isinstance(image, Image.Image):
+        pass
+    else:
+        raise TypeError(f"Unknown image type - {image!r}.")
+
+    if _has_alpha_channel(image) and force_background is not None:
+        image = image.convert("RGBA")
+        background = Image.new("RGBA", image.size, force_background)
+        background.paste(image, (0, 0), mask=image.getchannel("A"))
+        image = background.convert("RGB")
+    if mode is not None and image.mode != mode:
+        image = image.convert(mode)
+    return image
+
+
+class PillowCompose:
+    def __init__(self, transforms: Sequence[Any]):
+        self.transforms = transforms
+
+    def __call__(self, image: Any) -> Any:
+        value = image
+        for transform in self.transforms:
+            value = transform(value)
+        return value
+
+
+class PillowResize:
+    RESAMPLE = {
+        "nearest": Image.NEAREST,
+        "bilinear": Image.BILINEAR,
+        "bicubic": Image.BICUBIC,
+        "box": Image.BOX,
+        "hamming": Image.HAMMING,
+        "lanczos": Image.LANCZOS,
+    }
+
+    def __init__(self, size: Union[int, Sequence[int]], interpolation: str = "bilinear", max_size: Optional[int] = None,
+                 antialias: bool = True):
+        self.size = size
+        self.interpolation = self.RESAMPLE[str(interpolation).lower()]
+        self.max_size = max_size
+        self.antialias = antialias
+
+    def _target_size(self, image: Image.Image) -> Tuple[int, int]:
+        width, height = image.size
+        if isinstance(self.size, int) or (isinstance(self.size, (list, tuple)) and len(self.size) == 1):
+            size = self.size if isinstance(self.size, int) else self.size[0]
+            if width < height:
+                out_w = size
+                out_h = int(size * height / width)
+            else:
+                out_h = size
+                out_w = int(size * width / height)
+            if self.max_size is not None and max(out_w, out_h) > self.max_size:
+                if out_h > out_w:
+                    out_w = int(self.max_size * out_w / out_h)
+                    out_h = self.max_size
+                else:
+                    out_h = int(self.max_size * out_h / out_w)
+                    out_w = self.max_size
+            return out_w, out_h
+        return int(self.size[1]), int(self.size[0])
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        target = self._target_size(image)
+        if target == image.size:
+            return image
+        if self.interpolation in {Image.BILINEAR, Image.BICUBIC}:
+            return image.resize(target, self.interpolation, reducing_gap=None if self.antialias else 1.0)
+        return image.resize(target, self.interpolation)
+
+
+class PillowCenterCrop:
+    def __init__(self, size: Union[int, Sequence[int]]):
+        if isinstance(size, int):
+            self.size = (size, size)
+        elif len(size) == 1:
+            self.size = (int(size[0]), int(size[0]))
+        else:
+            self.size = (int(size[0]), int(size[1]))
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        crop_h, crop_w = self.size
+        width, height = image.size
+        if width < crop_w or height < crop_h:
+            padded = Image.new(image.mode, (max(width, crop_w), max(height, crop_h)), (0, 0, 0))
+            padded.paste(image, ((padded.width - width) // 2, (padded.height - height) // 2))
+            image = padded
+            width, height = image.size
+        left = (width - crop_w) // 2
+        top = (height - crop_h) // 2
+        return image.crop((left, top, left + crop_w, top + crop_h))
+
+
+class PillowToTensor:
+    def __call__(self, image: Image.Image) -> np.ndarray:
+        if image.mode == "I":
+            return np.array(image, np.int32, copy=True)[None, ...]
+        if image.mode == "I;16":
+            return np.array(image, np.int16, copy=True)[None, ...]
+        if image.mode == "F":
+            return np.array(image, np.float32, copy=True)[None, ...]
+        array = np.array(image, copy=True)
+        if image.mode == "L":
+            return array.reshape((1,) + array.shape).astype(np.float32) / 255
+        if image.mode in ("RGB", "RGBA", "YCbCr", "CMYK"):
+            return array.transpose((2, 0, 1)).astype(np.float32) / 255
+        return array.astype(np.float32)[None, ...] / 255
+
+
+class PillowMaybeToTensor:
+    def __call__(self, image: Union[Image.Image, np.ndarray]) -> np.ndarray:
+        return image if isinstance(image, np.ndarray) else PillowToTensor()(image)
+
+
+class PillowNormalize:
+    def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]], inplace: bool = False):
+        self.mean = np.array(mean if isinstance(mean, (list, tuple)) else [mean], dtype=np.float32)
+        self.std = np.array(std if isinstance(std, (list, tuple)) else [std], dtype=np.float32)
+        self.inplace = inplace
+
+    def __call__(self, array: np.ndarray) -> np.ndarray:
+        if not self.inplace:
+            array = array.copy()
+        array -= self.mean.reshape(-1, 1, 1)
+        array /= self.std.reshape(-1, 1, 1)
+        return array
+
+
+def create_pillow_transforms(config: Union[list, dict]) -> Any:
+    creators = {
+        "resize": lambda item: PillowResize(**item),
+        "center_crop": lambda item: PillowCenterCrop(**item),
+        "to_tensor": lambda item: PillowToTensor(),
+        "maybe_to_tensor": lambda item: PillowMaybeToTensor(),
+        "normalize": lambda item: PillowNormalize(**item),
+    }
+    if isinstance(config, list):
+        return PillowCompose([create_pillow_transforms(item) for item in config])
+    if isinstance(config, dict):
+        item = dict(config)
+        transform_type = item.pop("type")
+        if transform_type not in creators:
+            raise ValueError(f"Unsupported transform type: {transform_type}")
+        return creators[transform_type](item)
+    raise TypeError(f"Unknown transform config: {config!r}")
+
+
+def get_onnx_provider(provider: Optional[str] = None) -> str:
+    import onnxruntime as ort
+
+    aliases = {"gpu": "CUDAExecutionProvider", "trt": "TensorrtExecutionProvider"}
+    if provider:
+        provider = aliases.get(provider.lower(), provider)
+        for available in ort.get_available_providers():
+            if provider.lower() == available.lower() or f"{provider}ExecutionProvider".lower() == available.lower():
+                return available
+        raise ValueError(f"Unsupported ONNX provider {provider!r}; available: {ort.get_available_providers()!r}")
+    if "CUDAExecutionProvider" in ort.get_available_providers():
+        return "CUDAExecutionProvider"
+    return "CPUExecutionProvider"
+
+
+def open_onnx_model(path: str, provider: Optional[str] = None):
+    import onnxruntime as ort
+
+    selected = get_onnx_provider(provider or os.environ.get("ONNX_MODE"))
+    options = ort.SessionOptions()
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    providers = [selected]
+    if selected != "CPUExecutionProvider":
+        providers.append("CPUExecutionProvider")
+    return ort.InferenceSession(path, options, providers=providers)
+
+
+def vreplace(value: Any, mapping: Mapping[Any, Any]) -> Any:
+    if isinstance(value, (list, tuple)):
+        return type(value)([vreplace(item, mapping) for item in value])
+    if isinstance(value, dict):
+        return type(value)({key: vreplace(item, mapping) for key, item in value.items()})
+    try:
+        hash(value)
+    except TypeError:
+        return value
+    return mapping.get(value, value)
+
+
+class MultiLabelTIMMModel:
+    def __init__(self, repo_id: str, hf_token: Optional[str] = None):
+        self.repo_id = repo_id
+        self.hf_token = hf_token
+        self._model = None
+        self._tags = None
+        self._preprocess = None
+        self._category_names: Dict[Any, str] = {}
+        self._default_category_thresholds = None
+
+    def _get_hf_token(self) -> Optional[str]:
+        return self.hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+
+    def _open_model(self):
+        if self._model is None:
+            self._model = open_onnx_model(_hf_download(self.repo_id, "model.onnx", self._get_hf_token()))
+        return self._model
+
+    def _open_tags(self):
+        if self._tags is None:
+            tags_path = _hf_download(self.repo_id, "selected_tags.csv", self._get_hf_token())
+            with open(tags_path, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            categories_path = _hf_download(self.repo_id, "categories.json", self._get_hf_token())
+            with open(categories_path, "r", encoding="utf-8") as f:
+                category_names = {item["category"]: item["name"] for item in json.load(f)}
+            for row in rows:
+                category = _coerce_category(row["category"])
+                row["category"] = category
+                if "best_threshold" in row and row["best_threshold"] != "":
+                    row["best_threshold"] = float(row["best_threshold"])
+                self._category_names[category] = category_names.get(category, category_names.get(str(category), str(category)))
+            self._tags = rows
+        return self._tags
+
+    def _open_preprocess(self):
+        if self._preprocess is None:
+            with open(_hf_download(self.repo_id, "preprocess.json", self._get_hf_token()), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._preprocess = create_pillow_transforms(data["val"]), create_pillow_transforms(data["test"])
+        return self._preprocess
+
+    def _open_default_category_thresholds(self):
+        if self._default_category_thresholds is None:
+            self._default_category_thresholds = {}
+            try:
+                threshold_path = _hf_download(self.repo_id, "thresholds.csv", self._get_hf_token())
+            except EntryNotFoundError:
+                return self._default_category_thresholds
+            with open(threshold_path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    self._default_category_thresholds[_coerce_category(row["category"])] = float(row["threshold"])
+        return self._default_category_thresholds
+
+    def _raw_predict(self, image: ImageTyping, preprocessor: str = "test") -> Dict[str, np.ndarray]:
+        image = load_image(image, force_background="white", mode="RGB")
+        model = self._open_model()
+        val_trans, test_trans = self._open_preprocess()
+        if preprocessor == "test":
+            transform = test_trans
+        elif preprocessor == "val":
+            transform = val_trans
+        else:
+            raise ValueError(f"Unknown preprocessor {preprocessor!r}; expected 'test' or 'val'.")
+        input_array = transform(image)[None, ...]
+        input_name = model.get_inputs()[0].name
+        output_names = [output.name for output in model.get_outputs()]
+        output_values = model.run(output_names, {input_name: input_array})
+        return {name: value[0] for name, value in zip(output_names, output_values)}
+
+    def predict(
+        self,
+        image: ImageTyping,
+        preprocessor: str = "test",
+        thresholds: Optional[Union[float, Mapping[Any, float]]] = None,
+        use_tag_thresholds: bool = True,
+        fmt: Any = FMT_UNSET,
+    ) -> Any:
+        rows = self._open_tags()
+        values = self._raw_predict(image, preprocessor=preprocessor)
+        prediction = values["prediction"]
+        if fmt is FMT_UNSET:
+            fmt = tuple(self._category_names[category] for category in sorted({row["category"] for row in rows}))
+        tag_values = {}
+        default_thresholds = self._open_default_category_thresholds()
+        for category in sorted({row["category"] for row in rows}):
+            category_name = self._category_names[category]
+            indexed_rows = [(index, row) for index, row in enumerate(rows) if row["category"] == category]
+            threshold = _resolve_threshold(category, category_name, indexed_rows, thresholds, use_tag_thresholds, default_thresholds)
+            category_tags = {}
+            for index, row in indexed_rows:
+                score = float(prediction[index])
+                row_threshold = threshold[index] if isinstance(threshold, dict) else threshold
+                if score >= row_threshold:
+                    category_tags[row["name"]] = score
+            values[category_name] = dict(sorted(category_tags.items(), key=lambda x: (-x[1], x[0])))
+            tag_values.update(values[category_name])
+        values["tag"] = tag_values
+        return vreplace(fmt, values)
+
+
+def _coerce_category(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _resolve_threshold(category, category_name, indexed_rows, thresholds, use_tag_thresholds, default_thresholds):
+    if isinstance(thresholds, (int, float)):
+        return float(thresholds)
+    if isinstance(thresholds, Mapping):
+        if category in thresholds:
+            return float(thresholds[category])
+        if category_name in thresholds:
+            return float(thresholds[category_name])
+    if use_tag_thresholds and any("best_threshold" in row for _, row in indexed_rows):
+        return {
+            index: float(row.get("best_threshold") or 0.4)
+            for index, row in indexed_rows
+        }
+    return float(default_thresholds.get(category, 0.4))
+
+
+@lru_cache(maxsize=4)
+def _open_model_for_repo(repo_id: str, hf_token: Optional[str] = None) -> MultiLabelTIMMModel:
+    return MultiLabelTIMMModel(repo_id=repo_id, hf_token=hf_token)
+
+
+def multilabel_timm_predict(
+    image: ImageTyping,
+    repo_id: str,
+    preprocessor: str = "test",
+    thresholds: Optional[Union[float, Mapping[Any, float]]] = None,
+    use_tag_thresholds: bool = True,
+    fmt: Any = FMT_UNSET,
+    hf_token: Optional[str] = None,
+) -> Any:
+    return _open_model_for_repo(repo_id, hf_token).predict(
+        image=image,
+        preprocessor=preprocessor,
+        thresholds=thresholds,
+        use_tag_thresholds=use_tag_thresholds,
+        fmt=fmt,
+    )
+
+
+multilabel_timm_predict_patched = multilabel_timm_predict
+
+
+def compose_caption_text(
+    rating: Mapping[str, float],
+    general: Mapping[str, float],
+    character: Mapping[str, float],
+    include_char: bool = True,
+    include_rating: bool = True,
+    include_general: bool = True,
+) -> str:
+    parts = []
+    if include_char and character:
+        parts.append(tags_to_text(character, use_spaces=True, use_escape=False))
+    if include_rating:
+        rating_value = max(rating, key=rating.get) if rating else "general"
+        parts.append(remove_underline(rating_value))
+    if include_general and general:
+        parts.append(tags_to_text(general, use_spaces=True, use_escape=False))
+    return ", ".join(part for part in parts if part)
+
+
+def iter_image_paths(image_dir: Union[str, os.PathLike]) -> Iterable[Path]:
+    root = Path(image_dir)
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            yield path
+
+
+def write_captions_for_directory(
+    image_dir: Union[str, os.PathLike],
+    caption_extension: str = ".txt",
+    repo_id: str = DEFAULT_REPO_ID,
+    thresholds: Optional[Mapping[str, float]] = None,
+    include_char: bool = True,
+    include_rating: bool = True,
+    include_general: bool = True,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, int]:
+    thresholds = thresholds or DEFAULT_THRESHOLDS
+    image_paths = list(iter_image_paths(image_dir))
+    written = 0
+    failed = 0
+    if progress_callback:
+        progress_callback({"type": "start", "total": len(image_paths), "written": written, "failed": failed})
+    for index, image_path in enumerate(image_paths, start=1):
+        error = None
+        try:
+            rating, general, character = multilabel_timm_predict(
+                image_path,
+                repo_id=repo_id,
+                thresholds=thresholds,
+                fmt=("rating", "general", "character"),
+            )
+            caption = compose_caption_text(
+                rating=rating,
+                general=general,
+                character=character,
+                include_char=include_char,
+                include_rating=include_rating,
+                include_general=include_general,
+            )
+            image_path.with_suffix(caption_extension).write_text(caption, encoding="utf-8")
+            written += 1
+        except Exception as exc:
+            failed += 1
+            error = str(exc)
+        if progress_callback:
+            progress_callback({
+                "type": "progress",
+                "current": index,
+                "total": len(image_paths),
+                "path": str(image_path),
+                "written": written,
+                "failed": failed,
+                "error": error,
+            })
+    return {"total": len(image_paths), "written": written, "failed": failed}
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image-dir", required=True)
+    parser.add_argument("--caption-extension", default=".txt")
+    parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
+    parser.add_argument("--general-threshold", type=float, default=0.25)
+    parser.add_argument("--character-threshold", type=float, default=0.85)
+    parser.add_argument("--include-char", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-rating", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-general", action=argparse.BooleanOptionalAction, default=True)
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+
+    def emit(event: Dict[str, Any]) -> None:
+        print(json.dumps(event, ensure_ascii=False), flush=True)
+
+    result = write_captions_for_directory(
+        image_dir=args.image_dir,
+        caption_extension=args.caption_extension,
+        repo_id=args.repo_id,
+        thresholds={"general": args.general_threshold, "character": args.character_threshold},
+        include_char=args.include_char,
+        include_rating=args.include_rating,
+        include_general=args.include_general,
+        progress_callback=emit,
+    )
+    emit({"type": "done", **result})
+    return 0 if result["failed"] == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

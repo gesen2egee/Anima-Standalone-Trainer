@@ -2205,6 +2205,7 @@ function renderSubsets() {
     const dirName = subset.image_dir
       ? subset.image_dir.split(/[\\/]/).pop()
       : "Empty Path";
+    const taggerCaptionExtension = escapeHtml($("cfg-caption-ext")?.value || ".txt");
     card.innerHTML = `
             <div class="prompt-card-header" style="justify-content: space-between; align-items: center; border-bottom: ${isCollapsed ? "none" : "1px solid var(--border)"}; padding-bottom: ${isCollapsed ? "0" : "8px"}; margin-bottom: ${isCollapsed ? "0" : "12px"};">
                 <div style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;" class="subset-toggle">
@@ -2236,6 +2237,21 @@ function renderSubsets() {
                 <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">Caption Prefix</label>
                     <input type="text" class="sub-caption-prefix" value="${escapeHtml(subset.caption_prefix)}" placeholder="e.g. A photo of,">
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label style="font-size: 0.8rem;">打標輸出成 Caption</label>
+                    <div class="form-row" style="align-items: flex-end; gap: 10px;">
+                        <div class="form-group" style="min-width: 120px;">
+                            <label style="font-size: 0.75rem;">Caption 副檔名</label>
+                            <input type="text" class="sub-tagger-caption-ext" value="${taggerCaptionExtension}" placeholder=".txt">
+                        </div>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-char" checked> CHAR</label>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-rating" checked> RATING</label>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-general" checked> GENERAL</label>
+                        <button type="button" class="btn btn-secondary btn-run-subset-tagger">打標輸出成 Caption</button>
+                    </div>
+                    <progress class="sub-tagger-progress" value="0" max="1" style="width: 100%; margin-top: 8px;"></progress>
+                    <small class="sub-tagger-status" style="display:block; font-size: 0.7rem; color: var(--text-muted);">CHAR, RATING, GENERAL</small>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">KEEP TAGS</label>
@@ -2350,6 +2366,9 @@ function renderSubsets() {
             showToast("Error: " + result.error);
           }
         });
+      card
+        .querySelector(".btn-run-subset-tagger")
+        .addEventListener("click", () => runSubsetTagger(card, idx));
     }
     if (!isLastOne) {
       card
@@ -2362,6 +2381,130 @@ function renderSubsets() {
     container.appendChild(card);
   });
   refreshI18n();
+}
+async function runSubsetTagger(card, idx) {
+  if (!currentJob) return;
+  const imageDir = card.querySelector(".sub-image-dir")?.value.trim() || "";
+  const captionExtension =
+    card.querySelector(".sub-tagger-caption-ext")?.value.trim() || ".txt";
+  const includeChar = !!card.querySelector(".sub-tagger-enable-char")?.checked;
+  const includeRating = !!card.querySelector(".sub-tagger-enable-rating")?.checked;
+  const includeGeneral = !!card.querySelector(".sub-tagger-enable-general")?.checked;
+  const button = card.querySelector(".btn-run-subset-tagger");
+  const status = card.querySelector(".sub-tagger-status");
+  const progress = card.querySelector(".sub-tagger-progress");
+
+  if (!imageDir) {
+    showToast("請先設定圖片資料夾", "danger");
+    return;
+  }
+
+  const setStatus = (text) => {
+    if (status) status.textContent = text;
+  };
+  const setProgress = (current, total) => {
+    if (!progress) return;
+    progress.max = Math.max(total || 1, 1);
+    progress.value = Math.min(current || 0, progress.max);
+  };
+  const handleEvent = (event) => {
+    if (event.type === "start") {
+      setProgress(0, event.total);
+      setStatus(event.total ? `0/${event.total} 成功 0 失敗 0` : "沒有可打標圖片");
+      return;
+    }
+    if (event.type === "progress") {
+      setProgress(event.current, event.total);
+      setStatus(
+        `${event.current}/${event.total} 成功 ${event.written} 失敗 ${event.failed}`,
+      );
+      return;
+    }
+    if (event.type === "done") {
+      setProgress(event.total, event.total);
+      setStatus(`完成 ${event.written}/${event.total}，失敗 ${event.failed}`);
+      return;
+    }
+    if (event.type === "error") {
+      throw new Error(event.error || "Tagger failed");
+    }
+  };
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "打標中...";
+  }
+  setProgress(0, 1);
+  setStatus("準備打標...");
+
+  try {
+    const res = await fetch(
+      `/api/jobs/${encodeURIComponent(currentJob)}/tag-captions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_dir: imageDir,
+          caption_extension,
+          include_char: includeChar,
+          include_rating: includeRating,
+          include_general: includeGeneral,
+        }),
+      },
+    );
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        const err = await res.json();
+        message = err.error || message;
+      } catch (_) { }
+      throw new Error(message);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("Browser does not support stream progress");
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let doneEvent = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === "done") doneEvent = event;
+        handleEvent(event);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const event = JSON.parse(buffer.trim());
+      if (event.type === "done") doneEvent = event;
+      handleEvent(event);
+    }
+
+    if (doneEvent) {
+      const toastType = doneEvent.failed ? "danger" : "success";
+      showToast(
+        `打標完成：成功 ${doneEvent.written} / ${doneEvent.total}，失敗 ${doneEvent.failed}`,
+        toastType,
+      );
+    } else {
+      showToast("打標完成", "success");
+    }
+  } catch (err) {
+    setStatus(`打標失敗：${err.message}`);
+    showToast(`打標失敗：${err.message}`, "danger");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "打標輸出成 Caption";
+    }
+  }
 }
 // ==========================================
 //  Save

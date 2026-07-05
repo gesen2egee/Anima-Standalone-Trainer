@@ -873,6 +873,111 @@ app.put('/api/jobs/:name', (req, res) => {
     }
 });
 
+app.post('/api/jobs/:name/tag-captions', async (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        if (!fs.existsSync(jobPath)) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+
+        const imageDir = toNativePath(stripQuotes(String(req.body.image_dir || '').trim()));
+        const caption_extension = String(req.body.caption_extension || '.txt').trim();
+        const include_char = req.body.include_char !== false;
+        const include_rating = req.body.include_rating !== false;
+        const include_general = req.body.include_general !== false;
+        const repoId = String(req.body.repo_id || 'Makki2104/animetimm/eva02_large_patch14_448.dbv4-full').trim();
+
+        if (!imageDir) {
+            return res.status(400).json({ error: 'Image directory is required' });
+        }
+        if (!fs.existsSync(imageDir) || !fs.statSync(imageDir).isDirectory()) {
+            return res.status(400).json({ error: `Image directory not found: ${imageDir}` });
+        }
+        if (!/^\.[A-Za-z0-9_-]+$/.test(caption_extension)) {
+            return res.status(400).json({ error: 'Caption extension must look like .txt' });
+        }
+
+        const globalConfig = getGlobalConfig();
+        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
+        const venv = getVenvPaths(venvPath);
+        const taggerScript = path.join(ROOT_DIR, 'tools/tag_images_by_multilabel_timm.py');
+
+        if (!fs.existsSync(venv.python)) {
+            return res.status(500).json({ error: `Python not found in venv: ${venv.python}` });
+        }
+        if (!fs.existsSync(taggerScript)) {
+            return res.status(500).json({ error: `Tagger script not found: ${taggerScript}` });
+        }
+
+        const args = [
+            taggerScript,
+            '--image-dir', imageDir,
+            '--caption-extension', caption_extension,
+            '--repo-id', repoId,
+        ];
+        if (!include_char) args.push('--no-include-char');
+        if (!include_rating) args.push('--no-include-rating');
+        if (!include_general) args.push('--no-include-general');
+
+        const child = spawn(venv.python, args, {
+            cwd: ROOT_DIR,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8',
+                PYTHONUTF8: '1',
+            },
+            windowsHide: true,
+        });
+
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+
+        let stdoutBuffer = '';
+        let stderr = '';
+        let hasDone = false;
+        const writeEvent = event => {
+            if (!res.writableEnded) {
+                res.write(`${JSON.stringify(event)}\n`);
+            }
+        };
+        child.stdout.on('data', chunk => {
+            stdoutBuffer += chunk.toString('utf8');
+            const lines = stdoutBuffer.split(/\r?\n/);
+            stdoutBuffer = lines.pop() || '';
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const event = JSON.parse(line);
+                    if (event.type === 'done') hasDone = true;
+                    writeEvent(event);
+                } catch (_) {
+                    writeEvent({ type: 'log', message: line });
+                }
+            }
+        });
+        child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+        child.on('error', err => {
+            writeEvent({ type: 'error', error: err.message });
+            if (!res.writableEnded) res.end();
+        });
+        child.on('close', code => {
+            if (stdoutBuffer.trim()) {
+                try {
+                    const event = JSON.parse(stdoutBuffer.trim());
+                    if (event.type === 'done') hasDone = true;
+                    writeEvent(event);
+                } catch (_) { }
+            }
+            if (code !== 0 && !hasDone) {
+                writeEvent({ type: 'error', error: stderr.trim() || `Tagger exited with code ${code}` });
+            }
+            if (!res.writableEnded) res.end();
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Delete job
 app.delete('/api/jobs/:name', (req, res) => {
     try {
