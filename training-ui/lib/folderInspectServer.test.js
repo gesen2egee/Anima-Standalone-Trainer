@@ -20,10 +20,15 @@ test("server can select and inspect image folders for caption coverage", () => {
   const serverJs = read("server.js");
   const selectBlock = routeBlock(serverJs, "post", "/api/system/select-folder");
   const inspectBlock = routeBlock(serverJs, "post", "/api/system/inspect-image-folder");
+  const pickerBlock = serverJs.match(/function selectFolderDialog\([\s\S]*?\n\}/)?.[0] || "";
 
   assert.match(serverJs, /function selectFolderDialog\(/);
   assert.match(serverJs, /function inspectImageFolder\(/);
+  assert.match(pickerBlock, /new Promise/);
+  assert.match(pickerBlock, /spawn\(/);
+  assert.doesNotMatch(pickerBlock, /execFileSync/);
   assert.match(selectBlock, /selectFolderDialog\(/);
+  assert.match(selectBlock, /await selectFolderDialog\(/);
   assert.match(inspectBlock, /inspectImageFolder\(/);
   assert.match(inspectBlock, /caption_extension/);
   assert.match(serverJs, /image_count/);

@@ -241,19 +241,31 @@ function inspectImageFolder(folderPath, captionExtension = '.txt') {
 }
 
 function selectFolderDialog() {
-    if (!isWindows && !isWSL) return '';
-    const command = [
-        'Add-Type -AssemblyName System.Windows.Forms',
-        '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
-        '$dialog.Description = "Select image folder"',
-        '$dialog.ShowNewFolderButton = $true',
-        'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output $dialog.SelectedPath }'
-    ].join('; ');
-    const exe = isWSL ? 'powershell.exe' : 'powershell.exe';
-    return execFileSync(exe, ['-NoProfile', '-STA', '-Command', command], {
-        encoding: 'utf8',
-        windowsHide: true
-    }).trim();
+    return new Promise((resolve, reject) => {
+        if (!isWindows && !isWSL) return resolve('');
+        const command = [
+            'Add-Type -AssemblyName System.Windows.Forms',
+            '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+            '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+            '$dialog.Description = "Select image folder"',
+            '$dialog.ShowNewFolderButton = $true',
+            'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }'
+        ].join('; ');
+        const exe = 'powershell.exe';
+        const child = spawn(exe, ['-NoProfile', '-STA', '-Command', command], {
+            windowsHide: false,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+        child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+        child.on('error', reject);
+        child.on('close', code => {
+            if (code === 0) return resolve(stdout.trim());
+            reject(new Error(stderr.trim() || `Folder picker exited with code ${code}`));
+        });
+    });
 }
 
 function getJobPath(name) {
@@ -2249,9 +2261,9 @@ app.post('/api/system/open-folder', (req, res) => {
     }
 });
 
-app.post('/api/system/select-folder', (req, res) => {
+app.post('/api/system/select-folder', async (req, res) => {
     try {
-        const selectedPath = selectFolderDialog();
+        const selectedPath = await selectFolderDialog();
         res.json({ path: selectedPath || '' });
     } catch (err) {
         res.status(500).json({ error: err.message });

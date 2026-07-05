@@ -4416,9 +4416,10 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-name").value = defaultName;
   $("new-job-output-name").value = defaultName;
   $("new-job-output-name").dataset.autoValue = defaultName;
+  $("new-job-trigger-words").value = defaultName;
+  $("new-job-trigger-words").dataset.autoValue = defaultName;
   $("new-job-network-module").value = "networks.cdka";
   $("new-job-image-dir").value = "";
-  $("new-job-trigger-words").value = "";
   $("new-job-image-dir-status").textContent = "No folder selected.";
   $("new-job-image-dir-status").classList.remove("warning", "ok");
   $("new-job-max-steps").value = "3000";
@@ -4427,10 +4428,21 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-name").select();
 });
 $("new-job-name").addEventListener("input", () => {
+  const newName = $("new-job-name").value.trim();
   const outputInput = $("new-job-output-name");
+  const triggerInput = $("new-job-trigger-words");
   if (outputInput.value === outputInput.dataset.autoValue) {
-    outputInput.value = $("new-job-name").value.trim();
+    outputInput.value = newName;
     outputInput.dataset.autoValue = outputInput.value;
+  }
+  if (triggerInput.value === triggerInput.dataset.autoValue) {
+    triggerInput.value = newName;
+    triggerInput.dataset.autoValue = triggerInput.value;
+  }
+});
+$("new-job-trigger-words").addEventListener("input", () => {
+  if ($("new-job-trigger-words").value !== $("new-job-trigger-words").dataset.autoValue) {
+    delete $("new-job-trigger-words").dataset.autoValue;
   }
 });
 async function createJobFromModal({ autoTag = false } = {}) {

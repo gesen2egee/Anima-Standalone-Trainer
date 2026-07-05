@@ -18,13 +18,26 @@ function routeBlock(source, route) {
 
 test("new job modal exposes trigger words and auto tag action", () => {
   const html = read("public/index.html");
+  const networkIndex = html.indexOf('id="new-job-network-module"');
   const triggerIndex = html.indexOf('id="new-job-trigger-words"');
   const imageDirIndex = html.indexOf('id="new-job-image-dir"');
 
   assert.match(html, /id="new-job-trigger-words"/);
+  assert.ok(triggerIndex >= 0 && triggerIndex < networkIndex, "trigger words should be above network module");
   assert.ok(triggerIndex >= 0 && triggerIndex < imageDirIndex, "trigger words should be above image folder");
   assert.match(html, /id="btn-create-job-auto-tag"/);
   assert.match(html, /Create \+ Auto Tag/);
+});
+
+test("new job trigger words follow job name until manually edited", () => {
+  const appJs = read("public/js/app.js");
+
+  assert.match(appJs, /\$\("new-job-trigger-words"\)\.value = defaultName/);
+  assert.match(appJs, /\$\("new-job-trigger-words"\)\.dataset\.autoValue = defaultName/);
+  assert.match(appJs, /const triggerInput = \$\("new-job-trigger-words"\)/);
+  assert.match(appJs, /triggerInput\.value === triggerInput\.dataset\.autoValue/);
+  assert.match(appJs, /triggerInput\.dataset\.autoValue = triggerInput\.value/);
+  assert.match(appJs, /\$\("new-job-trigger-words"\)\.addEventListener\("input"/);
 });
 
 test("new job creation sends trigger words and can auto tag with defaults", () => {
