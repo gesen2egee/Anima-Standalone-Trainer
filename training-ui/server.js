@@ -882,6 +882,7 @@ app.get('/api/jobs/:name/cli-command', (req, res) => {
         res.json({
             command: launch.trainScript,
             base_command: launch.baseTrainScript,
+            toml: TOML.stringify(mergedConfig),
             custom_cli_args: launch.customCliArgs
         });
     } catch (err) {

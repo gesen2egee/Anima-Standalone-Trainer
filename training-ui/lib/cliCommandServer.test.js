@@ -24,6 +24,8 @@ test("server exposes CLI command preview from the shared launch builder", () => 
   assert.match(serverJs, /function buildTrainingLaunchCommand\(/);
   assert.match(block, /buildTrainingLaunchCommand\(/);
   assert.match(block, /base_command/);
+  assert.match(block, /toml/);
+  assert.match(block, /TOML\.stringify\(mergedConfig\)/);
   assert.match(block, /custom_cli_args/);
 });
 

@@ -29,6 +29,7 @@ let bgPosPercent = { x: 50, y: 50 };
 let currentSubsets = [];
 let archRegistry = null; // Loaded from /api/architectures
 let currentCliBaseCommand = "";
+let currentCliToml = "";
 // --- DOM Refs ---
 const $ = (id) => document.getElementById(id);
 const queuedJobListEl = $("queued-job-list");
@@ -72,12 +73,19 @@ const UI_TRANSLATIONS = {
   "Prompts": { "zh-TW": "提示詞", "zh-CN": "提示词" },
   "Samples": { "zh-TW": "樣本", "zh-CN": "样本" },
   "CLI": { "zh-TW": "CLI", "zh-CN": "CLI" },
-  "CLI Command": { "zh-TW": "CLI 指令", "zh-CN": "CLI 指令" },
+  "CLI Preview": { "zh-TW": "CLI 預覽", "zh-CN": "CLI 预览" },
+  "Command": { "zh-TW": "指令", "zh-CN": "指令" },
+  "TOML": { "zh-TW": "TOML", "zh-CN": "TOML" },
   "Actual CLI Command": { "zh-TW": "實際 CLI 指令", "zh-CN": "实际 CLI 指令" },
+  "Merged Config TOML": { "zh-TW": "合併後 Config TOML", "zh-CN": "合并后 Config TOML" },
   "Custom CLI Args (TOML)": { "zh-TW": "自訂 CLI 參數 (TOML)", "zh-CN": "自定义 CLI 参数 (TOML)" },
   "Generated from the saved job config. Save changes to refresh the base command.": {
     "zh-TW": "由已儲存的 job config 產生。儲存變更後會刷新基礎指令。",
     "zh-CN": "由已保存的 job config 生成。保存变更后会刷新基础指令。",
+  },
+  "Generated from the same merged TOML config passed to the training CLI.": {
+    "zh-TW": "由實際傳給訓練 CLI 的同一份 merged TOML config 產生。",
+    "zh-CN": "由实际传给训练 CLI 的同一份 merged TOML config 生成。",
   },
   "Saved to config.toml and appended to the command with one space at the end.": {
     "zh-TW": "會儲存到 config.toml，並用一個空格接在指令最後。",
@@ -1912,15 +1920,29 @@ function parseCliCustomArgsToml(value) {
   if (!match) return "";
   return unescapeTomlString(match[1]).replace(/[\r\n]+/g, " ").trim();
 }
+function showCliSubtab(name) {
+  document.querySelectorAll("[data-cli-subtab]").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.cliSubtab === name);
+  });
+  document.querySelectorAll(".cli-subtab-panel").forEach((panel) => {
+    const isActive = panel.id === `cli-subtab-${name}`;
+    panel.classList.toggle("active", isActive);
+    panel.classList.toggle("hidden", !isActive);
+  });
+}
 async function loadCliCommandPreview() {
   if (!currentJob) return;
   try {
     const data = await api(`/api/jobs/${encodeURIComponent(currentJob)}/cli-command`);
     currentCliBaseCommand = data.base_command || data.command || "";
+    currentCliToml = data.toml || "";
+    $("cfg-cli-toml").value = currentCliToml;
     updateCliCommandPreview();
   } catch (err) {
     currentCliBaseCommand = "";
+    currentCliToml = "";
     $("cfg-cli-command").value = `Failed to build CLI command: ${err.message}`;
+    $("cfg-cli-toml").value = `Failed to build TOML preview: ${err.message}`;
   }
 }
 function updateCliCommandPreview() {
@@ -5114,6 +5136,9 @@ async function init() {
   $("cfg-lr-scheduler").addEventListener("change", updateLrSchedulerOptions);
   $("cfg-custom-cli-args-toml").addEventListener("input", updateCliCommandPreview);
   $("btn-refresh-cli-command").addEventListener("click", loadCliCommandPreview);
+  document.querySelectorAll("[data-cli-subtab]").forEach((tab) => {
+    tab.addEventListener("click", () => showCliSubtab(tab.dataset.cliSubtab));
+  });
   // Activation offload <-> blocks to swap mutual exclusivity
   $("cfg-activation-offload").addEventListener(
     "change",

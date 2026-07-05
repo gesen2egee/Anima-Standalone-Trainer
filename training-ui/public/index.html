@@ -1328,11 +1328,24 @@
 
                     <!-- CLI Tab -->
                     <div id="tab-cli" class="tab-pane hidden">
-                        <h4>CLI Command</h4>
-                        <div class="form-group">
-                            <label>Actual CLI Command</label>
-                            <textarea id="cfg-cli-command" rows="10" readonly spellcheck="false"></textarea>
-                            <small>Generated from the saved job config. Save changes to refresh the base command.</small>
+                        <h4>CLI Preview</h4>
+                        <div class="cli-subtabs" role="tablist" aria-label="CLI Preview">
+                            <button type="button" class="cli-subtab active" data-cli-subtab="command">Command</button>
+                            <button type="button" class="cli-subtab" data-cli-subtab="toml">TOML</button>
+                        </div>
+                        <div id="cli-subtab-command" class="cli-subtab-panel active">
+                            <div class="form-group">
+                                <label>Actual CLI Command</label>
+                                <textarea id="cfg-cli-command" rows="10" readonly spellcheck="false"></textarea>
+                                <small>Generated from the saved job config. Save changes to refresh the base command.</small>
+                            </div>
+                        </div>
+                        <div id="cli-subtab-toml" class="cli-subtab-panel hidden">
+                            <div class="form-group">
+                                <label>Merged Config TOML</label>
+                                <textarea id="cfg-cli-toml" rows="16" readonly spellcheck="false"></textarea>
+                                <small>Generated from the same merged TOML config passed to the training CLI.</small>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label>Custom CLI Args (TOML)</label>

@@ -593,6 +593,44 @@ body {
     margin-top: 0;
 }
 
+.cli-subtabs {
+    display: inline-flex;
+    gap: 4px;
+    margin: 0 0 16px;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+}
+
+.cli-subtab {
+    min-width: 96px;
+    padding: 8px 14px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.cli-subtab:hover {
+    color: var(--text-primary);
+}
+
+.cli-subtab.active {
+    background: var(--accent);
+    color: white;
+}
+
+.cli-subtab-panel {
+    display: none;
+}
+
+.cli-subtab-panel.active {
+    display: block;
+}
+
 /* === Forms === */
 .form-group {
     margin-bottom: 20px;
