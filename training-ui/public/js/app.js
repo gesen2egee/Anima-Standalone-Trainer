@@ -1485,6 +1485,14 @@ async function runCurrentJobFromTopButton(warningMsg = "") {
   showToast("Queue started");
 }
 
+async function refreshCurrentJobTrainingStatus() {
+  if (!currentJob) return;
+  try {
+    const status = await api(`/api/jobs/${encodeURIComponent(currentJob)}/train/status`);
+    updateRunningState(status.running);
+  } catch (_) { }
+}
+
 async function pauseQueue() {
   await api("/api/queue/stop", { method: "POST" });
   await loadJobs();
@@ -5261,6 +5269,7 @@ async function init() {
   // Start status polling
   setInterval(updateGPUActivity, 3000);
   setInterval(loadJobs, 5000);
+  setInterval(refreshCurrentJobTrainingStatus, 3000);
   // Watch for config changes
   document.addEventListener("input", (e) => {
     if (e.target.id && e.target.id.startsWith("cfg-")) {
