@@ -5,6 +5,7 @@ import ast
 import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
 import datetime
+import gc
 import importlib
 import json
 import logging
@@ -141,6 +142,18 @@ def _get_automask_remover(settings: AutomaskSettings):
     AUTOMASK_REMOVER = Remover(mode=settings.model)
     AUTOMASK_REMOVER_MODEL = settings.model
     return AUTOMASK_REMOVER
+
+
+def release_automask_remover():
+    global AUTOMASK_REMOVER, AUTOMASK_REMOVER_MODEL
+    if AUTOMASK_REMOVER is None:
+        return
+
+    AUTOMASK_REMOVER = None
+    AUTOMASK_REMOVER_MODEL = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 # region dataset
 
@@ -3082,15 +3095,21 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
             dataset.enable_XTI(*args, **kwargs)
 
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
-        for i, dataset in enumerate(self.datasets):
-            logger.info(f"[Dataset {i}]")
-            dataset.cache_latents(vae, vae_batch_size, cache_to_disk, is_main_process, file_suffix)
+        try:
+            for i, dataset in enumerate(self.datasets):
+                logger.info(f"[Dataset {i}]")
+                dataset.cache_latents(vae, vae_batch_size, cache_to_disk, is_main_process, file_suffix)
+        finally:
+            release_automask_remover()
 
     def new_cache_latents(self, model: Any, accelerator: Accelerator):
-        for i, dataset in enumerate(self.datasets):
-            logger.info(f"[Dataset {i}]")
-            dataset.new_cache_latents(model, accelerator)
-        accelerator.wait_for_everyone()
+        try:
+            for i, dataset in enumerate(self.datasets):
+                logger.info(f"[Dataset {i}]")
+                dataset.new_cache_latents(model, accelerator)
+            accelerator.wait_for_everyone()
+        finally:
+            release_automask_remover()
 
     def cache_text_encoder_outputs(
         self, tokenizers, text_encoders, device, weight_dtype, cache_to_disk=False, is_main_process=True

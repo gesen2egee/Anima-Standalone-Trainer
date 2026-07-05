@@ -199,6 +199,59 @@ def test_latents_cache_validity_rejects_stale_automask_metadata(tmp_path):
         train_util.set_automask_settings_for_caching(AutomaskSettings(enabled=False))
 
 
+def test_dataset_group_releases_automask_remover_after_new_cache_latents():
+    from library import train_util
+
+    class FakeDataset:
+        image_data = {}
+        num_train_images = 0
+        num_reg_images = 0
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            raise IndexError(index)
+
+        def new_cache_latents(self, model, accelerator):
+            assert train_util.AUTOMASK_REMOVER is remover
+
+    class FakeAccelerator:
+        def __init__(self):
+            self.waited = False
+
+        def wait_for_everyone(self):
+            self.waited = True
+
+    remover = object()
+    accelerator = FakeAccelerator()
+    dataset_group = train_util.DatasetGroup([FakeDataset()])
+
+    train_util.set_automask_settings_for_caching(AutomaskSettings(enabled=True), remover=remover)
+    dataset_group.new_cache_latents(object(), accelerator)
+
+    assert accelerator.waited is True
+    assert train_util.AUTOMASK_REMOVER is None
+    assert train_util.AUTOMASK_REMOVER_MODEL is None
+
+
+def test_release_automask_remover_clears_cuda_cache(monkeypatch):
+    from library import train_util
+
+    calls = []
+    remover = object()
+    train_util.set_automask_settings_for_caching(AutomaskSettings(enabled=True), remover=remover)
+    monkeypatch.setattr(train_util.gc, "collect", lambda: calls.append("gc"))
+    monkeypatch.setattr(train_util.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(train_util.torch.cuda, "empty_cache", lambda: calls.append("cuda"))
+
+    train_util.release_automask_remover()
+
+    assert train_util.AUTOMASK_REMOVER is None
+    assert train_util.AUTOMASK_REMOVER_MODEL is None
+    assert calls == ["gc", "cuda"]
+
+
 def test_training_parser_accepts_automask_arguments():
     from library import train_util
 
