@@ -171,6 +171,12 @@ const UI_TRANSLATIONS = {
   "Prompt List": { "zh-TW": "提示詞列表", "zh-CN": "提示词列表" },
   "+ Add Prompt": { "zh-TW": "+ 新增提示詞", "zh-CN": "+ 新增提示词" },
   "Generate Sample": { "zh-TW": "生成樣本", "zh-CN": "生成样本" },
+  "Trigger Words": { "zh-TW": "觸發詞", "zh-CN": "触发词" },
+  "Automatically appends a comma and writes it into Caption Prefix.": {
+    "zh-TW": "會自動補上逗號，並寫入 Caption Prefix。",
+    "zh-CN": "会自动补上逗号，并写入 Caption Prefix。",
+  },
+  "Create + Auto Tag": { "zh-TW": "建立 + 自動打標", "zh-CN": "创建 + 自动打标" },
   "Sampling": { "zh-TW": "取樣", "zh-CN": "采样" },
   "Sample Schedule": { "zh-TW": "樣本排程", "zh-CN": "样本调度" },
   "Sample at First": { "zh-TW": "開始前先產生樣本", "zh-CN": "开始前先生成样本" },
@@ -2950,6 +2956,66 @@ function appendConsole(text) {
     consoleOutput.scrollTop = consoleOutput.scrollHeight;
   }
 }
+async function runNewJobDefaultTagger(jobName, imageDir) {
+  const res = await fetch(
+    `/api/jobs/${encodeURIComponent(jobName)}/tag-captions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_dir: imageDir,
+        caption_extension: ".txt",
+        include_char: true,
+        include_rating: true,
+        include_general: true,
+      }),
+    },
+  );
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = await res.json();
+      message = err.error || message;
+    } catch (_) { }
+    throw new Error(message);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Browser does not support stream progress");
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let doneEvent = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === "error") throw new Error(event.error || "Tagger failed");
+      if (event.type === "done") doneEvent = event;
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = JSON.parse(buffer.trim());
+    if (event.type === "error") throw new Error(event.error || "Tagger failed");
+    if (event.type === "done") doneEvent = event;
+  }
+
+  if (!doneEvent) {
+    showToast("自動打標完成", "success");
+    return;
+  }
+  const toastType = doneEvent.failed ? "danger" : "success";
+  showToast(
+    `自動打標完成：成功 ${doneEvent.written} / ${doneEvent.total}，失敗 ${doneEvent.failed}`,
+    toastType,
+  );
+}
 // ==========================================
 //  Samples
 // ==========================================
@@ -4172,6 +4238,7 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-output-name").dataset.autoValue = defaultName;
   $("new-job-network-module").value = "networks.cdka";
   $("new-job-image-dir").value = "";
+  $("new-job-trigger-words").value = "";
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();
@@ -4184,28 +4251,51 @@ $("new-job-name").addEventListener("input", () => {
     outputInput.dataset.autoValue = outputInput.value;
   }
 });
-$("btn-create-job").addEventListener("click", async () => {
+async function createJobFromModal({ autoTag = false } = {}) {
   const name = $("new-job-name").value.trim();
   if (!name) return;
-  const result = await api("/api/jobs", {
-    method: "POST",
-    body: {
-      name,
-      output_name: $("new-job-output-name").value.trim(),
-      network_module: $("new-job-network-module").value,
-      image_dir: $("new-job-image-dir").value.trim(),
-      max_train_steps: safeInt($("new-job-max-steps").value, 3000),
-    },
-  });
-  if (result.error) {
-    alert(result.error);
+  const imageDir = $("new-job-image-dir").value.trim();
+  if (autoTag && !imageDir) {
+    showToast("請先設定圖片資料夾", "danger");
     return;
   }
-  closeModal("modal-new-job");
-  await loadJobs();
-  selectJob(result.name);
-  showToast("Job created");
-});
+  const createButton = $("btn-create-job");
+  const autoTagButton = $("btn-create-job-auto-tag");
+  createButton.disabled = true;
+  autoTagButton.disabled = true;
+  try {
+    const result = await api("/api/jobs", {
+      method: "POST",
+      body: {
+        name,
+        output_name: $("new-job-output-name").value.trim(),
+        network_module: $("new-job-network-module").value,
+        image_dir: imageDir,
+        trigger_words: $("new-job-trigger-words").value.trim(),
+        max_train_steps: safeInt($("new-job-max-steps").value, 3000),
+      },
+    });
+    closeModal("modal-new-job");
+    await loadJobs();
+    await selectJob(result.name);
+    showToast("Job created");
+    if (autoTag) {
+      showToast("自動打標中...");
+      try {
+        await runNewJobDefaultTagger(result.name, imageDir);
+      } catch (err) {
+        showToast(`自動打標失敗：${err.message}`, "danger");
+      }
+    }
+  } catch (err) {
+    showToast(`建立任務失敗：${err.message}`, "danger");
+  } finally {
+    createButton.disabled = false;
+    autoTagButton.disabled = false;
+  }
+}
+$("btn-create-job").addEventListener("click", () => createJobFromModal());
+$("btn-create-job-auto-tag").addEventListener("click", () => createJobFromModal({ autoTag: true }));
 // Load GPUs from server
 async function loadGPUs() {
   const container = $("cfg-gpu-selection");

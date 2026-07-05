@@ -1406,11 +1406,17 @@
                 <input type="text" id="new-job-image-dir" placeholder="D:\datasets\my_images">
             </div>
             <div class="form-group">
+                <label>Trigger Words</label>
+                <input type="text" id="new-job-trigger-words" placeholder="character_name">
+                <small>Automatically appends a comma and writes it into Caption Prefix.</small>
+            </div>
+            <div class="form-group">
                 <label>Max Steps</label>
                 <input type="number" id="new-job-max-steps" value="3000" min="1">
             </div>
             <div class="modal-actions">
                 <button id="btn-cancel-job" class="btn btn-ghost">Cancel</button>
+                <button id="btn-create-job-auto-tag" class="btn btn-secondary">Create + Auto Tag</button>
                 <button id="btn-create-job" class="btn btn-primary">Create</button>
             </div>
         </div>

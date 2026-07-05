@@ -169,6 +169,12 @@ function stripQuotes(p) {
     return p.replace(/^['"]+|['"]+$/g, '');
 }
 
+function normalizeCaptionPrefixFromTriggerWords(value) {
+    const triggerWords = String(value || '').trim();
+    if (!triggerWords) return '';
+    return /,\s*$/.test(triggerWords) ? triggerWords : `${triggerWords},`;
+}
+
 function getJobPath(name) {
     return path.join(getJobsDir(), sanitizeName(name));
 }
@@ -756,7 +762,7 @@ app.get('/api/jobs', (req, res) => {
 // Create new job
 app.post('/api/jobs', (req, res) => {
     try {
-        const { name, output_name, network_module, image_dir, max_train_steps } = req.body;
+        const { name, output_name, network_module, image_dir, max_train_steps, trigger_words } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
 
         const safeName = sanitizeName(name);
@@ -791,7 +797,8 @@ app.post('/api/jobs', (req, res) => {
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
         const datasetConfig = getDefaultDataset();
-        if (image_dir && String(image_dir).trim()) {
+        const triggerCaptionPrefix = normalizeCaptionPrefixFromTriggerWords(trigger_words);
+        if ((image_dir && String(image_dir).trim()) || triggerCaptionPrefix) {
             const datasets = Array.isArray(datasetConfig.datasets)
                 ? datasetConfig.datasets
                 : datasetConfig.datasets
@@ -803,7 +810,13 @@ app.post('/api/jobs', (req, res) => {
                 : firstDataset.subsets
                     ? [firstDataset.subsets]
                     : [{}];
-            subsets[0] = { ...(subsets[0] || {}), image_dir: stripQuotes(String(image_dir).trim()) };
+            subsets[0] = { ...(subsets[0] || {}) };
+            if (image_dir && String(image_dir).trim()) {
+                subsets[0].image_dir = stripQuotes(String(image_dir).trim());
+            }
+            if (triggerCaptionPrefix) {
+                subsets[0].caption_prefix = triggerCaptionPrefix;
+            }
             firstDataset.subsets = subsets;
             datasets[0] = firstDataset;
             datasetConfig.datasets = datasets;
