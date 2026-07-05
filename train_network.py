@@ -1332,12 +1332,14 @@ class NetworkTrainer:
 
         # calculate steps to skip when resuming or starting from a specific step
         initial_step = 0
+        resume_step = steps_from_state or 0
         if args.initial_epoch is not None or args.initial_step is not None:
             # if initial_epoch or initial_step is specified, steps_from_state is ignored even when resuming
             if steps_from_state is not None:
                 logger.warning(
                     "steps from the state is ignored because initial_step is specified / initial_stepが指定されているため、stateからのステップ数は無視されます"
                 )
+                resume_step = 0
             if args.initial_step is not None:
                 initial_step = args.initial_step
             else:
@@ -1374,7 +1376,8 @@ class NetworkTrainer:
                 epoch_to_start = initial_step // math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
                 initial_step = 0  # do not skip
 
-        global_step = 0
+        global_step = resume_step
+        current_step.value = global_step
 
         noise_scheduler = self.get_noise_scheduler(args, accelerator.device)
 
@@ -1436,7 +1439,7 @@ class NetworkTrainer:
         is_tracking = len(accelerator.trackers) > 0
         if is_tracking:
             # log empty object to commit the sample images to wandb
-            accelerator.log({}, step=0)
+            accelerator.log({}, step=global_step)
 
         # training loop
         if initial_step > 0:  # only if skip_until_initial_step is specified
@@ -1444,6 +1447,7 @@ class NetworkTrainer:
                 logger.info(f"skipping epoch {skip_epoch+1} because initial_step (multiplied) is {initial_step}")
                 initial_step -= len(train_dataloader)
             global_step = initial_step
+            current_step.value = global_step
 
         # log device and dtype for each model
         logger.info(f"unet dtype: {unet_weight_dtype}, device: {unet.device}")
@@ -1457,7 +1461,12 @@ class NetworkTrainer:
         clean_memory_on_device(accelerator.device)
 
         progress_bar = tqdm(
-            range(args.max_train_steps - initial_step), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
+            range(args.max_train_steps - global_step),
+            initial=global_step,
+            total=args.max_train_steps,
+            smoothing=0,
+            disable=not accelerator.is_local_main_process,
+            desc="steps",
         )
 
         validation_steps = (
