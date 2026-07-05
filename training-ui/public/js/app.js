@@ -1658,7 +1658,7 @@ function populateConfig(config) {
   $("cfg-lr-warmup").value = t.lr_warmup_steps ?? 0.1;
   $("cfg-lr-scheduler-cycles").value = t.lr_scheduler_num_cycles ?? 1;
   $("cfg-lr-min-ratio").value = t.lr_scheduler_min_lr_ratio ?? 0;
-  $("cfg-lr-decay-steps").value = t.lr_decay_steps ?? 0;
+  $("cfg-lr-decay-steps").value = t.lr_decay_steps ?? 0.1;
   $("cfg-seed").value = t.seed ?? 42;
   // Extract weight decay
   let wdValue = "";
@@ -2148,7 +2148,7 @@ function gatherConfig() {
           : undefined,
       lr_decay_steps:
         $("cfg-lr-scheduler").value === "warmup_stable_decay"
-          ? safeInt($("cfg-lr-decay-steps").value)
+          ? safeFloat($("cfg-lr-decay-steps").value)
           : undefined,
       lr_warmup_steps: safeFloat($("cfg-lr-warmup").value),
       // Hardware

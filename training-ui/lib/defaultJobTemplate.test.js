@@ -20,7 +20,7 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.training_arguments.learning_rate, 0.0001);
   assert.strictEqual(config.training_arguments.lr_scheduler, "warmup_stable_decay");
   assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0.1);
-  assert.strictEqual(config.training_arguments.lr_decay_steps, 0);
+  assert.strictEqual(config.training_arguments.lr_decay_steps, 0.1);
   assert.strictEqual(config.training_arguments.train_batch_size, 2);
   assert.strictEqual(config.training_arguments.knn_noise_k, 64);
   assert.strictEqual(config.training_arguments.cep_noise, 0.01);

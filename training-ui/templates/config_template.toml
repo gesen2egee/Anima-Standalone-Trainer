@@ -18,7 +18,7 @@ optimizer_type = "library.came.CAME"
 optimizer_args = [ "weight_decay=0.1" ]
 lr_scheduler = "warmup_stable_decay"
 lr_scheduler_min_lr_ratio = 0.1
-lr_decay_steps = 0
+lr_decay_steps = 0.1
 lr_warmup_steps = 0.1
 mixed_precision = "bf16"
 save_precision = "bf16"
