@@ -1067,7 +1067,7 @@ async function selectNewJobImageDir() {
   const selected = await selectFolderPath($("new-job-image-dir").value.trim());
   if (!selected) return;
   $("new-job-image-dir").value = selected;
-  await updateNewJobImageDirStatus();
+  updateNewJobImageDirStatus();
 }
 function updateSubsetImageDirStatus(card, subset) {
   return updateFolderInspectionStatus(
@@ -1082,7 +1082,7 @@ async function selectSubsetImageDir(card, subset) {
   subset.image_dir = selected;
   card.querySelector(".sub-image-dir").value = selected;
   checkDirty();
-  await updateSubsetImageDirStatus(card, subset);
+  updateSubsetImageDirStatus(card, subset);
 }
 // ==========================================
 //  WebSocket
@@ -1386,6 +1386,10 @@ async function loadJobs() {
       return b.mtime - a.mtime;
     });
   const pendingJobs = jobs.filter((job) => !job.queued && !job.running);
+  const selectedJob = jobs.find((job) => job.name === currentJob);
+  if (selectedJob) {
+    updateRunningState(selectedJob.running || selectedJob.queueActive);
+  }
 
   if ($("queue-count")) $("queue-count").textContent = queuedJobs.length;
   if ($("pending-count")) $("pending-count").textContent = pendingJobs.length;
@@ -1483,14 +1487,6 @@ async function runCurrentJobFromTopButton(warningMsg = "") {
   if (warningMsg) appendConsole(warningMsg);
   document.querySelector('[data-tab="console"]').click();
   showToast("Queue started");
-}
-
-async function refreshCurrentJobTrainingStatus() {
-  if (!currentJob) return;
-  try {
-    const status = await api(`/api/jobs/${encodeURIComponent(currentJob)}/train/status`);
-    updateRunningState(status.running);
-  } catch (_) { }
 }
 
 async function pauseQueue() {
@@ -5269,7 +5265,6 @@ async function init() {
   // Start status polling
   setInterval(updateGPUActivity, 3000);
   setInterval(loadJobs, 5000);
-  setInterval(refreshCurrentJobTrainingStatus, 3000);
   // Watch for config changes
   document.addEventListener("input", (e) => {
     if (e.target.id && e.target.id.startsWith("cfg-")) {

@@ -155,6 +155,8 @@ if (!fs.existsSync(GLOBAL_CONFIG_PATH) && fs.existsSync(TEMPLATE_CONFIG_PATH)) {
 // Track running processes
 const runningJobs = new Map();
 let detectedTrainingCache = { time: 0, jobs: new Map() };
+let detectedTrainingRefreshPromise = null;
+const DETECTED_TRAINING_CACHE_MS = 5000;
 
 // WebSocket clients per job
 const wsClients = new Map(); // jobName -> Set<ws>
@@ -230,33 +232,10 @@ function parseMergedConfigPathFromCommandLine(commandLine) {
     return match ? match[1].replace(/\\"/g, '"').replace(/^"+|"+$/g, '') : '';
 }
 
-function getDetectedTrainingProcesses() {
-    const now = Date.now();
-    if (now - detectedTrainingCache.time < 2000) return detectedTrainingCache.jobs;
-
+function parseDetectedTrainingProcesses(raw, windowsMode = isWindows) {
     const jobs = new Map();
     try {
-        let raw = '';
-        if (isWindows) {
-            const script = [
-                '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
-                'Get-CimInstance Win32_Process -Filter "CommandLine LIKE \'%_merged_config.toml%\'" |',
-                'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'
-            ].join('\n');
-            try {
-                raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-                    encoding: 'utf8',
-                    timeout: 5000,
-                    windowsHide: true
-                }).trim();
-            } catch (err) {
-                raw = String(err.stdout || '').trim();
-            }
-        } else {
-            raw = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: 5000 });
-        }
-
-        const processes = isWindows
+        const processes = windowsMode
             ? (raw ? JSON.parse(raw) : [])
             : raw.split(/\r?\n/).filter(Boolean).map(line => {
                 const match = line.trim().match(/^(\d+)\s+(.+)$/);
@@ -280,21 +259,109 @@ function getDetectedTrainingProcesses() {
             });
         });
     } catch (_) { }
-
-    detectedTrainingCache = { time: now, jobs };
     return jobs;
+}
+
+function refreshDetectedTrainingProcesses() {
+    if (detectedTrainingRefreshPromise) return detectedTrainingRefreshPromise;
+
+    detectedTrainingRefreshPromise = new Promise((resolve) => {
+        let child;
+        let stdout = '';
+
+        try {
+            if (isWindows) {
+                const script = [
+                    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+                    'Get-CimInstance Win32_Process -Filter "CommandLine LIKE \'%_merged_config.toml%\'" |',
+                    'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'
+                ].join('\n');
+                child = spawn('powershell.exe', ['-NoProfile', '-Command', script], {
+                    windowsHide: true,
+                    stdio: ['ignore', 'pipe', 'ignore']
+                });
+            } else {
+                child = spawn('ps', ['-eo', 'pid=,args='], {
+                    stdio: ['ignore', 'pipe', 'ignore']
+                });
+            }
+        } catch (_) {
+            detectedTrainingRefreshPromise = null;
+            resolve(detectedTrainingCache.jobs);
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            try { child.kill(); } catch (_) { }
+        }, 5000);
+
+        child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+        child.on('error', () => {
+            clearTimeout(timer);
+            detectedTrainingRefreshPromise = null;
+            resolve(detectedTrainingCache.jobs);
+        });
+        child.on('close', () => {
+            clearTimeout(timer);
+            const jobs = parseDetectedTrainingProcesses(stdout);
+            detectedTrainingCache = { time: Date.now(), jobs };
+            detectedTrainingRefreshPromise = null;
+            resolve(jobs);
+        });
+    });
+
+    return detectedTrainingRefreshPromise;
+}
+
+function getDetectedTrainingProcesses({ refresh = true } = {}) {
+    const stale = Date.now() - detectedTrainingCache.time > DETECTED_TRAINING_CACHE_MS;
+    if (refresh && stale) refreshDetectedTrainingProcesses().catch(() => { });
+    return detectedTrainingCache.jobs;
+}
+
+async function getDetectedTrainingProcessesFresh() {
+    const stale = Date.now() - detectedTrainingCache.time > DETECTED_TRAINING_CACHE_MS;
+    if (!stale) return detectedTrainingCache.jobs;
+    return refreshDetectedTrainingProcesses();
+}
+
+function getCachedOrStoredTrainingProcess(jobName) {
+    const stored = getStoredTrainingProcess(jobName);
+    if (stored) return stored;
+    return getDetectedTrainingProcesses({ refresh: false }).get(jobName) || null;
+}
+
+async function getFreshTrainingProcessInfo(jobName) {
+    const memoryJob = runningJobs.get(jobName);
+    if (memoryJob?.type === 'training') return { ...memoryJob, jobName, source: 'memory' };
+    const stored = getStoredTrainingProcess(jobName);
+    if (stored) return stored;
+    const detected = await getDetectedTrainingProcessesFresh();
+    return detected.get(jobName) || null;
 }
 
 function getTrainingProcessInfo(jobName) {
     const memoryJob = runningJobs.get(jobName);
     if (memoryJob?.type === 'training') return { ...memoryJob, jobName, source: 'memory' };
-    const stored = getStoredTrainingProcess(jobName);
-    if (stored) return stored;
-    return getDetectedTrainingProcesses().get(jobName) || null;
+    return getCachedOrStoredTrainingProcess(jobName);
+}
+
+async function isJobTrainingFresh(jobName) {
+    return !!(await getFreshTrainingProcessInfo(jobName));
 }
 
 function isJobTraining(jobName) {
     return !!getTrainingProcessInfo(jobName);
+}
+
+async function getRunningTrainingJobNameFresh() {
+    const runningTraining = getRunningTrainingJobName();
+    if (runningTraining) return runningTraining;
+    const detected = await getDetectedTrainingProcessesFresh();
+    for (const [name] of detected.entries()) {
+        return name;
+    }
+    return null;
 }
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
@@ -304,21 +371,31 @@ function normalizeCaptionExtension(value) {
     return ext.startsWith('.') ? ext : `.${ext}`;
 }
 
-function collectImageFiles(dir) {
+async function collectImageFiles(dir) {
     const files = [];
     if (!dir || !fs.existsSync(dir)) return files;
-    fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            files.push(...collectImageFiles(fullPath));
-        } else if (IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-            files.push(fullPath);
+    const pendingDirs = [dir];
+    while (pendingDirs.length) {
+        const currentDir = pendingDirs.pop();
+        let entries = [];
+        try {
+            entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+        } catch (_) {
+            continue;
         }
-    });
+        entries.forEach(entry => {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                pendingDirs.push(fullPath);
+            } else if (IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+                files.push(fullPath);
+            }
+        });
+    }
     return files;
 }
 
-function inspectImageFolder(folderPath, captionExtension = '.txt') {
+async function inspectImageFolder(folderPath, captionExtension = '.txt') {
     const nativePath = toNativePath(stripQuotes(String(folderPath || '').trim()));
     const captionExt = normalizeCaptionExtension(captionExtension);
     const result = {
@@ -335,26 +412,26 @@ function inspectImageFolder(folderPath, captionExtension = '.txt') {
 
     if (!nativePath || !fs.existsSync(nativePath)) return result;
 
-    const stat = fs.statSync(nativePath);
+    const stat = await fs.promises.stat(nativePath);
     result.exists = true;
     result.is_directory = stat.isDirectory();
     if (!result.is_directory) return result;
 
-    const imageFiles = collectImageFiles(nativePath);
+    const imageFiles = await collectImageFiles(nativePath);
     result.image_count = imageFiles.length;
     result.has_images = imageFiles.length > 0;
-    imageFiles.forEach(imagePath => {
+    for (const imagePath of imageFiles) {
         const captionPath = path.join(
             path.dirname(imagePath),
             `${path.basename(imagePath, path.extname(imagePath))}${captionExt}`
         );
         if (!fs.existsSync(captionPath)) {
             result.missing_caption += 1;
-            return;
+            continue;
         }
-        const content = fs.readFileSync(captionPath, 'utf8').trim();
+        const content = (await fs.promises.readFile(captionPath, 'utf8')).trim();
         if (!content) result.empty_caption += 1;
-    });
+    }
     return result;
 }
 
@@ -552,7 +629,7 @@ function getRunningTrainingJobName() {
     for (const [name, job] of runningJobs.entries()) {
         if (job.type === 'training') return name;
     }
-    for (const [name] of getDetectedTrainingProcesses().entries()) {
+    for (const [name] of getDetectedTrainingProcesses({ refresh: false }).entries()) {
         return name;
     }
     for (const [name, info] of Object.entries(readTrainingProcessState())) {
@@ -580,8 +657,8 @@ function stopTrainingJob(jobName) {
     return job;
 }
 
-function stopRunningTrainingForQueue() {
-    const runningTraining = getRunningTrainingJobName();
+async function stopRunningTrainingForQueue() {
+    const runningTraining = await getRunningTrainingJobNameFresh();
     if (!runningTraining) {
         const state = trainingQueue.getState();
         if (state.active) trainingQueue.clearActive(state.active);
@@ -1050,8 +1127,9 @@ app.get('/api/system/gpus', async (req, res) => {
 // --- Job API Routes ---
 
 // List all jobs
-app.get('/api/jobs', (req, res) => {
+app.get('/api/jobs', async (req, res) => {
     try {
+        await getDetectedTrainingProcessesFresh();
         const jobsDir = getJobsDir();
         if (!fs.existsSync(jobsDir)) return res.json([]);
         const queueState = trainingQueue.getState();
@@ -2008,7 +2086,7 @@ async function startQueuedJob(jobName) {
 async function runNextQueuedJob() {
     if (!queueAutoRunning) return null;
     if (queueStartInFlight) return null;
-    const runningTraining = getRunningTrainingJobName();
+    const runningTraining = await getRunningTrainingJobNameFresh();
     if (runningTraining) return null;
     const nextJob = trainingQueue.getNext();
     if (!nextJob) {
@@ -2067,7 +2145,7 @@ app.post('/api/queue/jobs/:name/move', (req, res) => {
 
 app.post('/api/queue/start', async (req, res) => {
     try {
-        const runningTraining = getRunningTrainingJobName();
+        const runningTraining = await getRunningTrainingJobNameFresh();
         if (runningTraining) {
             return res.status(409).json({ error: `Training job "${runningTraining}" is already running` });
         }
@@ -2090,10 +2168,10 @@ app.post('/api/queue/start', async (req, res) => {
     }
 });
 
-app.post('/api/queue/stop', (req, res) => {
+app.post('/api/queue/stop', async (req, res) => {
     try {
         queueAutoRunning = false;
-        const stoppedJob = stopRunningTrainingForQueue();
+        const stoppedJob = await stopRunningTrainingForQueue();
         res.json({
             success: true,
             stoppedJob,
@@ -2115,8 +2193,8 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (!fs.existsSync(configPath)) {
             return res.status(404).json({ error: 'Job not found' });
         }
-        const runningTraining = getRunningTrainingJobName();
-        if (runningTraining === jobName || isJobTraining(jobName)) {
+        const runningTraining = await getRunningTrainingJobNameFresh();
+        if (runningTraining === jobName || await isJobTrainingFresh(jobName)) {
             return res.status(400).json({ error: 'Job already running' });
         }
         if (runningTraining) {
@@ -2277,10 +2355,10 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 });
 
 
-app.get('/api/jobs/:name/train/status', (req, res) => {
+app.get('/api/jobs/:name/train/status', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
-        const isRunning = isJobTraining(jobName);
+        const isRunning = await isJobTrainingFresh(jobName);
         res.json({ running: isRunning });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -2537,10 +2615,10 @@ app.post('/api/system/select-folder', async (req, res) => {
     }
 });
 
-app.post('/api/system/inspect-image-folder', (req, res) => {
+app.post('/api/system/inspect-image-folder', async (req, res) => {
     try {
         const { path: folderPath, caption_extension } = req.body;
-        res.json(inspectImageFolder(folderPath, caption_extension));
+        res.json(await inspectImageFolder(folderPath, caption_extension));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -23,7 +23,8 @@ test("server can select and inspect image folders for caption coverage", () => {
   const pickerBlock = serverJs.match(/function selectFolderDialog\([\s\S]*?\n\}/)?.[0] || "";
 
   assert.match(serverJs, /function selectFolderDialog\(/);
-  assert.match(serverJs, /function inspectImageFolder\(/);
+  assert.match(serverJs, /async function inspectImageFolder\(/);
+  assert.match(serverJs, /async function collectImageFiles\(/);
   assert.match(pickerBlock, /new Promise/);
   assert.match(serverJs, /spawn\(/);
   assert.match(serverJs, /IFileOpenDialog/);
@@ -37,7 +38,12 @@ test("server can select and inspect image folders for caption coverage", () => {
   assert.match(selectBlock, /selectFolderDialog\(/);
   assert.match(selectBlock, /await selectFolderDialog\(/);
   assert.match(inspectBlock, /inspectImageFolder\(/);
+  assert.match(inspectBlock, /await inspectImageFolder\(/);
+  assert.match(inspectBlock, /async \(req, res\)/);
   assert.match(inspectBlock, /caption_extension/);
+  assert.match(serverJs, /fs\.promises\.readdir/);
+  assert.match(serverJs, /fs\.promises\.readFile/);
+  assert.doesNotMatch(inspectBlock, /readdirSync|readFileSync|statSync/);
   assert.match(serverJs, /image_count/);
   assert.match(serverJs, /missing_caption/);
   assert.match(serverJs, /empty_caption/);

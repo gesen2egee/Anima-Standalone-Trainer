@@ -64,13 +64,13 @@ test("websocket queue refresh updates job lists even for non-selected jobs", () 
   assert.match(wsBlock[0], /loadJobs\(\)/);
 });
 
-test("selected training status is polled as a fallback when websocket misses updates", () => {
+test("selected training status follows jobs polling without extra status polling", () => {
   const appJs = read("public/js/app.js");
-  const pollBlock = appJs.match(/async function refreshCurrentJobTrainingStatus\(\) \{[\s\S]*?\n\}/);
+  const loadJobsBlock = appJs.match(/async function loadJobs\(\) \{[\s\S]*?\n\}/);
 
-  assert.ok(pollBlock, "current job training status polling helper should exist");
-  assert.match(pollBlock[0], /if \(!currentJob\) return/);
-  assert.match(pollBlock[0], /\/api\/jobs\/\$\{encodeURIComponent\(currentJob\)\}\/train\/status/);
-  assert.match(pollBlock[0], /updateRunningState\(status\.running\)/);
-  assert.match(appJs, /setInterval\(refreshCurrentJobTrainingStatus,\s*3000\)/);
+  assert.ok(loadJobsBlock, "loadJobs helper should exist");
+  assert.match(loadJobsBlock[0], /const selectedJob = jobs\.find\(\(job\) => job\.name === currentJob\)/);
+  assert.match(loadJobsBlock[0], /updateRunningState\(selectedJob\.running \|\| selectedJob\.queueActive\)/);
+  assert.doesNotMatch(appJs, /function refreshCurrentJobTrainingStatus/);
+  assert.doesNotMatch(appJs, /setInterval\(refreshCurrentJobTrainingStatus/);
 });
