@@ -7,7 +7,7 @@ bucket_reso_steps = 64
 
 [[datasets]]
 resolution = [768, 768]
-batch_size = 2
+batch_size = 1
 caption_extension = ".txt"
 fad_p_min = 0.35
 fad_p_max = 1

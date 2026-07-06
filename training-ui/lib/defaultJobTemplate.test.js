@@ -21,7 +21,7 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.training_arguments.lr_scheduler, "warmup_stable_decay");
   assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0.1);
   assert.strictEqual(config.training_arguments.lr_decay_steps, 0.1);
-  assert.strictEqual(config.training_arguments.train_batch_size, 2);
+  assert.strictEqual(config.training_arguments.train_batch_size, 1);
   assert.strictEqual(config.training_arguments.knn_noise_k, 64);
   assert.strictEqual(config.training_arguments.cep_noise, 0.01);
   assert.strictEqual(config.training_arguments.loss_type, "wavelet");
@@ -41,7 +41,10 @@ test("default config template follows my_job_v1 training and network defaults", 
   ]);
   assert.strictEqual(config.anima_arguments.timestep_sampling, "uniform");
   assert.strictEqual(config.anima_arguments.differential_guidance_scale, 3);
-  assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0);
+  assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
+  assert.strictEqual(config.training_arguments.masked_loss_random_strength, 0);
+  assert.strictEqual(config.anima_arguments.ciop_prob, 0.6);
+  assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0.01);
 });
 
 test("default dataset template follows my_job_v1 dataset defaults", () => {
@@ -52,12 +55,13 @@ test("default dataset template follows my_job_v1 dataset defaults", () => {
   assert.strictEqual(dataset.general.min_bucket_reso, 384);
   assert.strictEqual(dataset.general.max_bucket_reso, 1536);
   assert.deepStrictEqual(firstDataset.resolution, [768, 768]);
-  assert.strictEqual(firstDataset.batch_size, 2);
+  assert.strictEqual(firstDataset.batch_size, 1);
   assert.strictEqual(firstDataset.fad_curriculum_start, 0.05);
   assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
   assert.strictEqual(firstSubset.keep_tokens, 1);
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
+  assert.strictEqual(firstSubset.alpha_mask, true);
   assert.strictEqual(firstSubset.caption_tag_dropout_rate, 0);
 });
 
