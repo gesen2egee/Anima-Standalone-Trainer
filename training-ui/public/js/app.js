@@ -1462,7 +1462,7 @@ async function startQueue() {
 async function runCurrentJobFromTopButton(warningMsg = "") {
   const queueState = await api("/api/queue");
   const jobs = await loadJobs();
-  const runningJob = jobs.find((job) => job.running);
+  const runningJob = jobs.find((job) => job.running || job.queueActive);
   const queuedItems = Array.isArray(queueState.items) ? queueState.items : [];
   const isQueued = queuedItems.includes(currentJob);
 
