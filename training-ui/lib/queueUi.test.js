@@ -39,7 +39,7 @@ test("top training start only queues selected job when another job is already ru
   const runningBranch = helperBlock.match(/if \(runningJob\) \{[\s\S]*?return;\n  \}/);
 
   assert.match(helperBlock, /const jobs = await loadJobs\(\)/);
-  assert.match(helperBlock, /const runningJob = jobs\.find\(\(job\) => job\.running \|\| job\.queueActive\)/);
+  assert.match(helperBlock, /const runningJob = jobs\.find\(\(job\) => job\.running\)/);
   assert.ok(runningBranch, "running branch should return before starting queue");
   assert.match(runningBranch[0], /\/api\/queue\/jobs\/\$\{encodeURIComponent\(currentJob\)\}/);
   assert.match(runningBranch[0], /return;/);
