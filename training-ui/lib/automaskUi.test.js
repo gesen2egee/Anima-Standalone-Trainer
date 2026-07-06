@@ -41,5 +41,17 @@ test("UI loads and saves automask training arguments", () => {
   assert.match(appJs, /automask:\s*\$\("cfg-automask"\)\.checked/);
   assert.match(appJs, /automask_alpha:\s*safeInt\(\$\("cfg-automask-alpha"\)\.value,\s*128\)/);
   assert.match(appJs, /automask_model:\s*\$\("cfg-automask-model"\)\.value\.trim\(\)\s*\|\|\s*"base-nightly"/);
-  assert.match(appJs, /if\s*\(\$\("cfg-alpha-mask"\)\.checked\s*\|\|\s*\$\("cfg-automask"\)\.checked\)\s*subset\.alpha_mask\s*=\s*true/);
+  assert.match(appJs, /if\s*\(\$\("cfg-automask"\)\.checked\)\s*\{\s*subset\.alpha_mask\s*=\s*true/);
+});
+
+test("alpha mask UI preserves per-subset values unless the global toggle is changed", () => {
+  const appJs = read("public/js/app.js");
+
+  assert.match(appJs, /alpha_mask:\s*s\.alpha_mask === true/);
+  assert.match(appJs, /let alphaMaskTouched\s*=\s*false/);
+  assert.match(appJs, /\$\("cfg-alpha-mask"\)\.indeterminate\s*=\s*alphaMaskStates\.some\(\(value\) => value\) && !alphaMaskStates\.every\(\(value\) => value\)/);
+  assert.match(appJs, /\$\("cfg-alpha-mask"\)\.addEventListener\("change",\s*\(\) => \{\s*alphaMaskTouched = true/);
+  assert.match(appJs, /if\s*\(\$\("cfg-automask"\)\.checked\)\s*\{\s*subset\.alpha_mask = true/);
+  assert.match(appJs, /else if\s*\(alphaMaskTouched\)/);
+  assert.match(appJs, /else if\s*\(s\.alpha_mask\)\s*\{\s*subset\.alpha_mask\s*=\s*true/);
 });

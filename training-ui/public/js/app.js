@@ -29,6 +29,7 @@ let samplesRefreshTimer = null;
 let isDraggingBg = false;
 let bgPosPercent = { x: 50, y: 50 };
 let currentSubsets = [];
+let alphaMaskTouched = false;
 let archRegistry = null; // Loaded from /api/architectures
 let currentCliBaseCommand = "";
 let currentCliToml = "";
@@ -1963,13 +1964,16 @@ function populateDataset(dataset) {
     enable_fad: s.enable_fad ?? false,
     fad_curriculum: s.fad_curriculum ?? false,
     is_reg: s.is_reg ?? false,
+    alpha_mask: s.alpha_mask === true,
   }));
   // Edge case: if empty, force at least 1
   if (currentSubsets.length === 0) {
     addSubset(false);
   }
-  // Alpha mask: check if any subset has it enabled
-  $("cfg-alpha-mask").checked = subsetsRaw.length === 0 || subsetsRaw.some((s) => s.alpha_mask === true);
+  const alphaMaskStates = currentSubsets.map((s) => s.alpha_mask === true);
+  alphaMaskTouched = false;
+  $("cfg-alpha-mask").checked = alphaMaskStates.length === 0 || alphaMaskStates.every((value) => value);
+  $("cfg-alpha-mask").indeterminate = alphaMaskStates.some((value) => value) && !alphaMaskStates.every((value) => value);
   renderSubsets();
   // Rebuild progressive phase rows now that resolution field is populated
   if ($("cfg-progressive-reso").checked) renderProgressivePhases();
@@ -2404,7 +2408,13 @@ function gatherDataset() {
               fad_curriculum: s.fad_curriculum,
             };
             if (s.is_reg) subset.is_reg = true;
-            if ($("cfg-alpha-mask").checked || $("cfg-automask").checked) subset.alpha_mask = true;
+            if ($("cfg-automask").checked) {
+              subset.alpha_mask = true;
+            } else if (alphaMaskTouched) {
+              if ($("cfg-alpha-mask").checked) subset.alpha_mask = true;
+            } else if (s.alpha_mask) {
+              subset.alpha_mask = true;
+            }
             return subset;
           }),
         };
@@ -2431,6 +2441,7 @@ function addSubset(shouldRender = true) {
     enable_fad: false,
     fad_curriculum: false,
     is_reg: false,
+    alpha_mask: $("cfg-alpha-mask")?.checked === true && $("cfg-alpha-mask")?.indeterminate !== true,
     collapsed: false,
   });
   if (shouldRender) {
@@ -4426,6 +4437,10 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // ==========================================
 $("cfg-enable-sampling").addEventListener("change", (e) => {
   $("group-sample-every").classList.toggle("hidden", !e.target.checked);
+});
+$("cfg-alpha-mask").addEventListener("change", () => {
+  alphaMaskTouched = true;
+  $("cfg-alpha-mask").indeterminate = false;
 });
 $("cfg-automask").addEventListener("change", updateAutomaskUI);
 document.querySelectorAll('input[name="duration-unit"]').forEach((el) => {
