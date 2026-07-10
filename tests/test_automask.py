@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import pytest
 
 import numpy as np
 from PIL import Image
@@ -299,12 +300,13 @@ def test_training_parser_accepts_automask_arguments():
     assert args.automask_model == "base-nightly"
 
 
-def test_autoshift_enables_mask_generation_without_enabling_automask_loss():
+@pytest.mark.parametrize("timestep_sampling", ["autoshift", "autoshift_wavelet"])
+def test_autoshift_enables_mask_generation_without_enabling_automask_loss(timestep_sampling):
     from library import train_util
 
     args = argparse.Namespace(
         automask=False,
-        timestep_sampling="autoshift",
+        timestep_sampling=timestep_sampling,
         automask_alpha=128,
         automask_shrink=1,
         automask_blur=3,

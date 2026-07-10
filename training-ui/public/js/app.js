@@ -2026,7 +2026,7 @@ function updateActivationOffloadUI() {
   }
 }
 function updateAutomaskUI() {
-  const autoshift = $("cfg-timestep-method").value === "autoshift";
+  const autoshift = ["autoshift", "autoshift_wavelet"].includes($("cfg-timestep-method").value);
   $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked && !autoshift);
   $("cfg-flow-shift").disabled = autoshift;
 }

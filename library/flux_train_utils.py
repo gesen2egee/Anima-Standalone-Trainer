@@ -468,7 +468,7 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
     return weighting
 
 
-def compute_autoshift_flow_shift(latents: torch.Tensor, alpha_masks: torch.Tensor) -> torch.Tensor:
+def compute_autoshift_wavelet_flow_shift(latents: torch.Tensor, alpha_masks: torch.Tensor) -> torch.Tensor:
     """Map 3-level Haar background detail energy to a per-sample flow shift in [0.5, 1.5]."""
     if latents.ndim != 4:
         raise ValueError(f"autoshift expects 4D latents, got {tuple(latents.shape)}")
@@ -504,6 +504,14 @@ def compute_autoshift_flow_shift(latents: torch.Tensor, alpha_masks: torch.Tenso
     return 0.5 + background_detail_ratio.clamp(0.0, 1.0)
 
 
+def compute_autoshift_mask_flow_shift(alpha_masks: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Map the proportion of mask values below 1 to a per-sample flow shift in [0.5, 1.5]."""
+    masks = alpha_masks.to(device=device, dtype=torch.float32)
+    reduce_dims = tuple(range(1, masks.ndim))
+    background_ratios = (masks < 1.0).float().mean(dim=reduce_dims)
+    return 0.5 + background_ratios
+
+
 def get_noisy_model_input_and_timesteps(
     args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -527,11 +535,14 @@ def get_noisy_model_input_and_timesteps(
             sigmas = torch.rand((bsz,), device=device)
 
         timesteps = sigmas * num_timesteps
-    elif args.timestep_sampling in ("shift", "autoshift"):
-        if args.timestep_sampling == "autoshift":
+    elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet"):
+        if args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
             if alpha_masks is None:
                 raise ValueError("autoshift timestep sampling requires alpha masks; enable latent caching with Automask")
-            shift = compute_autoshift_flow_shift(latents, alpha_masks)
+            if args.timestep_sampling == "autoshift_wavelet":
+                shift = compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
+            else:
+                shift = compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
         else:
             shift = args.discrete_flow_shift
         sigmas = torch.randn(bsz, device=device)

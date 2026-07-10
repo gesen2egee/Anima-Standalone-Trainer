@@ -48,8 +48,9 @@ test("autoshift exposes automask settings without checking automask loss", () =>
   const html = read("public/index.html");
   const appJs = read("public/js/app.js");
 
-  assert.match(html, /<option value="autoshift">Autoshift \(Multiscale Wavelet\)<\/option>/);
-  assert.match(appJs, /const autoshift = \$\("cfg-timestep-method"\)\.value === "autoshift"/);
+  assert.match(html, /<option value="autoshift">Autoshift \(Mask Ratio\)<\/option>/);
+  assert.match(html, /<option value="autoshift_wavelet">Autoshift \(Multiscale Wavelet\)<\/option>/);
+  assert.match(appJs, /const autoshift = \["autoshift", "autoshift_wavelet"\]\.includes/);
   assert.match(appJs, /!\$\("cfg-automask"\)\.checked && !autoshift/);
   assert.doesNotMatch(appJs, /autoshift[\s\S]{0,100}cfg-automask"\)\.checked\s*=\s*true/);
 });
