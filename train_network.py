@@ -514,7 +514,9 @@ class NetworkTrainer:
         )
 
         huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler)
-        use_masked_loss = args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None)
+        has_alpha_masks = "alpha_masks" in batch and batch["alpha_masks"] is not None
+        autoshift_sampling_only = getattr(args, "timestep_sampling", None) == "autoshift" and not getattr(args, "automask", False)
+        use_masked_loss = args.masked_loss or (has_alpha_masks and not autoshift_sampling_only)
 
         if args.loss_type == "cwmi":
             l2_loss = train_util.conditional_loss(noise_pred.float(), target.float(), "l2", "none", None)

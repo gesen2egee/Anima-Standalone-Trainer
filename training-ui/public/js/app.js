@@ -1878,6 +1878,7 @@ function populateConfig(config) {
     (a.timestep_sample_method === "logit_normal" ? "sigmoid" : a.timestep_sample_method) ||
     "sigmoid";
   $("cfg-flow-shift").value = a.discrete_flow_shift ?? 1.0;
+  updateAutomaskUI();
   $("cfg-weighting-scheme").value = a.weighting_scheme || "uniform";
   $("cfg-sigmoid-scale").value = a.sigmoid_scale ?? 1.0;
   $("cfg-qwen3-max-token-length").value = a.qwen3_max_token_length ?? 512;
@@ -2025,7 +2026,9 @@ function updateActivationOffloadUI() {
   }
 }
 function updateAutomaskUI() {
-  $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked);
+  const autoshift = $("cfg-timestep-method").value === "autoshift";
+  $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked && !autoshift);
+  $("cfg-flow-shift").disabled = autoshift;
 }
 // Helpers for safe parsing
 function safeInt(val, fallback = 0) {
@@ -4443,6 +4446,7 @@ $("cfg-alpha-mask").addEventListener("change", () => {
   $("cfg-alpha-mask").indeterminate = false;
 });
 $("cfg-automask").addEventListener("change", updateAutomaskUI);
+$("cfg-timestep-method").addEventListener("change", updateAutomaskUI);
 document.querySelectorAll('input[name="duration-unit"]').forEach((el) => {
   el.addEventListener("change", updateDurationUnit);
 });

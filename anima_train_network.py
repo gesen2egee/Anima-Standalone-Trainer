@@ -291,7 +291,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
 
         # Get noisy model input and timesteps
         noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
-            args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
+            args, noise_scheduler, latents, noise, accelerator.device, weight_dtype, batch.get("alpha_masks")
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 

@@ -297,3 +297,21 @@ def test_training_parser_accepts_automask_arguments():
     assert args.automask_shrink == 2
     assert args.automask_blur == 4
     assert args.automask_model == "base-nightly"
+
+
+def test_autoshift_enables_mask_generation_without_enabling_automask_loss():
+    from library import train_util
+
+    args = argparse.Namespace(
+        automask=False,
+        timestep_sampling="autoshift",
+        automask_alpha=128,
+        automask_shrink=1,
+        automask_blur=3,
+        automask_model="base-nightly",
+    )
+    train_util.configure_automask_from_args(args)
+
+    assert train_util.get_automask_settings_for_caching().enabled is True
+    assert args.automask is False
+    train_util.set_automask_settings_for_caching(AutomaskSettings(enabled=False))

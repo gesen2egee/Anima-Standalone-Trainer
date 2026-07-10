@@ -123,7 +123,7 @@ def get_automask_settings_for_caching() -> AutomaskSettings:
 
 def configure_automask_from_args(args: argparse.Namespace):
     settings = AutomaskSettings(
-        enabled=bool(getattr(args, "automask", False)),
+        enabled=bool(getattr(args, "automask", False) or getattr(args, "timestep_sampling", None) == "autoshift"),
         alpha=int(getattr(args, "automask_alpha", 128)),
         shrink=int(getattr(args, "automask_shrink", 1)),
         blur=float(getattr(args, "automask_blur", 3.0)),

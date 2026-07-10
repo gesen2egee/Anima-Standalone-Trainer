@@ -469,7 +469,7 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
 
 
 def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype
+    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
@@ -491,8 +491,16 @@ def get_noisy_model_input_and_timesteps(
             sigmas = torch.rand((bsz,), device=device)
 
         timesteps = sigmas * num_timesteps
-    elif args.timestep_sampling == "shift":
-        shift = args.discrete_flow_shift
+    elif args.timestep_sampling in ("shift", "autoshift"):
+        if args.timestep_sampling == "autoshift":
+            if alpha_masks is None:
+                raise ValueError("autoshift timestep sampling requires alpha masks; enable latent caching with Automask")
+            masks = alpha_masks.to(device=device, dtype=torch.float32)
+            reduce_dims = tuple(range(1, masks.ndim))
+            background_ratios = (masks < 1.0).float().mean(dim=reduce_dims)
+            shift = 0.5 + background_ratios
+        else:
+            shift = args.discrete_flow_shift
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()

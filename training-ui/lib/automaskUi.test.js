@@ -44,6 +44,16 @@ test("UI loads and saves automask training arguments", () => {
   assert.match(appJs, /if\s*\(\$\("cfg-automask"\)\.checked\)\s*\{\s*subset\.alpha_mask\s*=\s*true/);
 });
 
+test("autoshift exposes automask settings without checking automask loss", () => {
+  const html = read("public/index.html");
+  const appJs = read("public/js/app.js");
+
+  assert.match(html, /<option value="autoshift">Autoshift \(Mask Ratio\)<\/option>/);
+  assert.match(appJs, /const autoshift = \$\("cfg-timestep-method"\)\.value === "autoshift"/);
+  assert.match(appJs, /!\$\("cfg-automask"\)\.checked && !autoshift/);
+  assert.doesNotMatch(appJs, /autoshift[\s\S]{0,100}cfg-automask"\)\.checked\s*=\s*true/);
+});
+
 test("alpha mask UI preserves per-subset values unless the global toggle is changed", () => {
   const appJs = read("public/js/app.js");
 
