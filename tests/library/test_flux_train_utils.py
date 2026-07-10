@@ -136,6 +136,17 @@ def test_autoshift_uses_low_shift_when_image_has_no_high_frequency_detail():
     assert torch.equal(compute_autoshift_flow_shift(latents, masks), torch.tensor([0.5]))
 
 
+def test_autoshift_detects_coarse_background_composition_at_deeper_levels():
+    latents = torch.zeros(1, 1, 8, 8)
+    latents[:, :, 4:, 4:] = 1.0
+    masks = torch.ones(1, 8, 8)
+    masks[:, 4:, 4:] = 0.0
+
+    shift = compute_autoshift_flow_shift(latents, masks)
+
+    assert shift.item() > 0.5
+
+
 def test_autoshift_requires_masks(args, noise_scheduler, latents, noise, device):
     args.timestep_sampling = "autoshift"
     with pytest.raises(ValueError, match="requires alpha masks"):
