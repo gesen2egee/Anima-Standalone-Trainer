@@ -2,6 +2,7 @@ import pytest
 import torch
 from unittest.mock import MagicMock, patch
 from library.flux_train_utils import (
+    compute_autoshift_flow_shift,
     get_noisy_model_input_and_timesteps,
 )
 
@@ -100,17 +101,26 @@ def test_shift_sampling(args, noise_scheduler, latents, noise, device):
     assert sigmas.shape == (latents.shape[0], 1, 1, 1)
 
 
-def test_autoshift_maps_background_ratio_to_flow_shift(args, noise_scheduler, device):
+def test_autoshift_maps_wavelet_detail_location_to_flow_shift(args, noise_scheduler, device):
     args.timestep_sampling = "autoshift"
-    latents = torch.zeros(3, 4, 2, 2)
+    latents = torch.zeros(3, 1, 4, 4)
+    # Checkerboard detail sits inside the subject, half inside/outside, and outside the subject.
+    checker = torch.tensor([[1.0, -1.0], [-1.0, 1.0]])
+    latents[0, 0, :2, :2] = checker
+    latents[1, 0, :2, :2] = checker
+    latents[1, 0, 2:, 2:] = checker
+    latents[2, 0, 2:, 2:] = checker
     noise = torch.ones_like(latents)
     masks = torch.tensor(
         [
-            [[1.0, 1.0], [1.0, 1.0]],
-            [[0.5, 1.0], [0.5, 1.0]],
-            [[0.0, 0.0], [0.0, 0.0]],
+            [[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            [[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            [[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
         ]
     )
+
+    shifts = compute_autoshift_flow_shift(latents, masks)
+    assert torch.allclose(shifts, torch.tensor([0.5, 1.0, 1.5]))
 
     with patch("torch.randn", return_value=torch.zeros(3)):
         _, timesteps, _ = get_noisy_model_input_and_timesteps(
@@ -118,6 +128,12 @@ def test_autoshift_maps_background_ratio_to_flow_shift(args, noise_scheduler, de
         )
 
     assert torch.allclose(timesteps, torch.tensor([1000 / 3, 500.0, 600.0]), atol=1e-4)
+
+
+def test_autoshift_uses_low_shift_when_image_has_no_high_frequency_detail():
+    latents = torch.ones(1, 2, 4, 4)
+    masks = torch.zeros(1, 4, 4)
+    assert torch.equal(compute_autoshift_flow_shift(latents, masks), torch.tensor([0.5]))
 
 
 def test_autoshift_requires_masks(args, noise_scheduler, latents, noise, device):

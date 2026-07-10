@@ -468,6 +468,23 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
     return weighting
 
 
+def compute_autoshift_flow_shift(latents: torch.Tensor, alpha_masks: torch.Tensor) -> torch.Tensor:
+    """Map background Haar high-frequency energy to a per-sample flow shift in [0.5, 1.5]."""
+    if latents.ndim != 4:
+        raise ValueError(f"autoshift expects 4D latents, got {tuple(latents.shape)}")
+
+    wavelets = train_util.haar_dwt_2d(latents.float())
+    channels = latents.shape[1]
+    high_frequency = wavelets[:, channels:].abs().reshape(latents.shape[0], 3, channels, *wavelets.shape[-2:]).sum(dim=(1, 2))
+
+    masks = (alpha_masks.to(device=latents.device, dtype=torch.float32) >= 1.0).float().unsqueeze(1)
+    foreground_coverage = torch.nn.functional.interpolate(masks, size=high_frequency.shape[-2:], mode="area").squeeze(1)
+    background_energy = (high_frequency * (1.0 - foreground_coverage)).sum(dim=(1, 2))
+    total_energy = high_frequency.sum(dim=(1, 2))
+    background_detail_ratio = torch.where(total_energy > 1e-8, background_energy / total_energy, torch.zeros_like(total_energy))
+    return 0.5 + background_detail_ratio.clamp(0.0, 1.0)
+
+
 def get_noisy_model_input_and_timesteps(
     args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -495,10 +512,7 @@ def get_noisy_model_input_and_timesteps(
         if args.timestep_sampling == "autoshift":
             if alpha_masks is None:
                 raise ValueError("autoshift timestep sampling requires alpha masks; enable latent caching with Automask")
-            masks = alpha_masks.to(device=device, dtype=torch.float32)
-            reduce_dims = tuple(range(1, masks.ndim))
-            background_ratios = (masks < 1.0).float().mean(dim=reduce_dims)
-            shift = 0.5 + background_ratios
+            shift = compute_autoshift_flow_shift(latents, alpha_masks)
         else:
             shift = args.discrete_flow_shift
         sigmas = torch.randn(bsz, device=device)
