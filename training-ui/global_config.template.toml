@@ -12,6 +12,11 @@ lumina_dit_path = ""
 gemma2_path = ""
 lumina_vae_path = ""
 
+# Krea 2 Paths
+krea2_dit_path = ""
+krea2_text_encoder_path = ""
+krea2_vae_path = ""
+
 [ui]
 background = ""
 background_position = "50% 50%"

@@ -47,6 +47,11 @@ const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
 
 // Resolve architecture from a job config's network_module
 function getArchForJob(jobConfig) {
+    const explicitArchitecture = jobConfig?.ui_arguments?.architecture || jobConfig?.model_architecture;
+    if (explicitArchitecture && ARCH_REGISTRY.architectures[explicitArchitecture]) {
+        const explicit = ARCH_REGISTRY.architectures[explicitArchitecture];
+        return { id: explicitArchitecture, ...explicit };
+    }
     // An explicit Krea2 section takes precedence over shared network names
     // (lora_anima, LoKR, CDKA, and KRONA can all target Krea2 now).
     if (jobConfig?.krea2_arguments || jobConfig?.model_arguments?.krea2_text_encoder) {
@@ -548,7 +553,11 @@ function getGlobalConfig() {
             // Lumina
             lumina_dit_path: '',
             gemma2_path: '',
-            lumina_vae_path: ''
+            lumina_vae_path: '',
+            // Krea 2
+            krea2_dit_path: '',
+            krea2_text_encoder_path: '',
+            krea2_vae_path: ''
         },
         venv_path: path.join(ROOT_DIR, 'venv'),
         jobs_dir: DEFAULT_JOBS_DIR
@@ -1136,6 +1145,7 @@ app.post('/api/jobs', (req, res) => {
             network_module,
             image_dir,
             max_train_steps,
+            model_architecture,
             trigger_words,
             batch_import,
             auto_balance_repeats
@@ -1157,6 +1167,10 @@ app.post('/api/jobs', (req, res) => {
 
         // Copy template configs
         const { config, useFallback } = getDefaultConfig();
+        config.ui_arguments = config.ui_arguments || {};
+        if (model_architecture && ARCH_REGISTRY.architectures[model_architecture]) {
+            config.ui_arguments.architecture = model_architecture;
+        }
         config.training_arguments = config.training_arguments || {};
         if (output_name && String(output_name).trim()) {
             config.training_arguments.output_name = sanitizeName(String(output_name));
@@ -1166,7 +1180,11 @@ app.post('/api/jobs', (req, res) => {
             config.training_arguments.max_train_steps = parsedSteps;
             delete config.training_arguments.max_train_epochs;
         }
-        if (network_module && ['networks.krona', 'networks.cdka'].includes(network_module)) {
+        const supportedNetworkModules = [
+            'networks.lora_anima', 'networks.lora_lumina', 'networks.lora_krea2',
+            'networks.lora', 'networks.lokr', 'networks.cdka', 'networks.krona'
+        ];
+        if (network_module && supportedNetworkModules.includes(network_module)) {
             config.network_arguments = config.network_arguments || {};
             config.network_arguments.network_module = network_module;
             config.training_arguments.learning_rate = getNetworkModuleLearningRate(network_module);
