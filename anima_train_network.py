@@ -1,7 +1,7 @@
 # Anima LoRA training script
 
 import argparse
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -14,9 +14,9 @@ from library import (
     anima_models,
     anima_train_utils,
     anima_utils,
+    flow_network_trainer,
     flux_train_utils,
     qwen_image_autoencoder_kl,
-    sd3_train_utils,
     strategy_anima,
     strategy_base,
     train_util,
@@ -30,15 +30,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AnimaNetworkTrainer(train_network.NetworkTrainer):
+class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_network.NetworkTrainer):
     def __init__(self):
         super().__init__()
         self.sample_prompts_te_outputs = None
-        self.global_step = 0
-
-    def step_logging(self, accelerator, logs, global_step, epoch):
-        self.global_step = global_step
-        super().step_logging(accelerator, logs, global_step, epoch)
 
     def assert_extra_args(
         self,
@@ -46,12 +41,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         train_dataset_group: Union[train_util.DatasetGroup, train_util.MinimalDataset],
         val_dataset_group: Optional[train_util.DatasetGroup],
     ):
-        if hasattr(args, "model_guidance_prob") and (args.model_guidance_prob < 0.0 or args.model_guidance_prob > 1.0):
-            raise ValueError("model_guidance_prob must be between 0.0 and 1.0")
-        if hasattr(args, "ciop_prob") and (args.ciop_prob < 0.0 or args.ciop_prob > 1.0):
-            raise ValueError("ciop_prob must be between 0.0 and 1.0")
-        if hasattr(args, "ciop_noise_magnitude") and args.ciop_noise_magnitude < 0.0:
-            raise ValueError("ciop_noise_magnitude must be greater than or equal to 0.0")
+        self.validate_flow_training_args(args)
         if getattr(args, "knn_noise_k", 0) < 0:
 
             raise ValueError("knn_noise_k must be greater than or equal to 0")
@@ -256,18 +246,6 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             self.sample_prompts_te_outputs,
         )
 
-    def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device) -> Any:
-        noise_scheduler = sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=args.discrete_flow_shift)
-        return noise_scheduler
-
-    def encode_images_to_latents(self, args, vae, images):
-        vae: qwen_image_autoencoder_kl.AutoencoderKLQwenImage
-        return vae.encode_pixels_to_latents(images)  # Keep 4D for input/output
-
-    def shift_scale_latents(self, args, latents):
-        # Latents already normalized by vae.encode with scale
-        return train_util.apply_immiscible_image_scale(args, latents)
-
     def get_noise_pred_and_target(
         self,
         args,
@@ -295,21 +273,9 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
-        # AAAI-26 Coordinated Input-Output Perturbation (CIOP)
-        apply_ciop = False
-        if is_train and hasattr(args, "ciop_prob") and args.ciop_prob > 0.0 and torch.rand(1).item() < args.ciop_prob:
-            apply_ciop = True
-            std = args.ciop_noise_magnitude
-            if getattr(args, "ciop_noise_type", "gaussian") == "uniform":
-                limit = math.sqrt(3.0) * args.ciop_noise_magnitude
-                eps_in = (torch.rand_like(latents) * 2 - 1.0) * limit
-                eps_out = (torch.rand_like(latents) * 2 - 1.0) * limit
-            else:
-                eps_in = torch.randn_like(latents) * std
-                eps_out = torch.randn_like(latents) * std
-            
-            # Apply input perturbation to noisy model input
-            noisy_model_input = noisy_model_input + eps_in
+        ciop = self.sample_ciop_perturbations(args, latents, is_train)
+        if ciop is not None:
+            noisy_model_input = noisy_model_input + ciop[0]
 
         self.current_noise = noise
         self.current_noisy_latents = noisy_model_input
@@ -353,22 +319,8 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             )
         model_pred = model_pred.squeeze(2)  # 5D to 4D, [B, C, 1, H, W] -> [B, C, H, W]
 
-        # Rectified flow target: noise - latents
-        end_step = getattr(args, "model_guidance_end_step", 0)
-
-        # Model guidance stochastic activation check
-        apply_model_guidance = False
-        if getattr(args, "model_guidance_weight", 0.0) > 0.0 and (end_step == 0 or self.global_step < end_step):
-            apply_model_guidance = True
-            if hasattr(args, "model_guidance_prob") and args.model_guidance_prob < 1.0:
-                if torch.rand(1).item() > args.model_guidance_prob:
-                    apply_model_guidance = False
-
-        if apply_model_guidance:
-            current_mg_weight = args.model_guidance_weight
-            if getattr(args, "model_guidance_warmup_steps", 0) > 0 and self.global_step < args.model_guidance_warmup_steps:
-                current_mg_weight = args.model_guidance_weight * (self.global_step / args.model_guidance_warmup_steps)
-
+        model_pred_uncond = None
+        if self.should_apply_model_guidance(args, latents.device):
             prompt_embeds_uncond = torch.zeros_like(prompt_embeds)
             attn_mask_uncond = torch.zeros_like(attn_mask)
             attn_mask_uncond[:, 0] = 1
@@ -390,40 +342,16 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
                 )
             model_pred_uncond = model_pred_uncond.squeeze(2)
 
-            if getattr(args, "model_guidance_cfg_zero", False):
-                dot_product = torch.sum(model_pred * model_pred_uncond, dim=[1, 2, 3], keepdim=True)
-                squared_norm = torch.sum(model_pred_uncond ** 2, dim=[1, 2, 3], keepdim=True) + 1e-8
-                st_star = dot_product / squared_norm
-                w_t = current_mg_weight * st_star.detach()
-
-                # zero init threshold is only active when model_guidance_cfg_zero is True
-                is_zero_init_stage = (timesteps >= getattr(args, "model_guidance_zero_init_threshold", 0.95))
-                zero_mask = (~is_zero_init_stage).float().view(bs, 1, 1, 1)
-                w_t = w_t * zero_mask
-            elif getattr(args, "model_guidance_timestep_scaling", False):
-                beta_curve = 4.0 * timesteps * (1.0 - timesteps)
-                min_w = getattr(args, "model_guidance_min_weight", 0.0)
-                w_t = min_w + (current_mg_weight - min_w) * beta_curve
-                w_t = w_t.view(bs, 1, 1, 1)
-            else:
-                w_t = current_mg_weight
-
-            target = (noise - latents) + w_t * (model_pred - model_pred_uncond).detach()
-        else:
-            target = noise - latents
-
-        # Apply CIOP output perturbation to target
-        if apply_ciop:
-            target = target + eps_out
-
-        target = anima_train_utils.apply_differential_guidance_target(
-            target,
+        target, weighting = self.finalize_flow_target(
+            args,
+            noise,
+            latents,
             model_pred,
-            getattr(args, "differential_guidance_scale", 1.0),
+            sigmas,
+            timesteps,
+            model_pred_uncond=model_pred_uncond,
+            ciop_output=ciop[1] if ciop is not None else None,
         )
-
-        # Loss weighting
-        weighting = anima_train_utils.compute_loss_weighting_for_anima(weighting_scheme=args.weighting_scheme, sigmas=sigmas, args=args)
 
         return model_pred, target, timesteps, weighting
 
@@ -479,9 +407,6 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             train_unet,
         )
 
-    def post_process_loss(self, loss, args, timesteps, noise_scheduler):
-        return loss
-
     def get_wavelet_prediction_type(self, args):
         return "velocity"
 
@@ -489,24 +414,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         return train_util.get_sai_model_spec_dataclass(None, args, False, True, False, anima="preview").to_metadata_dict()
 
     def update_metadata(self, metadata, args):
-        metadata["ss_weighting_scheme"] = args.weighting_scheme
-        metadata["ss_logit_mean"] = args.logit_mean
-        metadata["ss_logit_std"] = args.logit_std
-        metadata["ss_mode_scale"] = args.mode_scale
-        metadata["ss_timestep_sampling"] = args.timestep_sampling
-        metadata["ss_sigmoid_scale"] = args.sigmoid_scale
-        metadata["ss_discrete_flow_shift"] = args.discrete_flow_shift
-        if hasattr(args, "model_guidance_prob"):
-            metadata["ss_model_guidance_prob"] = args.model_guidance_prob
-        if hasattr(args, "ciop_prob"):
-            metadata["ss_ciop_prob"] = args.ciop_prob
-        if hasattr(args, "ciop_noise_magnitude"):
-            metadata["ss_ciop_noise_magnitude"] = args.ciop_noise_magnitude
-        if hasattr(args, "ciop_noise_type"):
-            metadata["ss_ciop_noise_type"] = args.ciop_noise_type
-        metadata["ss_knn_noise_k"] = getattr(args, "knn_noise_k", 0)
-
-        metadata["ss_immiscible_image_scale"] = getattr(args, "immiscible_image_scale", 1.0)
+        self.update_flow_metadata(metadata, args)
 
     def is_text_encoder_not_needed_for_training(self, args):
         return args.cache_text_encoder_outputs and not self.is_train_text_encoder(args)
@@ -544,65 +452,13 @@ def setup_parser() -> argparse.ArgumentParser:
     parser = train_network.setup_parser()
     train_util.add_dit_training_arguments(parser)
     anima_train_utils.add_anima_training_arguments(parser)
+    flow_network_trainer.add_flow_network_training_arguments(parser)
     # parser.add_argument("--fp8_scaled", action="store_true", help="Use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
     parser.add_argument(
         "--unsloth_offload_checkpointing",
         action="store_true",
         help="offload activations to CPU RAM using async non-blocking transfers (faster than --cpu_offload_checkpointing). "
         "Cannot be used with --cpu_offload_checkpointing or --blocks_to_swap.",
-    )
-    parser.add_argument(
-        "--model_guidance_weight",
-        type=float,
-        default=0.0,
-        help="Weight for Model-guidance training (arXiv:2502.12154). Set > 0.0 to enable.",
-    )
-    parser.add_argument(
-        "--model_guidance_warmup_steps",
-        type=int,
-        default=500,
-        help="Warmup steps for model guidance training (arXiv:2502.12154).",
-    )
-    parser.add_argument(
-        "--model_guidance_timestep_scaling",
-        action="store_true",
-        help="Enable timestep-adaptive weight scaling (beta-CFG geometry).",
-    )
-    parser.add_argument(
-        "--model_guidance_min_weight",
-        type=float,
-        default=0.0,
-        help="Minimum weight for timestep-adaptive scaling.",
-    )
-    parser.add_argument(
-        "--model_guidance_cfg_zero",
-        action="store_true",
-        help="Enable CFG-Zero* geometric adaptive scaling.",
-    )
-    parser.add_argument(
-        "--model_guidance_zero_init_threshold",
-        type=float,
-        default=1.0,
-        help="Threshold t for high-noise zero guidance stage (only active with CFG-Zero*).",
-    )
-    parser.add_argument(
-        "--model_guidance_end_step",
-        type=int,
-        default=0,
-        help="Only use Model Guidance for the first N steps. Default 0 means use for all steps.",
-    )
-    parser.add_argument(
-        "--ciop_noise_magnitude",
-        type=float,
-        default=0.1,
-        help="AAAI-26 Coordinated Input-Output Perturbation (CIOP) noise standard deviation/weight. Default is 0.1.",
-    )
-    parser.add_argument(
-        "--ciop_noise_type",
-        type=str,
-        default="gaussian",
-        choices=["gaussian", "uniform"],
-        help="AAAI-26 Coordinated Input-Output Perturbation (CIOP) noise distribution type. Default is 'gaussian'.",
     )
     return parser
 

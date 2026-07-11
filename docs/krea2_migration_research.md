@@ -76,6 +76,17 @@ Krea 2 是 single-stream MMDiT，不是現有 SDXL、FLUX 或 Anima 的既有 U-
 
 目前已新增 `krea2_train_network.py`。它直接繼承本 REPO 的 `train_network.NetworkTrainer`，因此沿用原本的 dataset config、latent cache、text cache、optimizer、Accelerate、LoRA 儲存與 checkpoint 流程；Anima 的 `anima_train_network.py` 未被替換。
 
+### Anima／Krea 2 共通核心
+
+`AnimaNetworkTrainer` 與 `Krea2NetworkTrainer` 現在共同使用 `library/flow_network_trainer.py`。以下功能應優先加在共通核心，讓兩種模型同時取得新能力：
+
+- rectified-flow scheduler、VAE latent 編碼與 immiscible image scale
+- Model Guidance 啟用條件、warmup、timestep scaling 與 CFG-Zero target shaping
+- CIOP input／output perturbation、differential guidance 與 loss weighting
+- 共通參數驗證、CLI argument 註冊與 checkpoint metadata
+
+模型權重載入、Text Encoder/cache 格式、timestep sampling、DiT forward 與輸出 unpatchify 仍保留在各自 trainer，因為這些張量介面並不相容。新增功能若只依賴 flow target、loss 或訓練狀態，應放入共通核心；只有需要直接操作 Anima DiT 或 Krea 2 MMDiT 時才留在架構 adapter。
+
 Krea 2 的一般訓練建議先建立 text cache；若啟用 caption augmentation，adapter 會改用 dynamic text encoding。一般快取訓練範例：
 
 ```powershell

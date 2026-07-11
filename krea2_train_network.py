@@ -2,15 +2,11 @@
 
 import argparse
 import logging
-import math
-from typing import Any
-
 import torch
-import torch.nn.functional as F
 from accelerate import Accelerator
 
 import train_network
-from library import anima_train_utils, flux_train_utils, qwen_image_autoencoder_kl, sd3_train_utils, train_util
+from library import anima_train_utils, flow_network_trainer, flux_train_utils, qwen_image_autoencoder_kl, train_util
 from library.device_utils import clean_memory_on_device
 from library.krea2 import krea2_sampling, krea2_utils
 from library.strategy_krea2 import (
@@ -23,18 +19,13 @@ from library.strategy_krea2 import (
 logger = logging.getLogger(__name__)
 
 
-class Krea2NetworkTrainer(train_network.NetworkTrainer):
+class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_network.NetworkTrainer):
     """Architecture adapter that keeps the shared optimizer/dataset/checkpoint loop."""
 
     def __init__(self):
         super().__init__()
         self.is_swapping_blocks = False
-        self.global_step = 0
         self._unconditional_text_encoder_conds = None
-
-    def step_logging(self, accelerator, logs, global_step, epoch):
-        self.global_step = global_step
-        super().step_logging(accelerator, logs, global_step, epoch)
 
     @staticmethod
     def _dataset_needs_dynamic_caption_encoding(dataset) -> bool:
@@ -55,6 +46,7 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         return False
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
+        self.validate_flow_training_args(args)
         if args.cache_text_encoder_outputs_to_disk and not args.cache_text_encoder_outputs:
             args.cache_text_encoder_outputs = True
         dynamic_caption_encoding = self._dataset_needs_dynamic_caption_encoding(train_dataset_group)
@@ -314,18 +306,6 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
     def cast_text_encoder(self, args):
         return False
 
-    def encode_images_to_latents(self, args, vae, images):
-        return vae.encode_pixels_to_latents(images)
-
-    def shift_scale_latents(self, args, latents):
-        return train_util.apply_immiscible_image_scale(args, latents)
-
-    def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device) -> Any:
-        return sd3_train_utils.FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=1000,
-            shift=args.discrete_flow_shift,
-        )
-
     @staticmethod
     def _sample_timesteps(args, latents, device, alpha_masks=None):
         height, width = latents.shape[-2:]
@@ -432,40 +412,17 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
         pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
 
-        apply_ciop = bool(
-            is_train
-            and getattr(args, "ciop_prob", 0.0) > 0.0
-            and torch.rand(1, device=latents.device).item() < args.ciop_prob
-        )
-        eps_out = None
-        if apply_ciop:
-            std = args.ciop_noise_magnitude
-            if getattr(args, "ciop_noise_type", "gaussian") == "uniform":
-                limit = math.sqrt(3.0) * std
-                eps_in = (torch.rand_like(noisy) * 2 - 1.0) * limit
-                eps_out = (torch.rand_like(latents) * 2 - 1.0) * limit
-            else:
-                eps_in = torch.randn_like(noisy) * std
-                eps_out = torch.randn_like(latents) * std
-            noisy = noisy + eps_in
+        ciop = self.sample_ciop_perturbations(args, noisy, is_train)
+        if ciop is not None:
+            noisy = noisy + ciop[0]
             with torch.set_grad_enabled(is_train), accelerator.autocast():
                 pred = forward_model(noisy, prompt_embeds, attn_mask)
             pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
             pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
             self.current_noisy_latents = noisy
 
-        target = noise - latents
-
-        model_guidance_weight = getattr(args, "model_guidance_weight", 0.0)
-        model_guidance_end = getattr(args, "model_guidance_end_step", 0)
-        apply_model_guidance = model_guidance_weight > 0.0 and (
-            model_guidance_end == 0 or self.global_step < model_guidance_end
-        )
-        if apply_model_guidance:
-            if getattr(args, "model_guidance_prob", 1.0) < 1.0:
-                apply_model_guidance = torch.rand(1, device=latents.device).item() <= args.model_guidance_prob
-
-        if apply_model_guidance:
+        pred_uncond = None
+        if self.should_apply_model_guidance(args, latents.device):
             if self._unconditional_text_encoder_conds is None:
                 # This only occurs for direct unit calls that bypass trainer setup.
                 # The normal training path initializes the real empty-prompt condition above.
@@ -485,44 +442,24 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
             )
             pred_uncond = pred_uncond.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
 
-            current_weight = model_guidance_weight
-            warmup_steps = getattr(args, "model_guidance_warmup_steps", 0)
-            if warmup_steps > 0 and self.global_step < warmup_steps:
-                current_weight *= self.global_step / warmup_steps
-
-            if getattr(args, "model_guidance_cfg_zero", False):
-                dot = torch.sum(pred * pred_uncond, dim=[1, 2, 3], keepdim=True)
-                norm = torch.sum(pred_uncond**2, dim=[1, 2, 3], keepdim=True) + 1e-8
-                guidance = current_weight * (dot / norm).detach()
-                threshold = getattr(args, "model_guidance_zero_init_threshold", 0.95)
-                guidance = guidance * (timesteps < threshold).float().view(-1, 1, 1, 1)
-            elif getattr(args, "model_guidance_timestep_scaling", False):
-                min_weight = getattr(args, "model_guidance_min_weight", 0.0)
-                guidance = min_weight + (current_weight - min_weight) * 4.0 * timesteps * (1.0 - timesteps)
-                guidance = guidance.view(-1, 1, 1, 1)
-            else:
-                guidance = current_weight
-            target = target + guidance * (pred - pred_uncond).detach()
-
-        if apply_ciop:
-            target = target + eps_out
-
-        target = anima_train_utils.apply_differential_guidance_target(
-            target, pred, getattr(args, "differential_guidance_scale", 1.0)
-        )
-        weighting = anima_train_utils.compute_loss_weighting_for_anima(
-            weighting_scheme=args.weighting_scheme, sigmas=t, args=args
+        target, weighting = self.finalize_flow_target(
+            args,
+            noise,
+            latents,
+            pred,
+            t,
+            t,
+            model_pred_uncond=pred_uncond,
+            ciop_output=ciop[1] if ciop is not None else None,
         )
         return pred, target, timesteps, weighting
-
-    def post_process_loss(self, loss, args, timesteps, noise_scheduler):
-        return loss
 
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizers, text_encoder, unet):
         if args.sample_prompts:
             logger.warning("Krea 2 sample preview is not enabled in the shared adapter yet; training continues without samples")
 
     def update_metadata(self, metadata, args):
+        self.update_flow_metadata(metadata, args)
         metadata["ss_architecture"] = "krea2"
         metadata["ss_krea2_timestep_sampling"] = args.timestep_sampling
         metadata["ss_krea2_max_token_length"] = args.krea2_max_token_length
@@ -532,6 +469,7 @@ def setup_parser() -> argparse.ArgumentParser:
     parser = train_network.setup_parser()
     train_util.add_dit_training_arguments(parser)
     anima_train_utils.add_anima_training_arguments(parser)
+    flow_network_trainer.add_flow_network_training_arguments(parser)
 
     parser.add_argument("--dit", dest="pretrained_model_name_or_path", type=str, help="Krea 2 RAW DiT checkpoint")
     parser.add_argument(
