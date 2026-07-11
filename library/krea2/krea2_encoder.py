@@ -13,6 +13,7 @@ instead of requiring a separate transformers/Diffusers checkpoint.
 """
 
 import logging
+import json
 from dataclasses import dataclass
 
 import torch
@@ -116,6 +117,53 @@ def _convert_comfyui_qwen3vl_state_dict(sd: dict[str, Tensor]) -> dict[str, Tens
     return converted
 
 
+def _dequantize_comfyui_fp8_state_dict(sd: dict[str, Tensor], dtype: torch.dtype | None) -> dict[str, Tensor]:
+    """Convert ComfyUI scaled-FP8 Linear weights to ordinary model weights.
+
+    ComfyUI stores a float8 weight together with ``weight_scale`` and a JSON
+    ``comfy_quant`` marker.  The regular Transformers Qwen3-VL Linear modules
+    do not understand those extra tensors, so the scale must be applied before
+    ``load_state_dict``.  Unknown quantization formats are rejected instead of
+    silently dropping metadata.
+    """
+    quantized_layers = [key[: -len(".comfy_quant")] for key in sd if key.endswith(".comfy_quant")]
+    if not quantized_layers:
+        return sd
+
+    target_dtype = dtype or torch.float32
+    for layer in quantized_layers:
+        marker_key = f"{layer}.comfy_quant"
+        weight_key = f"{layer}.weight"
+        scale_key = f"{layer}.weight_scale"
+        marker = sd.pop(marker_key)
+        try:
+            config = json.loads(marker.detach().cpu().numpy().tobytes().rstrip(b"\\x00").decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Invalid ComfyUI quantization metadata for {layer}") from exc
+
+        quant_format = config.get("format")
+        if quant_format not in ("float8_e4m3fn", "float8_e5m2"):
+            raise RuntimeError(
+                f"Unsupported ComfyUI Qwen3-VL quantization format for {layer}: {quant_format}. "
+                "Use a BF16 checkpoint or a float8_e4m3fn/e5m2 checkpoint."
+            )
+        if weight_key not in sd:
+            raise RuntimeError(f"ComfyUI quantized Qwen3-VL layer is missing {weight_key}")
+        if scale_key not in sd:
+            raise RuntimeError(f"ComfyUI quantized Qwen3-VL layer is missing {scale_key}")
+
+        weight = sd.pop(weight_key)
+        scale = sd.pop(scale_key).to(device=weight.device, dtype=torch.float32)
+        sd[weight_key] = (weight.float() * scale).to(dtype=target_dtype)
+
+        # These are optional ComfyUI runtime-only parameters and are not part
+        # of the standard Transformers Qwen3-VL state dict.
+        sd.pop(f"{layer}.input_scale", None)
+
+    logger.info("Dequantized %d ComfyUI scaled-FP8 Qwen3-VL layers to %s", len(quantized_layers), target_dtype)
+    return sd
+
+
 def _load_qwen3_vl_model(
     model_path: str,
     *,
@@ -129,8 +177,12 @@ def _load_qwen3_vl_model(
         model = Qwen3VLForConditionalGeneration._from_config(config)
 
     logger.info(f"Loading Krea 2 text encoder (Qwen3-VL) weights from {model_path}")
-    sd = load_split_weights(model_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)
+    # Keep source dtypes intact until ComfyUI scaled-FP8 metadata has been
+    # interpreted.  Casting FP8 to BF16 before applying weight_scale would
+    # preserve the encoded FP8 values, not recover the original weights.
+    sd = load_split_weights(model_path, device=str(device), disable_mmap=disable_mmap, dtype=None)
     sd = _convert_comfyui_qwen3vl_state_dict(sd)
+    sd = _dequantize_comfyui_fp8_state_dict(sd, dtype)
 
     info = model.load_state_dict(sd, strict=False, assign=True)
     # Qwen3-VL-4B ties the LM head to the input embeddings (tie_word_embeddings=true), so the

@@ -100,6 +100,7 @@ accelerate launch --mixed_precision bf16 krea2_train_network.py `
 Training UI 的 Krea 2 選項現在包含：
 
 - `Transformer DType = FP8 Scaled（Krea 2）`：會自動同時傳入 `fp8_base` 與 `fp8_scaled`。Krea 2 目前只實作 Scaled FP8，未提供會造成誤用的 plain FP8 選項。
+- Qwen3-VL Text Encoder 可使用普通 BF16 checkpoint，也可使用 ComfyUI 的 `qwen3vl_4b_fp8_scaled.safetensors`；loader 會讀取 `comfy_quant` 與 `weight_scale` 後還原成 Transformers 可用的 BF16 權重。
 - `Krea 2 訓練時即時編碼 Text Encoder（不使用 Cache）`：設定 `--krea2_dynamic_text_encoder`，直接在每個 batch 產生 Qwen3-VL conditioning，不需要建立 TE cache。
 - `將 Text Encoder 保留在 CPU`：再加上 `--krea2_dynamic_text_encoder_cpu`。TE 權重會留在 CPU RAM，訓練時只把輸入／輸出傳輸到流程中，速度較慢但可降低 VRAM。
 
