@@ -6,6 +6,7 @@ set "ROOT=%~dp0"
 set "VENV_DIR=%ROOT%venv"
 set "VENV_PY=%ROOT%venv\Scripts\python.exe"
 set "REQ_FILE=%ROOT%requirements.txt"
+set "TORCH_REQ_FILE=%ROOT%requirements-cu128.txt"
 
 echo.
 echo [Setup] Anima Standalone Trainer 一鍵安裝
@@ -17,8 +18,13 @@ if not exist "%REQ_FILE%" (
     goto :fail
 )
 
+if not exist "%TORCH_REQ_FILE%" (
+    echo [ERROR] 找不到 requirements-cu128.txt，請確認 CUDA 12.8 依賴檔放在專案根目錄。
+    goto :fail
+)
+
 if not exist "%VENV_PY%" (
-    echo [1/4] 建立 Python venv...
+    echo [1/5] 建立 Python venv...
     where py >nul 2>nul
     if not errorlevel 1 (
         py -3 -m venv "%VENV_DIR%"
@@ -32,14 +38,18 @@ if not exist "%VENV_PY%" (
     )
     if errorlevel 1 goto :fail
 ) else (
-    echo [1/4] 已找到現有 venv，略過建立。
+    echo [1/5] 已找到現有 venv，略過建立。
 )
 
-echo [2/4] 更新 pip / setuptools / wheel...
+echo [2/5] 更新 pip / setuptools / wheel...
 "%VENV_PY%" -m pip install --upgrade pip setuptools wheel
 if errorlevel 1 goto :fail
 
-echo [3/4] 安裝 Python requirements...
+echo [3/5] 安裝 CUDA 12.8 PyTorch requirements...
+"%VENV_PY%" -m pip install -r "%TORCH_REQ_FILE%"
+if errorlevel 1 goto :fail
+
+echo [4/5] 安裝 Python requirements...
 "%VENV_PY%" -m pip install -r "%REQ_FILE%"
 if errorlevel 1 goto :fail
 
@@ -49,7 +59,7 @@ if errorlevel 1 (
     goto :fail
 )
 
-echo [4/4] 安裝 Training UI Node dependencies...
+echo [5/5] 安裝 Training UI Node dependencies...
 pushd "%ROOT%training-ui"
 if errorlevel 1 goto :fail
 npm install

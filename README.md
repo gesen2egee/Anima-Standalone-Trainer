@@ -174,7 +174,7 @@ cd Anima-Standalone-Trainer
 python -m venv venv
 .\venv\Scripts\activate
 
-pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --upgrade -r requirements-cu128.txt
 pip install --upgrade -r requirements.txt
 
 accelerate config
@@ -184,7 +184,7 @@ If `python -m venv` shows only `python`, change `python` to `py`.
 
 Note: `bitsandbytes`, `prodigyopt` and `lion-pytorch` are included in the requirements.txt. If you'd like to use another version, please install it manually.
 
-This installation is for CUDA 12.4. If you use a different version of CUDA, please install the appropriate version of PyTorch. For example, if you use CUDA 12.1, please install `pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu121`.
+This preset installs PyTorch 2.7.1 and torchvision 0.22.1 for CUDA 12.8. If you use a different CUDA version, replace `requirements-cu128.txt` with a separate requirements file containing the appropriate PyTorch index and versions.
 
 Answers to accelerate config:
 
@@ -207,11 +207,11 @@ Note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is o
 
 ## About requirements.txt and PyTorch
 
-The file does not contain requirements for PyTorch. Because the version of PyTorch depends on the environment, it is not included in the file. Please install PyTorch first according to the environment. See installation instructions below.
+General Python dependencies are listed in `requirements.txt`. The supported CUDA 12.8 baseline is kept separate in `requirements-cu128.txt` so its PyTorch index does not affect other packages.
 
-The scripts are tested with PyTorch 2.6.0. PyTorch 2.6.0 or later is required.
+The CUDA 12.8 baseline is `torch==2.7.1+cu128` and `torchvision==0.22.1+cu128`. `transformers==4.57.6` is required for the planned Krea 2 Qwen3-VL integration.
 
-For RTX 50 series GPUs, PyTorch 2.8.0 with CUDA 12.8/12.9 should be used. `requirements.txt` will work with this version.
+Install `requirements-cu128.txt` before `requirements.txt` so the CUDA-specific PyTorch wheels are selected.
 
 ### xformers installation (optional)
 
@@ -245,6 +245,7 @@ When a new release comes out you can upgrade your repo with the following comman
 cd sd-scripts
 git pull
 .\venv\Scripts\activate
+pip install --upgrade -r requirements-cu128.txt
 pip install --use-pep517 --upgrade -r requirements.txt
 ```
 
