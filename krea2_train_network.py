@@ -30,23 +30,37 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     @staticmethod
     def _dataset_needs_dynamic_caption_encoding(dataset) -> bool:
         """Return whether caption processing changes between training samples/steps."""
-        for subset in getattr(dataset, "subsets", []):
-            if (
-                subset.caption_dropout_rate > 0
-                or subset.caption_dropout_every_n_epochs > 0
-                or subset.shuffle_caption
-                or subset.token_warmup_step > 0
-                or subset.caption_tag_dropout_rate > 0
-                or getattr(subset, "enable_fad", False)
-                or subset.caption_prefix
-                or subset.caption_suffix
-                or subset.enable_wildcard
-            ):
-                return True
+        datasets = getattr(dataset, "datasets", None)
+        if datasets is None:
+            datasets = [dataset]
+        for child_dataset in datasets:
+            for subset in getattr(child_dataset, "subsets", []):
+                if Krea2NetworkTrainer._subset_needs_dynamic_caption_encoding(subset):
+                    return True
         return False
+
+    @staticmethod
+    def _subset_needs_dynamic_caption_encoding(subset) -> bool:
+        return bool(
+            subset.caption_dropout_rate > 0
+            or subset.caption_dropout_every_n_epochs > 0
+            or subset.shuffle_caption
+            or subset.token_warmup_step > 0
+            or subset.caption_tag_dropout_rate > 0
+            or getattr(subset, "enable_fad", False)
+            or subset.caption_prefix
+            or subset.caption_suffix
+            or subset.enable_wildcard
+        )
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
         self.validate_flow_training_args(args)
+        if args.krea2_max_token_length <= 0:
+            raise ValueError("krea2_max_token_length must be greater than 0")
+        if args.blocks_to_swap is not None and not 0 <= args.blocks_to_swap <= 26:
+            raise ValueError("Krea 2 blocks_to_swap must be between 0 and 26")
+        if args.attn_mode == "sageattn":
+            raise ValueError("Krea 2 SageAttention is inference-only; use torch, xformers, or flash for training")
         if args.cache_text_encoder_outputs_to_disk and not args.cache_text_encoder_outputs:
             args.cache_text_encoder_outputs = True
         dynamic_caption_encoding = self._dataset_needs_dynamic_caption_encoding(train_dataset_group)
@@ -57,6 +71,20 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             getattr(args, "krea2_dynamic_text_encoder", False)
             or getattr(args, "krea2_dynamic_text_encoder_cpu", False)
         )
+
+        if (
+            dynamic_caption_encoding
+            and not dynamic_text_encoder
+            and not getattr(args, "krea2_text_encoder_layer_offload", False)
+        ):
+            logger.warning(
+                "Krea 2 caption augmentation requires dynamic Qwen3-VL encoding; "
+                "enabling TE Layer Offload to avoid overlapping the full Text Encoder with the DiT."
+            )
+            args.krea2_text_encoder_layer_offload = True
+
+        if args.krea2_text_encoder_layer_offload and not 0.0 < args.krea2_text_encoder_offload_percent <= 1.0:
+            raise ValueError("krea2_text_encoder_offload_percent must be in (0, 1]")
 
         if getattr(args, "krea2_dynamic_text_encoder_cpu", False) and getattr(
             args, "krea2_text_encoder_layer_offload", False
@@ -99,8 +127,10 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if val_dataset_group is not None:
             val_dataset_group.verify_bucket_reso_steps(16)
 
-        if args.blocks_to_swap and args.cpu_offload_checkpointing:
-            raise ValueError("Krea 2 does not combine --blocks_to_swap with --cpu_offload_checkpointing")
+        if args.cpu_offload_checkpointing or getattr(args, "unsloth_offload_checkpointing", False):
+            raise ValueError(
+                "Krea 2 activation offload is not implemented; use gradient checkpointing with --blocks_to_swap instead"
+            )
 
     def load_target_model(self, args, weight_dtype, accelerator):
         if not args.krea2_text_encoder:
@@ -195,6 +225,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     def get_text_encoders_train_flags(self, args, text_encoders):
         return [False] * len(text_encoders)
 
+    def is_text_encoder_not_needed_for_training(self, args):
+        return bool(args.cache_text_encoder_outputs)
+
     @staticmethod
     def _needs_unconditional_conditioning(args) -> bool:
         return float(getattr(args, "model_guidance_weight", 0.0) or 0.0) > 0.0
@@ -206,6 +239,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
         with torch.no_grad():
             empty_hidden, empty_mask = krea2_utils.get_krea2_prompt_embeds(text_encoder, [""])
+            empty_hidden, empty_mask = krea2_sampling.gather_valid_text(empty_hidden, empty_mask.bool())
         self._unconditional_text_encoder_conds = (empty_hidden.cpu(), empty_mask.cpu())
 
     def cache_text_encoder_outputs_if_needed(
@@ -381,9 +415,17 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         t = self._sample_timesteps(args, latents, accelerator.device, batch.get("alpha_masks"))
         self.current_noise = noise
         self.current_sigmas = t
-        noisy = latents.lerp(noise, t[:, None, None, None])
-        self.current_noisy_latents = noisy
+        # torch.lerp requires a tensor weight to use the same dtype as its
+        # BF16 inputs. Keep the canonical timestep in FP32 for scheduling and
+        # loss weighting, and cast only the broadcast weight used for mixing.
+        latent_mix = t.to(dtype=latents.dtype).view(-1, 1, 1, 1)
+        noisy = latents.lerp(noise, latent_mix)
         timesteps = t * 1000.0 + 1.0
+
+        ciop = self.sample_ciop_perturbations(args, noisy, is_train)
+        if ciop is not None:
+            noisy = noisy + ciop[0]
+        self.current_noisy_latents = noisy
 
         prompt_embeds, attn_mask = text_encoder_conds[:2]
         prompt_embeds = prompt_embeds.to(accelerator.device, dtype=weight_dtype)
@@ -412,15 +454,6 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
         pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
 
-        ciop = self.sample_ciop_perturbations(args, noisy, is_train)
-        if ciop is not None:
-            noisy = noisy + ciop[0]
-            with torch.set_grad_enabled(is_train), accelerator.autocast():
-                pred = forward_model(noisy, prompt_embeds, attn_mask)
-            pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
-            pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
-            self.current_noisy_latents = noisy
-
         pred_uncond = None
         if self.should_apply_model_guidance(args, latents.device):
             if self._unconditional_text_encoder_conds is None:
@@ -435,6 +468,8 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                     prompt_embeds.shape[0], -1, -1, -1
                 )
                 unconditional_mask = empty_mask.to(device=accelerator.device).expand(prompt_embeds.shape[0], -1)
+            if self.is_swapping_blocks:
+                unet.prepare_block_swap_before_forward()
             with torch.no_grad(), accelerator.autocast():
                 pred_uncond = forward_model(noisy, unconditional_context, unconditional_mask)
             pred_uncond = pred_uncond.reshape(
@@ -447,7 +482,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             noise,
             latents,
             pred,
-            t,
+            t.view(-1, 1, 1, 1),
             t,
             model_pred_uncond=pred_uncond,
             ciop_output=ciop[1] if ciop is not None else None,
@@ -463,6 +498,14 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         metadata["ss_architecture"] = "krea2"
         metadata["ss_krea2_timestep_sampling"] = args.timestep_sampling
         metadata["ss_krea2_max_token_length"] = args.krea2_max_token_length
+        metadata["ss_krea2_fp8_scaled"] = bool(args.fp8_scaled)
+        metadata["ss_krea2_blocks_to_swap"] = args.blocks_to_swap or 0
+        metadata["ss_krea2_dynamic_text_encoder"] = not bool(args.cache_text_encoder_outputs)
+        metadata["ss_krea2_text_encoder_layer_offload"] = bool(args.krea2_text_encoder_layer_offload)
+
+    def on_validation_step_end(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype):
+        if self.is_swapping_blocks:
+            accelerator.unwrap_model(unet).prepare_block_swap_before_forward()
 
 
 def setup_parser() -> argparse.ArgumentParser:
@@ -517,6 +560,11 @@ def setup_parser() -> argparse.ArgumentParser:
         "--fp8_scaled",
         action="store_true",
         help="Load Krea 2 main blocks using dynamic scaled FP8",
+    )
+    parser.add_argument(
+        "--unsloth_offload_checkpointing",
+        action="store_true",
+        help="Compatibility flag; Krea 2 rejects activation offload because it is not implemented",
     )
 
     timestep_action = parser._option_string_actions["--timestep_sampling"]

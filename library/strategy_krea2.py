@@ -54,11 +54,10 @@ class Krea2TextEncodingStrategy(TextEncodingStrategy):
 
 
 class Krea2TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
-    """Cache fixed-width, valid-prefix Qwen3-VL hidden states.
+    """Cache variable-width, valid-prefix Qwen3-VL hidden states.
 
-    The conditioner removes interior padding before this strategy pads each item
-    to the configured width. This preserves the Krea2 attention semantics while
-    remaining compatible with the existing dataset collator's tensor stacking.
+    The conditioner removes interior padding, and the shared collator pads the
+    leading sequence dimension only when examples are assembled into a batch.
     """
 
     KREA2_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX = "_krea2_te.npz"
@@ -77,7 +76,25 @@ class Krea2TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             return True
         try:
             with np.load(npz_path) as data:
-                return "prompt_embeds" in data and "attn_mask" in data
+                if "prompt_embeds" not in data or "attn_mask" not in data:
+                    return False
+                prompt_embeds = data["prompt_embeds"]
+                attn_mask = data["attn_mask"]
+                expected_config = krea2_utils.single_mmdit_large_wide
+                mask_is_valid_prefix = (
+                    attn_mask.size > 0
+                    and bool(attn_mask[0])
+                    and np.all(attn_mask[:-1] >= attn_mask[1:])
+                )
+                return (
+                    prompt_embeds.ndim == 3
+                    and 0 < prompt_embeds.shape[0] <= self.max_length
+                    and prompt_embeds.shape[1] == expected_config.txtlayers
+                    and prompt_embeds.shape[2] == expected_config.txtdim
+                    and attn_mask.shape == (prompt_embeds.shape[0],)
+                    and np.isin(attn_mask, [0, 1]).all()
+                    and mask_is_valid_prefix
+                )
         except Exception:
             return False
 
@@ -99,18 +116,16 @@ class Krea2TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             raise ValueError(
                 f"Krea2 text cache length {hidden.shape[1]} exceeds --krea2_max_token_length={self.max_length}"
             )
-        padded_hidden = hidden.new_zeros(hidden.shape[0], self.max_length, hidden.shape[2], hidden.shape[3])
-        padded_mask = torch.zeros(hidden.shape[0], self.max_length, dtype=torch.bool, device=mask.device)
-        padded_hidden[:, : hidden.shape[1]] = hidden
-        padded_mask[:, : mask.shape[1]] = mask
-
-        hidden_np = padded_hidden.float().cpu().numpy()
-        mask_np = padded_mask.cpu().numpy().astype(np.uint8)
+        hidden_np = hidden.float().cpu().numpy()
+        mask_np = mask.cpu().numpy().astype(np.uint8)
         for index, info in enumerate(infos):
+            valid_length = int(mask_np[index].sum())
+            item_hidden = hidden_np[index, :valid_length]
+            item_mask = mask_np[index, :valid_length]
             if self.cache_to_disk:
-                np.savez(info.text_encoder_outputs_npz, prompt_embeds=hidden_np[index], attn_mask=mask_np[index])
+                np.savez(info.text_encoder_outputs_npz, prompt_embeds=item_hidden, attn_mask=item_mask)
             else:
-                info.text_encoder_outputs = (hidden_np[index], mask_np[index])
+                info.text_encoder_outputs = (item_hidden, item_mask)
 
 
 class Krea2LatentsCachingStrategy(AnimaLatentsCachingStrategy):

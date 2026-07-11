@@ -84,6 +84,14 @@ function buildModelArgs(arch, globalConfig) {
     return modelArgs;
 }
 
+function applyArchitectureJobDefaults(config, architectureId) {
+    const architecture = ARCH_REGISTRY.architectures[architectureId];
+    if (!architecture?.job_defaults) return;
+    for (const [section, defaults] of Object.entries(architecture.job_defaults)) {
+        config[section] = { ...(config[section] || {}), ...defaults };
+    }
+}
+
 function stripUiOnlyBackendArgs(trainingArgs) {
     if (!trainingArgs) return;
 
@@ -866,6 +874,11 @@ function buildTrainingConfig(jobName, jobPath) {
         output_dir: outputDir,
         logging_dir: loggingDir
     };
+    if (arch.id === 'krea2') {
+        delete merged.training_arguments.cpu_offload_checkpointing;
+        delete merged.training_arguments.unsloth_offload_checkpointing;
+        merged.training_arguments.torch_compile = false;
+    }
     stripUiOnlyBackendArgs(merged.training_arguments);
 
     const outputName = merged.training_arguments.output_name || jobName;
@@ -899,7 +912,7 @@ function buildTrainingConfig(jobName, jobPath) {
     }
 
     // Add sample prompts if file exists and has content
-    if (fs.existsSync(samplePromptsPath)) {
+    if (arch.id !== 'krea2' && fs.existsSync(samplePromptsPath)) {
         const prompts = fs.readFileSync(samplePromptsPath, 'utf8').trim();
         if (prompts.length > 0) {
             const ta = jobConfig.training_arguments || {};
@@ -1170,6 +1183,7 @@ app.post('/api/jobs', (req, res) => {
         config.ui_arguments = config.ui_arguments || {};
         if (model_architecture && ARCH_REGISTRY.architectures[model_architecture]) {
             config.ui_arguments.architecture = model_architecture;
+            applyArchitectureJobDefaults(config, model_architecture);
         }
         config.training_arguments = config.training_arguments || {};
         if (output_name && String(output_name).trim()) {
@@ -2051,7 +2065,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             `--from_file="${promptsPath}"`,
             `--save_path="${outputDir}"`,
             '--output_type=images',
-            `--seed=${tArgs.seed || 42}`
+            `--seed=${tArgs.seed ?? 42}`
         );
 
         // Add architecture-specific gen params from registry defaults + job overrides
@@ -2069,6 +2083,20 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             args.push('--attn_mode=flash');
         } else if (req.body.sage_attn) {
             args.push('--attn_mode=sageattn');
+        }
+
+        if (genArch.id === 'krea2') {
+            const blocksToSwap = Number(req.body.blocks_to_swap ?? tArgs.blocks_to_swap ?? 0);
+            if (Number.isInteger(blocksToSwap) && blocksToSwap > 0) {
+                args.push(`--blocks_to_swap=${blocksToSwap}`);
+            }
+
+            const networkModule = mergedConfig.network_arguments?.network_module || 'networks.lora_krea2';
+            const postHocMergeModules = new Set(['networks.cdka', 'networks.krona']);
+            const hasPostHocAdapter = Boolean(req.body.network_weights) && postHocMergeModules.has(networkModule);
+            if (archSection.fp8_scaled && !hasPostHocAdapter) {
+                args.push('--fp8_scaled');
+            }
         }
 
         // LoRA support

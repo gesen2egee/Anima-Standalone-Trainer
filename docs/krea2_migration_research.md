@@ -116,7 +116,7 @@ Training UI 的 Krea 2 選項現在包含：
 - `AIT-style Qwen3-VL Layer Offload`：設定 `--krea2_text_encoder_layer_offload`。非 Linear 模組常駐 GPU，Linear 權重保留在 pinned CPU memory，forward 時逐層搬到 GPU；可在不 cache 的情況下保留 FAD、caption shuffle、dropout 等動態 caption 功能。
 - `將 Text Encoder 保留在 CPU`：再加上 `--krea2_dynamic_text_encoder_cpu`。TE 權重與運算都留在 CPU RAM，會比 Layer Offload 慢很多，但可進一步降低 VRAM；兩者不可同時啟用。
 
-AIT 的 `layer_offloading_transformer_percent: 0.7` 可用 28 層 Krea 2 DiT 的 `--blocks_to_swap 20` 近似（約 71.4%）；12GB VRAM 建議從 batch size 1、gradient checkpointing、`--fp8_scaled --blocks_to_swap 20` 開始，再依實際 OOM 調高至 22–24。`blocks_to_swap` 不可與 `--cpu_offload_checkpointing` 同時使用。
+AIT 的 `layer_offloading_transformer_percent: 0.7` 可用 28 層 Krea 2 DiT 的 `--blocks_to_swap 20` 近似（約 71.4%）；12GB VRAM 建議從 batch size 1、gradient checkpointing、`--fp8_scaled --blocks_to_swap 20` 開始，再依實際 OOM 調高至 22–24。Krea 2 尚未實作 activation offload，因此 `cpu_offload_checkpointing` 與 `unsloth_offload_checkpointing` 都不可使用。
 
 CLI 範例：
 
@@ -139,3 +139,23 @@ accelerate launch --mixed_precision bf16 krea2_train_network.py `
 - Automask 會在 latent cache 階段產生 alpha mask，寫入 Krea2 的多解析度 `.npz`（例如 `*_1024x1024_krea2.npz`）中的 `alpha_mask_<H>x<W>`，並一併保存 automask 參數 metadata；讀取時會驗證設定是否相同。
 
 啟用 caption augmentation 時，請預期 Qwen3-VL 會與 DiT 同時佔用顯存；若顯存不足，使用 dynamic CPU text encoder。若要使用 CDKA／KRONA 推論合併 LoRA，請不要在生成命令啟用 `--fp8_scaled`，因為這兩種 adapter 需要先以完整權重合併。
+
+## 2026-07 完整 DEBUG 與實機基準
+
+本輪使用本機真實 Krea 2 RAW、ComfyUI Qwen3-VL FP8 Scaled 與 Qwen-Image VAE 權重，在 RTX 3080 完成生成及 1-step 訓練。結果不是只有 mock shape 測試：cache、模型載入、兩次 guidance forward、backward、optimizer step、LoRA save 與 PNG save 都實際執行成功。
+
+| 節點 | 實測 dtype／shape | 結果 |
+|---|---|---|
+| Qwen3-VL 原始輸出 | `bfloat16 [1, 512, 12, 2560]`、mask `bool [1, 512]` | 252 個 ComfyUI Scaled-FP8 layer 正確還原成 BF16 |
+| valid-token compaction | `bfloat16 [1, 11, 12, 2560]` | interior padding 正確移除 |
+| 磁碟 text cache | `float32 [12, 12, 2560]`、mask `uint8 [12]` | 依 caption 實際長度儲存，共用 collator 只補 sequence 軸 |
+| VAE latent cache | `float32 [16, 32, 32]` | trainer 進 forward 前轉為 DiT dtype；不會與 FP8 Linear 直接混算 |
+| FP8 Scaled DiT | 224 個 `float8_e4m3fn` weight、224 個 BF16 scale buffer，另有 FP32 norm／projection 與 BF16 parameter | scale buffer、autocast 與非量化層 dtype 相容 |
+| DiT forward | image token `[1, 256, 64]`、context `[1, 16, 12, 2560]`、mask `[1, 272]`、output `bfloat16 [1, 256, 64]` | 全部 finite，20-block swap 可連續執行 conditional／unconditional forward |
+| VAE decode | `bfloat16 [1, 3, 1, 256, 256]` 或 4D 單幀輸出 | singleton frame 軸會驗證後移除，`[-1, 1]` 正確轉為 RGB uint8 |
+| 1-step LoRA 訓練 | 264 個 LoRA module、CIOP 100%、Model Guidance 100%、gradient checkpointing、FP8 Scaled、20-block swap | forward／backward／optimizer／save 成功，loss `2.16` |
+| 儲存 checkpoint | 792 個 BF16 tensor | 所有 tensor finite，Krea 2／FP8／block swap metadata 完整 |
+
+本輪修正的實際錯誤包括：BF16 latent 與 FP32 timestep 直接傳入 `torch.lerp` 的 dtype mismatch、batch 大於 1 時 loss weight 廣播錯軸、VAE singleton frame 軸造成 5D→4D 轉圖失敗、VAE `[-1, 1]` 未正規化即轉 uint8、block swap 在 Model Guidance 第二次 forward 前未重置、CIOP 重複執行 DiT、DatasetGroup 動態 caption 判斷走錯層、Krea 2 3D text cache 補錯維度，以及 prompt-file 旗標被當成 prompt 文字。
+
+Training UI 的 Krea 2 新工作預設採 FP8 Scaled、20 blocks swap、dynamic Text Encoder Layer Offload 與 latent disk cache；plain FP8、full finetune、SageAttention training、activation offload、Torch Compile 及訓練中 sample preview 會被停用或明確拒絕。固定 seed 預覽請改用 UI 的獨立生成流程。

@@ -102,6 +102,7 @@
     },
     "krea2": {
       "display_name": "Krea 2",
+      "supports_full_finetune": false,
       "network_modules": ["networks.lora_krea2", "networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "krea2_train_network.py",
@@ -137,6 +138,26 @@
         "y2": {"label": "Timestep Shift Max", "type": "number", "default": 1.15, "step": 0.05, "cli_flag": "y2"}
       },
       "training_section": "krea2_arguments",
+      "job_defaults": {
+        "training_arguments": {
+          "blocks_to_swap": 20,
+          "cache_latents": true,
+          "cache_latents_to_disk": true,
+          "cache_text_encoder_outputs_to_disk": false
+        },
+        "krea2_arguments": {
+          "fp8_base": true,
+          "fp8_scaled": true,
+          "krea2_dynamic_text_encoder": true,
+          "krea2_dynamic_text_encoder_cpu": false,
+          "krea2_text_encoder_layer_offload": true,
+          "krea2_text_encoder_offload_percent": 1.0,
+          "timestep_sampling": "krea2_shift",
+          "discrete_flow_shift": 2.5,
+          "sigmoid_scale": 1.0,
+          "krea2_max_token_length": 512
+        }
+      },
       "all_in_one": false,
       "fsdp_transformer_cls": "SingleStreamBlock"
     }

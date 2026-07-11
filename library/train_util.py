@@ -252,6 +252,15 @@ def split_train_val(
         return paths[split:], sizes[split:]
 
 
+def pad_tensor_leading_dimension(tensor: torch.Tensor, target_length: int) -> torch.Tensor:
+    """Right-pad only a tensor's leading sequence dimension."""
+    padding = target_length - tensor.shape[0]
+    if padding < 0:
+        raise ValueError(f"target_length={target_length} is smaller than tensor length={tensor.shape[0]}")
+    pad_width = [0, 0] * (tensor.ndim - 1) + [0, padding]
+    return torch.nn.functional.pad(tensor, tuple(pad_width))
+
+
 class ImageInfo:
     def __init__(
         self, image_key: str, num_repeats: int, caption: str, is_reg: bool, absolute_path: str, caption_dropout_rate: float = 0.0
@@ -2093,8 +2102,10 @@ class BaseDataset(torch.utils.data.Dataset):
                         # input_ids or mask
                         result.append(torch.stack([(torch.nn.functional.pad(x, (0, max_len - x.shape[0]))) for x in tensors]))
                     else:
-                        # text encoder outputs
-                        result.append(torch.stack([(torch.nn.functional.pad(x, (0, 0, 0, max_len - x.shape[0]))) for x in tensors]))
+                        # Text encoder outputs: sequence is always the leading
+                        # dimension. Krea 2 outputs are 3D [seq, layers, hidden],
+                        # so pad every trailing dimension with zero width first.
+                        result.append(torch.stack([pad_tensor_leading_dimension(x, max_len) for x in tensors]))
             return result
 
         # set example

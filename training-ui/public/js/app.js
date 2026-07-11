@@ -42,6 +42,7 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     networkModule: "networks.cdka",
     timestepSampling: "uniform",
     flowShift: 1.0,
+    supportsFullFinetune: true,
     hint: "使用 Anima 模型路徑與 anima_train_network.py。",
   },
   krea2: {
@@ -49,6 +50,7 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     networkModule: "networks.lora_krea2",
     timestepSampling: "krea2_shift",
     flowShift: 2.5,
+    supportsFullFinetune: false,
     hint: "使用 Krea 2 RAW DiT、Qwen3-VL 與 Krea2 專用訓練流程。",
   },
   lumina: {
@@ -56,6 +58,7 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     networkModule: "networks.lora_lumina",
     timestepSampling: "uniform",
     flowShift: 6.0,
+    supportsFullFinetune: true,
     hint: "使用 Lumina 模型路徑與 Lumina 訓練流程。",
   },
 });
@@ -67,6 +70,14 @@ function inferModelArchitecture(config = {}) {
   if (config.lumina_arguments || config.network_arguments?.network_module === "networks.lora_lumina") return "lumina";
   if (config.network_arguments?.network_module === "networks.lora_krea2") return "krea2";
   return "anima";
+}
+
+function getArchitectureArguments(config, architecture) {
+  if (architecture === "krea2") {
+    return { ...(config.anima_arguments || {}), ...(config.krea2_arguments || {}) };
+  }
+  if (architecture === "lumina") return config.lumina_arguments || {};
+  return config.anima_arguments || {};
 }
 
 function updateModelArchitectureUI({ applyDefaults = false } = {}) {
@@ -91,13 +102,56 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   }
   const teGroup = $("group-krea2-text-encoder");
   if (teGroup) teGroup.classList.toggle("hidden", architecture !== "krea2");
+  const activationOffload = $("cfg-activation-offload");
+  if (activationOffload) {
+    activationOffload.disabled = architecture === "krea2";
+    if (architecture === "krea2") activationOffload.value = "none";
+  }
+  const torchCompile = $("cfg-torch-compile");
+  if (torchCompile) {
+    torchCompile.disabled = architecture === "krea2";
+    if (architecture === "krea2") torchCompile.checked = false;
+  }
+  const enableSampling = $("cfg-enable-sampling");
+  const sampleAtFirst = $("cfg-sample-at-first");
+  if (enableSampling) {
+    enableSampling.disabled = architecture === "krea2";
+    if (architecture === "krea2") {
+      enableSampling.checked = false;
+      $("group-sample-every")?.classList.add("hidden");
+    }
+  }
+  if (sampleAtFirst) {
+    sampleAtFirst.disabled = architecture === "krea2";
+    if (architecture === "krea2") sampleAtFirst.checked = false;
+  }
+  const fullFinetuneOption = document.querySelector('#cfg-training-type option[value="full_finetune"]');
+  if (fullFinetuneOption) {
+    fullFinetuneOption.disabled = !defaults.supportsFullFinetune;
+    if (!defaults.supportsFullFinetune && $("cfg-training-type").value === "full_finetune") {
+      $("cfg-training-type").value = "lora";
+      updateTrainingTypeUI("lora");
+    }
+  }
   updateKrea2TextEncoderUI();
   if (applyDefaults) {
     $("cfg-network-module").value = defaults.networkModule;
     $("cfg-timestep-method").value = defaults.timestepSampling;
     $("cfg-flow-shift").value = defaults.flowShift;
+    if (architecture === "krea2") {
+      $("cfg-cache-latents").checked = true;
+      $("cfg-cache-latents-to-disk").checked = true;
+      $("cfg-cache-te").checked = false;
+      $("cfg-krea2-dynamic-text-encoder").checked = true;
+      $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
+      $("cfg-krea2-text-encoder-layer-offload").checked = true;
+      $("cfg-krea2-text-encoder-offload-percent").value = 100;
+      $("cfg-transformer-dtype").value = "fp8_scaled";
+      $("cfg-blocks-to-swap").value = 20;
+    }
     updateNetworkModuleUI();
     applyNetworkModulePreset(defaults.networkModule);
+    updateKrea2TextEncoderUI();
   }
 }
 
@@ -119,6 +173,28 @@ function updateKrea2TextEncoderUI() {
       cache.disabled = false;
     }
   }
+}
+
+function syncKrea2DynamicCaptionEncoding() {
+  if ($("cfg-model-architecture")?.value !== "krea2") return;
+  const needsDynamic = currentSubsets.some((subset) =>
+    subset.caption_dropout_rate > 0 ||
+    subset.caption_dropout_every_n_epochs > 0 ||
+    subset.shuffle_caption ||
+    subset.caption_tag_dropout_rate > 0 ||
+    subset.enable_fad ||
+    subset.caption_prefix ||
+    subset.caption_suffix ||
+    subset.token_warmup_step > 0 ||
+    subset.enable_wildcard
+  );
+  if (!needsDynamic) return;
+  $("cfg-krea2-dynamic-text-encoder").checked = true;
+  $("cfg-cache-te").checked = false;
+  if (!$("cfg-krea2-dynamic-text-encoder-cpu").checked) {
+    $("cfg-krea2-text-encoder-layer-offload").checked = true;
+  }
+  updateKrea2TextEncoderUI();
 }
 
 function updateNewJobModelArchitecture() {
@@ -1754,13 +1830,9 @@ function populateConfig(config) {
   const modelArchitecture = inferModelArchitecture(config);
   $("cfg-model-architecture").value = modelArchitecture;
   updateModelArchitectureUI();
-  const a = modelArchitecture === "krea2"
-    ? (config.krea2_arguments || {})
-    : modelArchitecture === "lumina"
-      ? (config.lumina_arguments || {})
-      : (config.anima_arguments || {});
+  const a = getArchitectureArguments(config, modelArchitecture);
   const ui = config.ui_arguments || {};
-  const networkModule = n.network_module || "networks.krona";
+  const networkModule = n.network_module || MODEL_ARCHITECTURE_DEFAULTS[modelArchitecture].networkModule;
   $("cfg-custom-cli-args-toml").value = renderCliCustomArgsToml(ui.custom_cli_args || "");
   // Training
   $("cfg-learning-rate").value = t.learning_rate || getNetworkModuleLearningRate(networkModule);
@@ -1858,7 +1930,11 @@ function populateConfig(config) {
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
-  $("cfg-krea2-dynamic-text-encoder").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder ?? false);
+  $("cfg-krea2-dynamic-text-encoder").checked = modelArchitecture === "krea2" && (
+    (a.krea2_dynamic_text_encoder ?? false) ||
+    (a.krea2_dynamic_text_encoder_cpu ?? false) ||
+    (a.krea2_text_encoder_layer_offload ?? false)
+  );
   $("cfg-krea2-dynamic-text-encoder-cpu").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder_cpu ?? false);
   $("cfg-krea2-text-encoder-layer-offload").checked = modelArchitecture === "krea2" && (a.krea2_text_encoder_layer_offload ?? true);
   $("cfg-krea2-text-encoder-offload-percent").value = Math.round((a.krea2_text_encoder_offload_percent ?? 1.0) * 100);
@@ -1990,7 +2066,9 @@ function populateConfig(config) {
   updateAutomaskUI();
   $("cfg-weighting-scheme").value = a.weighting_scheme || "uniform";
   $("cfg-sigmoid-scale").value = a.sigmoid_scale ?? 1.0;
-  $("cfg-qwen3-max-token-length").value = a.qwen3_max_token_length ?? 512;
+  $("cfg-qwen3-max-token-length").value = modelArchitecture === "krea2"
+    ? (a.krea2_max_token_length ?? a.qwen3_max_token_length ?? 512)
+    : (a.qwen3_max_token_length ?? 512);
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
   // Model Guidance
   $("cfg-model-guidance-weight").value = a.model_guidance_weight ?? 0.0;
@@ -2086,6 +2164,7 @@ function populateDataset(dataset) {
   $("cfg-alpha-mask").checked = alphaMaskStates.length === 0 || alphaMaskStates.every((value) => value);
   $("cfg-alpha-mask").indeterminate = alphaMaskStates.some((value) => value) && !alphaMaskStates.every((value) => value);
   renderSubsets();
+  syncKrea2DynamicCaptionEncoding();
   // Rebuild progressive phase rows now that resolution field is populated
   if ($("cfg-progressive-reso").checked) renderProgressivePhases();
 }
