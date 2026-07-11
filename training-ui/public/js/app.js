@@ -1658,7 +1658,9 @@ function updateRunningState(running) {
 function populateConfig(config) {
   const t = config.training_arguments || {};
   const n = config.network_arguments || {};
-  const a = config.anima_arguments || {};
+  const a = n.network_module === "networks.lora_krea2"
+    ? (config.krea2_arguments || {})
+    : (config.anima_arguments || {});
   const ui = config.ui_arguments || {};
   const networkModule = n.network_module || "networks.krona";
   $("cfg-custom-cli-args-toml").value = renderCliCustomArgsToml(ui.custom_cli_args || "");
@@ -2106,6 +2108,7 @@ function gatherConfig() {
   const enableSampling = $("cfg-enable-sampling").checked;
   const isMultiGpu = false;
   const multiGpuMode = $("cfg-multigpu-mode").value;
+  const isKrea2 = $("cfg-network-module").value === "networks.lora_krea2";
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2355,6 +2358,14 @@ function gatherConfig() {
       ciop_noise_magnitude: safeFloat($("cfg-ciop-noise-magnitude").value),
       ciop_noise_type: $("cfg-ciop-noise-type").value,
     },
+    krea2_arguments: isKrea2
+      ? {
+          timestep_sampling: $("cfg-timestep-method").value,
+          discrete_flow_shift: safeFloat($("cfg-flow-shift").value, 2.5),
+          sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value, 1.0),
+          krea2_max_token_length: safeInt($("cfg-qwen3-max-token-length").value, 512),
+        }
+      : undefined,
     gpu_ids:
       Array.from(document.querySelectorAll('input[name="gpu-select"]:checked'))[0]?.value || "",
   };

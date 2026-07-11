@@ -936,6 +936,11 @@ function buildTrainingConfig(jobName, jobPath) {
         merged.lumina_arguments = { ...jobConfig.lumina_arguments };
     }
 
+    // Krea 2 uses the same shared DiT argument parser but has its own cache/token settings.
+    if (jobConfig.krea2_arguments) {
+        merged.krea2_arguments = { ...jobConfig.krea2_arguments };
+    }
+
     return merged;
 }
 

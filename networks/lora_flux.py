@@ -645,6 +645,7 @@ def create_network(
         ggpo_sigma=ggpo_sigma,
         reg_lrs=reg_lrs,
         verbose=verbose,
+        target_all_linears=kwargs.get("target_all_linears", False),
     )
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)
@@ -704,6 +705,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, flux, weigh
         module_class=module_class,
         split_qkv=split_qkv,
         train_t5xxl=train_t5xxl,
+        target_all_linears=kwargs.get("target_all_linears", False),
     )
     return network, weights_sd
 
@@ -748,6 +750,7 @@ class LoRANetwork(torch.nn.Module):
         ggpo_sigma: Optional[float] = None,
         reg_lrs: Optional[Dict[str, float]] = None,
         verbose: Optional[bool] = False,
+        target_all_linears: bool = False,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -762,6 +765,7 @@ class LoRANetwork(torch.nn.Module):
         self.train_blocks = train_blocks if train_blocks is not None else "all"
         self.split_qkv = split_qkv
         self.train_t5xxl = train_t5xxl
+        self.target_all_linears = target_all_linears
 
         self.type_dims = type_dims
         self.in_dims = in_dims
@@ -952,7 +956,9 @@ class LoRANetwork(torch.nn.Module):
             skipped_te += skipped
 
         # create LoRA for U-Net
-        if self.train_blocks == "all":
+        if self.target_all_linears:
+            target_replace_modules = None
+        elif self.train_blocks == "all":
             target_replace_modules = LoRANetwork.FLUX_TARGET_REPLACE_MODULE_DOUBLE + LoRANetwork.FLUX_TARGET_REPLACE_MODULE_SINGLE
         elif self.train_blocks == "single":
             target_replace_modules = LoRANetwork.FLUX_TARGET_REPLACE_MODULE_SINGLE

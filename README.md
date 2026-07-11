@@ -209,7 +209,7 @@ Note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is o
 
 General Python dependencies are listed in `requirements.txt`. The supported CUDA 12.8 baseline is kept separate in `requirements-cu128.txt` so its PyTorch index does not affect other packages.
 
-The CUDA 12.8 baseline is `torch==2.7.1+cu128` and `torchvision==0.22.1+cu128`. `transformers==4.57.6` is required for the planned Krea 2 Qwen3-VL integration.
+The CUDA 12.8 baseline is `torch==2.7.1+cu128` and `torchvision==0.22.1+cu128`. `transformers==4.57.6` is required for the integrated Krea 2 Qwen3-VL pipeline.
 
 Install `requirements-cu128.txt` before `requirements.txt` so the CUDA-specific PyTorch wheels are selected.
 

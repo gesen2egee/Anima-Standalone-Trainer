@@ -99,6 +99,46 @@
       "all_in_one": true,
       "fsdp_transformer_cls": "JointTransformerBlock",
       "all_in_one_source_key": "lumina_dit_path"
+    },
+    "krea2": {
+      "display_name": "Krea 2",
+      "network_modules": ["networks.lora_krea2"],
+      "scripts": {
+        "train": "krea2_train_network.py",
+        "train_network": "krea2_train_network.py",
+        "generate": "krea2_generate_image.py"
+      },
+      "global_paths": {
+        "krea2_dit_path": {
+          "label": "Krea 2 DiT Model Path",
+          "placeholder": "D:\\Krea2\\diffusion_model.safetensors",
+          "cli_flag": "pretrained_model_name_or_path",
+          "gen_flag": "dit"
+        },
+        "krea2_text_encoder_path": {
+          "label": "Krea 2 Qwen3-VL Text Encoder Path",
+          "placeholder": "D:\\Krea2\\qwen3-vl-4b.safetensors",
+          "cli_flag": "krea2_text_encoder",
+          "gen_flag": "text_encoder"
+        },
+        "krea2_vae_path": {
+          "label": "Krea 2 VAE Path",
+          "placeholder": "D:\\Krea2\\qwen_image_vae.safetensors",
+          "cli_flag": "vae",
+          "gen_flag": "vae"
+        }
+      },
+      "gen_params": {
+        "steps": {"label": "Sampling Steps", "type": "number", "default": 28, "step": 1, "cli_flag": "steps"},
+        "guidance_scale": {"label": "Guidance Scale", "type": "number", "default": 5.5, "step": 0.1, "cli_flag": "guidance_scale"},
+        "width": {"label": "Width", "type": "number", "default": 1024, "step": 16, "cli_flag": "width"},
+        "height": {"label": "Height", "type": "number", "default": 1024, "step": 16, "cli_flag": "height"},
+        "y1": {"label": "Timestep Shift Min", "type": "number", "default": 0.5, "step": 0.05, "cli_flag": "y1"},
+        "y2": {"label": "Timestep Shift Max", "type": "number", "default": 1.15, "step": 0.05, "cli_flag": "y2"}
+      },
+      "training_section": "krea2_arguments",
+      "all_in_one": false,
+      "fsdp_transformer_cls": "SingleStreamBlock"
     }
   },
   "default_architecture": "anima"

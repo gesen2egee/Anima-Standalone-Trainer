@@ -4,7 +4,7 @@
 
 Krea 2 訓練可以移植到本 REPO，但不是複製四個入口腳本就能完成。外部 `musubi-tuner` 的 Krea 2 實作依賴一套較新的 dataset、cache 與 `NetworkTrainer` 介面；本 REPO 目前使用 kohya/sd-scripts 風格的 `train_network.py` 與 `library.train_util`。建議採「獨立 Krea 2 架構模組 + 現有訓練框架 adapter」方式，避免把整套 Musubi Tuner 基礎層直接覆蓋進來。
 
-本次先完成共同環境基線：`transformers==4.57.6`，以及獨立 CUDA 12.8 requirements 的 `torch==2.7.1+cu128`、`torchvision==0.22.1+cu128`。Krea 2 程式碼尚未在本階段加入。
+本次已完成共同環境基線與第一版共用管道：`transformers==4.57.6`，以及獨立 CUDA 12.8 requirements 的 `torch==2.7.1+cu128`、`torchvision==0.22.1+cu128`。
 
 ## 外部實作拆解
 
@@ -55,11 +55,11 @@ Krea 2 是 single-stream MMDiT，不是現有 SDXL、FLUX 或 Anima 的既有 U-
 
 ## 建議移植順序
 
-1. **環境基線（本次）**：分離 `requirements-cu128.txt`，先安裝 CUDA 12.8 的 PyTorch，再安裝一般 requirements。
-2. **純模型核心**：先移植 `krea2/`、`lora_krea2.py` 與必要的 safetensors／attention adapter，完成 CPU 端 config、state-dict key mapping 與純 tensor 單元測試。
-3. **快取 adapter**：把 Qwen-Image VAE 接到現有 latent cache，另建 Krea 2 varlen text cache 格式與讀取器。
-4. **訓練 adapter**：在現有 `train_network.NetworkTrainer` 增加 Krea 2 model hooks，接入 flow-matching timestep、patch/unpatch 與 Krea 2 LoRA；不要直接改寫既有 SD／Flux／Anima 路徑。
-5. **推論與 UI**：先完成命令列 RAW／Turbo smoke test，再把模型選項接到 Training UI。
+1. **環境基線（已完成）**：分離 `requirements-cu128.txt`，先安裝 CUDA 12.8 的 PyTorch，再安裝一般 requirements。
+2. **純模型核心（已完成）**：移植 `library/krea2/`、`networks/lora_krea2.py` 與必要的 attention adapter。
+3. **快取 adapter（已完成）**：Qwen-Image VAE 接入既有 latent cache，另建 Krea 2 varlen text cache 格式。
+4. **訓練 adapter（已完成第一版）**：以 `Krea2NetworkTrainer` 接入 flow-matching timestep、patch/unpatch、FP8、block swap 與 Krea 2 LoRA。
+5. **推論與 UI（已完成第一版）**：新增 `krea2_generate_image.py`，並接入 Training UI architecture registry 與 Krea 2 LoRA 選項。
 
 ## 驗證門檻
 
@@ -71,3 +71,26 @@ Krea 2 是 single-stream MMDiT，不是現有 SDXL、FLUX 或 Anima 的既有 U-
 ## 目前風險評估
 
 可行性為「中高」，但工作量集中在訓練框架 adapter，而非安裝依賴。最主要風險是現有 cache metadata 與 Krea 2 varlen hidden-state cache 的資料結構差異，以及現有 LoRA 命名／載入器與 Krea 2 single-stream MMDiT 的 checkpoint key 不一致。
+
+## 已實作的共用訓練入口
+
+目前已新增 `krea2_train_network.py`。它直接繼承本 REPO 的 `train_network.NetworkTrainer`，因此沿用原本的 dataset config、latent cache、text cache、optimizer、Accelerate、LoRA 儲存與 checkpoint 流程；Anima 的 `anima_train_network.py` 未被替換。
+
+Krea 2 的訓練必須先建立 text cache，範例：
+
+```powershell
+accelerate launch --mixed_precision bf16 krea2_train_network.py `
+  --dit path/to/raw.safetensors `
+  --vae path/to/qwen_image_vae.safetensors `
+  --text_encoder path/to/qwen3vl_4b_bf16.safetensors `
+  --dataset_config path/to/dataset.toml `
+  --cache_latents --cache_latents_to_disk `
+  --cache_text_encoder_outputs --cache_text_encoder_outputs_to_disk `
+  --timestep_sampling krea2_shift `
+  --network_module networks.lora_krea2 --network_dim 32 --network_alpha 32 `
+  --optimizer_type AdamW8bit --learning_rate 1e-4 `
+  --gradient_checkpointing --max_train_epochs 16 `
+  --output_dir path/to/output --output_name krea2_lora
+```
+
+若顯存不足，可加上 `--fp8_scaled` 與 `--blocks_to_swap`。訓練中的 sample preview 仍保留為後續工作；目前可用 Training UI 的生成按鈕，或直接執行 `krea2_generate_image.py` 進行固定 seed 推論。Krea2 設定使用獨立的 `krea2_arguments`，不會改寫既有 Anima 的 `anima_arguments`。
