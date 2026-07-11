@@ -66,6 +66,11 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
             or getattr(args, "krea2_dynamic_text_encoder_cpu", False)
         )
 
+        if getattr(args, "krea2_dynamic_text_encoder_cpu", False) and getattr(
+            args, "krea2_text_encoder_layer_offload", False
+        ):
+            raise ValueError("Krea 2 cannot combine whole-CPU TE encoding with TE Layer Offload")
+
         if dynamic_caption_encoding or dynamic_text_encoder:
             logger.warning(
                 "Krea 2 dynamic text encoding is enabled; disabling text output cache and encoding captions during training."
@@ -216,14 +221,28 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
     ):
         if args.cache_text_encoder_outputs:
             logger.info("Caching Krea 2 Qwen3-VL outputs")
-            text_encoders[0].to(accelerator.device)
+            if getattr(args, "krea2_text_encoder_layer_offload", False):
+                text_encoders[0].enable_layer_offload(
+                    accelerator.device, getattr(args, "krea2_text_encoder_offload_percent", 1.0)
+                )
+            else:
+                text_encoders[0].to(accelerator.device)
             self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
             dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
-            text_encoders[0].to("cpu")
+            if getattr(args, "krea2_text_encoder_layer_offload", False):
+                text_encoders[0].disable_layer_offload()
+            else:
+                text_encoders[0].to("cpu")
             clean_memory_on_device(accelerator.device)
             accelerator.wait_for_everyone()
         else:
-            if args.krea2_dynamic_text_encoder_cpu:
+            if getattr(args, "krea2_text_encoder_layer_offload", False):
+                logger.info("Krea 2 dynamic caption encoding uses AIT-style Qwen3-VL Layer Offload")
+                text_encoders[0].enable_layer_offload(
+                    accelerator.device, getattr(args, "krea2_text_encoder_offload_percent", 1.0)
+                )
+                self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
+            elif args.krea2_dynamic_text_encoder_cpu:
                 logger.warning("Krea 2 dynamic caption encoding runs Qwen3-VL on CPU; training will be slower")
                 # The one-time Model Guidance condition is much faster on GPU.
                 # Return the frozen TE to CPU immediately afterward.
@@ -544,6 +563,17 @@ def setup_parser() -> argparse.ArgumentParser:
         "--krea2_dynamic_text_encoder_cpu",
         action="store_true",
         help="Keep Qwen3-VL on CPU during dynamic training-time caption encoding; slower but uses less VRAM",
+    )
+    parser.add_argument(
+        "--krea2_text_encoder_layer_offload",
+        action="store_true",
+        help="Use AIT-style Qwen3-VL Layer Offload: keep Linear weights on CPU and compute each layer on GPU",
+    )
+    parser.add_argument(
+        "--krea2_text_encoder_offload_percent",
+        type=float,
+        default=1.0,
+        help="Fraction of Qwen3-VL Linear layers kept on CPU for Layer Offload (0, 1]",
     )
     parser.add_argument(
         "--fp8_scaled",

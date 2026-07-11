@@ -434,6 +434,12 @@
                             <small>模仿 AIT：每個 batch 即時執行 Qwen3-VL。需要指定 Krea2 Text Encoder，速度較慢但不需要建立 TE cache。</small>
                             <label style="display: block; margin-top: 8px;"><input type="checkbox" id="cfg-krea2-dynamic-text-encoder-cpu"> 將 Text Encoder 保留在 CPU</label>
                             <small>更省 VRAM，但會明顯降低訓練速度。</small>
+                            <label style="display: block; margin-top: 8px;"><input type="checkbox" id="cfg-krea2-text-encoder-layer-offload" checked> AIT Layer Offload（推薦）</label>
+                            <small>Linear 權重保留在 CPU，逐層搬到 GPU 計算；可不使用 TE Cache 並保留動態 Caption。</small>
+                            <label style="display: block; margin-top: 8px;">TE Layer Offload Percent
+                                <input type="number" id="cfg-krea2-text-encoder-offload-percent" value="100" min="1" max="100" step="1" style="width: 90px;">
+                            </label>
+                            <small>100 代表所有可管理的 Qwen3-VL Linear 層使用 Layer Offload。</small>
                         </div>
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-vae-disable-cache"> Disable VAE Cache</label>

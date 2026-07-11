@@ -102,7 +102,8 @@ Training UI 的 Krea 2 選項現在包含：
 - `Transformer DType = FP8 Scaled（Krea 2）`：會自動同時傳入 `fp8_base` 與 `fp8_scaled`。Krea 2 目前只實作 Scaled FP8，未提供會造成誤用的 plain FP8 選項。
 - Qwen3-VL Text Encoder 可使用普通 BF16 checkpoint，也可使用 ComfyUI 的 `qwen3vl_4b_fp8_scaled.safetensors`；loader 會讀取 `comfy_quant` 與 `weight_scale` 後還原成 Transformers 可用的 BF16 權重。
 - `Krea 2 訓練時即時編碼 Text Encoder（不使用 Cache）`：設定 `--krea2_dynamic_text_encoder`，直接在每個 batch 產生 Qwen3-VL conditioning，不需要建立 TE cache。
-- `將 Text Encoder 保留在 CPU`：再加上 `--krea2_dynamic_text_encoder_cpu`。TE 權重會留在 CPU RAM，訓練時只把輸入／輸出傳輸到流程中，速度較慢但可降低 VRAM。
+- `AIT-style Qwen3-VL Layer Offload`：設定 `--krea2_text_encoder_layer_offload`。非 Linear 模組常駐 GPU，Linear 權重保留在 pinned CPU memory，forward 時逐層搬到 GPU；可在不 cache 的情況下保留 FAD、caption shuffle、dropout 等動態 caption 功能。
+- `將 Text Encoder 保留在 CPU`：再加上 `--krea2_dynamic_text_encoder_cpu`。TE 權重與運算都留在 CPU RAM，會比 Layer Offload 慢很多，但可進一步降低 VRAM；兩者不可同時啟用。
 
 AIT 的 `layer_offloading_transformer_percent: 0.7` 可用 28 層 Krea 2 DiT 的 `--blocks_to_swap 20` 近似（約 71.4%）；12GB VRAM 建議從 batch size 1、gradient checkpointing、`--fp8_scaled --blocks_to_swap 20` 開始，再依實際 OOM 調高至 22–24。`blocks_to_swap` 不可與 `--cpu_offload_checkpointing` 同時使用。
 

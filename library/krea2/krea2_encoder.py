@@ -17,6 +17,7 @@ import json
 from dataclasses import dataclass
 
 import torch
+import torch.nn as nn
 from accelerate import init_empty_weights
 from torch import Tensor
 from transformers import (
@@ -94,6 +95,123 @@ class TextEncoderConfig:
     max_length: int = 512
     select_layers: tuple[int, ...] = (2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35)
     tokenizer_repo: str = QWEN3_VL_4B_INSTRUCT_REPO_ID
+
+
+class _Qwen3VLLayerOffloader:
+    """AIT-style forward-only offload for the frozen Qwen3-VL encoder.
+
+    Non-linear modules stay on the execution device. Linear weights remain in
+    pinned CPU memory and are staged to the GPU only for their own forward
+    call. Krea 2 never trains this encoder, so there is no backward-side weight
+    staging or optimizer state to manage.
+    """
+
+    def __init__(self, model: nn.Module, device: torch.device, offload_percent: float = 1.0):
+        if device.type != "cuda":
+            raise ValueError("Qwen3-VL layer offload requires a CUDA execution device")
+        if not 0.0 < offload_percent <= 1.0:
+            raise ValueError(f"Qwen3-VL offload percent must be in (0, 1], got {offload_percent}")
+
+        self.model = model
+        self.device = torch.device(device)
+        self.offload_percent = float(offload_percent)
+        self.handles: list[torch.utils.hooks.RemovableHandle] = []
+        self.managed: list[nn.Linear] = []
+
+        self._attach()
+
+    @staticmethod
+    def _parameter_storage_key(parameter: nn.Parameter) -> tuple[int, int, tuple[int, ...]]:
+        return (parameter.data_ptr(), parameter.storage_offset(), tuple(parameter.shape))
+
+    @staticmethod
+    def _move_direct_state(module: nn.Module, device: torch.device):
+        for parameter in module.parameters(recurse=False):
+            parameter.data = parameter.data.to(device, non_blocking=True)
+        for name, buffer in module.named_buffers(recurse=False):
+            if buffer is not None:
+                module._buffers[name] = buffer.to(device, non_blocking=True)
+
+    @staticmethod
+    def _pin_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.device.type != "cpu" or not torch.cuda.is_available() or tensor.is_pinned():
+            return tensor
+        try:
+            return tensor.pin_memory()
+        except RuntimeError:
+            # Pinning is an optimization only; some Windows/CUDA combinations
+            # can reject individual allocations.
+            return tensor
+
+    def _attach(self):
+        linear_modules = [module for module in self.model.modules() if isinstance(module, nn.Linear)]
+
+        # Tied weights, notably Qwen's input embedding/lm_head, must stay
+        # together on the execution device. Otherwise moving the embedding
+        # would silently invalidate the offloader's CPU reference.
+        owners: dict[tuple[int, int, tuple[int, ...]], list[nn.Module]] = {}
+        for module in self.model.modules():
+            for parameter in module.parameters(recurse=False):
+                owners.setdefault(self._parameter_storage_key(parameter), []).append(module)
+
+        requested = max(1, int(round(len(linear_modules) * self.offload_percent)))
+        candidate_modules = []
+        for module in linear_modules:
+            key = self._parameter_storage_key(module.weight)
+            if any(not isinstance(owner, nn.Linear) for owner in owners.get(key, [])):
+                continue
+            candidate_modules.append(module)
+
+        managed_set = set(candidate_modules[:requested])
+        for module in self.model.modules():
+            if module in managed_set:
+                weight = module.weight.data
+                if weight.device.type != "cpu":
+                    weight = weight.cpu()
+                module.weight.data = self._pin_cpu_tensor(weight)
+                if module.bias is not None:
+                    bias = module.bias.data
+                    if bias.device.type != "cpu":
+                        bias = bias.cpu()
+                    module.bias.data = self._pin_cpu_tensor(bias)
+                self._install_linear_hooks(module)
+                self.managed.append(module)
+            else:
+                self._move_direct_state(module, self.device)
+
+        logger.info(
+            "Enabled Qwen3-VL Layer Offload: %d/%d Linear layers staged from CPU (%.0f%%)",
+            len(self.managed),
+            len(linear_modules),
+            self.offload_percent * 100.0,
+        )
+
+    def _install_linear_hooks(self, module: nn.Linear):
+        def before_forward(layer: nn.Linear, _inputs):
+            cpu_weight = layer.weight.data
+            cpu_bias = layer.bias.data if layer.bias is not None else None
+            layer._krea2_te_cpu_state = (cpu_weight, cpu_bias)
+            layer.weight.data = cpu_weight.to(self.device, non_blocking=True)
+            if layer.bias is not None:
+                layer.bias.data = cpu_bias.to(self.device, non_blocking=True)
+
+        def after_forward(layer: nn.Linear, _inputs, output):
+            cpu_weight, cpu_bias = layer._krea2_te_cpu_state
+            layer.weight.data = cpu_weight
+            if layer.bias is not None:
+                layer.bias.data = cpu_bias
+            del layer._krea2_te_cpu_state
+            return output
+
+        self.handles.append(module.register_forward_pre_hook(before_forward))
+        self.handles.append(module.register_forward_hook(after_forward))
+
+    def close(self):
+        for handle in self.handles:
+            handle.remove()
+        self.handles.clear()
+        self.model.to("cpu")
+        self.managed.clear()
 
 
 def _convert_comfyui_qwen3vl_state_dict(sd: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -240,10 +358,31 @@ class Qwen3VLConditioner(torch.nn.Module):
         self.prompt_template_encode_suffix = "<|im_end|>\n<|im_start|>assistant\n"
         self.prompt_template_encode_start_idx = 34
         self.prompt_template_encode_suffix_start_idx = 5
+        self._layer_offloader: _Qwen3VLLayerOffloader | None = None
+
+    def enable_layer_offload(self, device: torch.device | str, offload_percent: float = 1.0):
+        """Use AIT-style GPU execution with CPU-resident Linear weights."""
+        device = torch.device(device)
+        if self._layer_offloader is not None:
+            if self._layer_offloader.device == device:
+                return self
+            self.disable_layer_offload()
+
+        self.qwen.to("cpu")
+        self._layer_offloader = _Qwen3VLLayerOffloader(self.qwen, device, offload_percent)
+        return self
+
+    def disable_layer_offload(self):
+        if self._layer_offloader is None:
+            return
+        self._layer_offloader.close()
+        self._layer_offloader = None
 
     @property
     def device(self) -> torch.device:
         """Expose the wrapped Qwen device to the shared trainer interface."""
+        if self._layer_offloader is not None:
+            return self._layer_offloader.device
         return next(self.qwen.parameters()).device
 
     @property
@@ -255,7 +394,7 @@ class Qwen3VLConditioner(torch.nn.Module):
         prefix_idx = self.prompt_template_encode_start_idx
         text = [self.prompt_template_encode_prefix + item for item in text]
         suffix_text = [self.prompt_template_encode_suffix] * len(text)
-        suffix_inputs = self.processor(text=suffix_text, return_tensors="pt").to(self.qwen.device, non_blocking=True)
+        suffix_inputs = self.processor(text=suffix_text, return_tensors="pt").to(self.device, non_blocking=True)
         suffix_ids, suffix_mask = (
             suffix_inputs["input_ids"],
             suffix_inputs["attention_mask"].bool(),
@@ -270,7 +409,7 @@ class Qwen3VLConditioner(torch.nn.Module):
                 padding="max_length",
                 max_length=self.max_length + prefix_idx - self.prompt_template_encode_suffix_start_idx,
                 return_tensors="pt",
-            ).to(self.qwen.device, non_blocking=True)
+            ).to(self.device, non_blocking=True)
             input_ids = torch.cat([inputs["input_ids"], suffix_ids], dim=1)
             mask = torch.cat([inputs["attention_mask"].bool(), suffix_mask], dim=1)
             states = self.qwen(input_ids=input_ids, attention_mask=mask, output_hidden_states=True)

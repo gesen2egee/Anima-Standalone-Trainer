@@ -104,8 +104,13 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
 function updateKrea2TextEncoderUI() {
   const dynamic = $("cfg-krea2-dynamic-text-encoder")?.checked === true;
   const cpu = $("cfg-krea2-dynamic-text-encoder-cpu");
+  const layer = $("cfg-krea2-text-encoder-layer-offload");
+  const layerPercent = $("cfg-krea2-text-encoder-offload-percent");
   const cache = $("cfg-cache-te");
+  if (cpu?.checked && layer?.checked) layer.checked = false;
   if (cpu) cpu.disabled = !dynamic;
+  if (layer) layer.disabled = !dynamic;
+  if (layerPercent) layerPercent.disabled = !dynamic || !layer?.checked;
   if (cache) {
     if (dynamic) {
       cache.checked = false;
@@ -1855,6 +1860,8 @@ function populateConfig(config) {
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
   $("cfg-krea2-dynamic-text-encoder").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder ?? false);
   $("cfg-krea2-dynamic-text-encoder-cpu").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder_cpu ?? false);
+  $("cfg-krea2-text-encoder-layer-offload").checked = modelArchitecture === "krea2" && (a.krea2_text_encoder_layer_offload ?? true);
+  $("cfg-krea2-text-encoder-offload-percent").value = Math.round((a.krea2_text_encoder_offload_percent ?? 1.0) * 100);
   updateKrea2TextEncoderUI();
   $("cfg-automask").checked = t.automask ?? false;
   $("cfg-automask-alpha").value = t.automask_alpha ?? 128;
@@ -2214,6 +2221,7 @@ function gatherConfig() {
   const transformerDtype = $("cfg-transformer-dtype").value;
   const krea2DynamicTextEncoder = isKrea2 && $("cfg-krea2-dynamic-text-encoder").checked;
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
+  const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2471,6 +2479,8 @@ function gatherConfig() {
           fp8_scaled: transformerDtype === "fp8_scaled",
           krea2_dynamic_text_encoder: krea2DynamicTextEncoder,
           krea2_dynamic_text_encoder_cpu: krea2DynamicTextEncoderCpu,
+          krea2_text_encoder_layer_offload: krea2TextEncoderLayerOffload,
+          krea2_text_encoder_offload_percent: safeFloat($("cfg-krea2-text-encoder-offload-percent").value, 100) / 100,
           timestep_sampling: $("cfg-timestep-method").value,
           discrete_flow_shift: safeFloat($("cfg-flow-shift").value, 2.5),
           sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value, 1.0),
@@ -3009,7 +3019,16 @@ $("cfg-krea2-dynamic-text-encoder")?.addEventListener("change", () => {
   updateKrea2TextEncoderUI();
   checkDirty();
 });
-$("cfg-krea2-dynamic-text-encoder-cpu")?.addEventListener("change", checkDirty);
+$("cfg-krea2-dynamic-text-encoder-cpu")?.addEventListener("change", (e) => {
+  if (e.target.checked) $("cfg-krea2-text-encoder-layer-offload").checked = false;
+  updateKrea2TextEncoderUI();
+  checkDirty();
+});
+$("cfg-krea2-text-encoder-layer-offload")?.addEventListener("change", (e) => {
+  if (e.target.checked) $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
+  updateKrea2TextEncoderUI();
+  checkDirty();
+});
 
 // Disable manual resume path when auto-resume is enabled
 $("cfg-auto-resume").addEventListener("change", (e) => {
