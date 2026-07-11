@@ -198,12 +198,26 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
     def get_text_encoders_train_flags(self, args, text_encoders):
         return [False] * len(text_encoders)
 
+    @staticmethod
+    def _needs_unconditional_conditioning(args) -> bool:
+        return float(getattr(args, "model_guidance_weight", 0.0) or 0.0) > 0.0
+
+    def _encode_empty_prompt_conditioning(self, args, text_encoder, accelerator):
+        if self._unconditional_text_encoder_conds is not None or not self._needs_unconditional_conditioning(args):
+            return
+
+        logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
+        with torch.no_grad():
+            empty_hidden, empty_mask = krea2_utils.get_krea2_prompt_embeds(text_encoder, [""])
+        self._unconditional_text_encoder_conds = (empty_hidden.cpu(), empty_mask.cpu())
+
     def cache_text_encoder_outputs_if_needed(
         self, args, accelerator: Accelerator, unet, vae, text_encoders, dataset, weight_dtype
     ):
         if args.cache_text_encoder_outputs:
             logger.info("Caching Krea 2 Qwen3-VL outputs")
             text_encoders[0].to(accelerator.device)
+            self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
             dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
             text_encoders[0].to("cpu")
             clean_memory_on_device(accelerator.device)
@@ -211,18 +225,19 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         else:
             if args.krea2_dynamic_text_encoder_cpu:
                 logger.warning("Krea 2 dynamic caption encoding runs Qwen3-VL on CPU; training will be slower")
-                text_encoders[0].to("cpu")
+                # The one-time Model Guidance condition is much faster on GPU.
+                # Return the frozen TE to CPU immediately afterward.
+                if self._unconditional_text_encoder_conds is None and self._needs_unconditional_conditioning(args):
+                    text_encoders[0].to(accelerator.device)
+                    self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
+                    text_encoders[0].to("cpu")
+                    clean_memory_on_device(accelerator.device)
+                else:
+                    text_encoders[0].to("cpu")
             else:
                 logger.warning("Krea 2 dynamic caption encoding keeps Qwen3-VL on the training device")
                 text_encoders[0].to(accelerator.device)
-
-        # Model Guidance / CFG-Zero needs a real empty-prompt Qwen3-VL condition.
-        # Keep the small, frozen result on CPU so this does not defeat TE offload.
-        if self._unconditional_text_encoder_conds is None:
-            logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
-            with torch.no_grad():
-                empty_hidden, empty_mask = krea2_utils.get_krea2_prompt_embeds(text_encoders[0], [""])
-            self._unconditional_text_encoder_conds = (empty_hidden.cpu(), empty_mask.cpu())
+                self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
 
     def process_batch(
         self,
