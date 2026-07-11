@@ -363,6 +363,22 @@ class SingleStreamDiT(nn.Module):
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
 
+    @property
+    def device(self) -> torch.device:
+        """Return the device of the non-swapped model parameters.
+
+        The shared trainer uses the standard ``nn.Module.device`` convention
+        during startup.  With block swap enabled, the main modules stay on the
+        training device while selected transformer blocks remain on CPU, so
+        the first parameter is the appropriate representative device.
+        """
+        return next(self.parameters()).device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Return the dtype of the non-swapped model parameters."""
+        return next(self.parameters()).dtype
+
     # Block swap (CPU offloading of the main SingleStreamBlocks). Mirrors the other
     # musubi architectures: the trainer calls enable_block_swap + move_to_device_except_swap_blocks
     # at load, and the per-block wait/submit in forward streams blocks between CPU and GPU.
