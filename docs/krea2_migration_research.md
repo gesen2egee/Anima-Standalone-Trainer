@@ -76,7 +76,7 @@ Krea 2 是 single-stream MMDiT，不是現有 SDXL、FLUX 或 Anima 的既有 U-
 
 目前已新增 `krea2_train_network.py`。它直接繼承本 REPO 的 `train_network.NetworkTrainer`，因此沿用原本的 dataset config、latent cache、text cache、optimizer、Accelerate、LoRA 儲存與 checkpoint 流程；Anima 的 `anima_train_network.py` 未被替換。
 
-Krea 2 的訓練必須先建立 text cache，範例：
+Krea 2 的一般訓練建議先建立 text cache；若啟用 caption augmentation，adapter 會改用 dynamic text encoding。一般快取訓練範例：
 
 ```powershell
 accelerate launch --mixed_precision bf16 krea2_train_network.py `
@@ -94,3 +94,13 @@ accelerate launch --mixed_precision bf16 krea2_train_network.py `
 ```
 
 若顯存不足，可加上 `--fp8_scaled` 與 `--blocks_to_swap`。訓練中的 sample preview 仍保留為後續工作；目前可用 Training UI 的生成按鈕，或直接執行 `krea2_generate_image.py` 進行固定 seed 推論。Krea2 設定使用獨立的 `krea2_arguments`，不會改寫既有 Anima 的 `anima_arguments`。
+
+## Anima 功能在 Krea2 的支援狀態
+
+- `lora_anima`、`LoKR`、`CDKA`、`KRONA` 現在都能透過 Krea2 的 `SingleStreamDiT` Linear target 建立 adapter；`lora_anima` 會轉接到標準 Krea2 LoRA，其他三種使用共用 LyCORIS architecture adapter。
+- `Model Guidance`、`CFG-Zero`、`CIOP`、`differential_guidance_scale` 與 Anima weighting 已接入 Krea2 flow-matching forward。
+- `sigma`、`uniform`、`sigmoid`、`shift`、`autoshift`、`autoshift_wavelet`、`flux_shift`、`plora`、`krea2_shift` timestep sampling 均可使用；`autoshift*` 需要 alpha mask。
+- Caption prefix/suffix、wildcard、caption dropout、caption shuffle、token warmup、caption tag dropout 與 FAD 會自動切換為 dynamic Qwen3-VL encoding，不使用固定 text cache；可加 `--krea2_dynamic_text_encoder_cpu` 降低顯存但會變慢。
+- `masked_loss` 與 alpha-mask loss 可使用；Krea2 不支援 Anima 的 `train_inpainting` 輸入格式。
+
+啟用 caption augmentation 時，請預期 Qwen3-VL 會與 DiT 同時佔用顯存；若顯存不足，使用 dynamic CPU text encoder。若要使用 CDKA／KRONA 推論合併 LoRA，請不要在生成命令啟用 `--fp8_scaled`，因為這兩種 adapter 需要先以完整權重合併。

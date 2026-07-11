@@ -232,6 +232,15 @@ def create_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
+    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+        # Keep the public Anima LoRA entry point usable for Krea2 jobs while
+        # delegating target discovery to the generic all-Linear adapter.
+        from networks import lora_krea2
+
+        return lora_krea2.create_network(
+            multiplier, network_dim, network_alpha, vae, text_encoders, unet, neuron_dropout=neuron_dropout, **kwargs
+        )
+
     if network_dim is None:
         network_dim = 4
     if network_alpha is None:
@@ -337,6 +346,13 @@ def create_network(
 
 
 def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weights_sd=None, for_inference=False, **kwargs):
+    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+        from networks import lora_krea2
+
+        return lora_krea2.create_network_from_weights(
+            multiplier, file, ae, text_encoders, unet, weights_sd, for_inference, **kwargs
+        )
+
     if weights_sd is None:
         if os.path.splitext(file)[1] == ".safetensors":
             from safetensors.torch import load_file

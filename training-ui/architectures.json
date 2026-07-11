@@ -102,7 +102,7 @@
     },
     "krea2": {
       "display_name": "Krea 2",
-      "network_modules": ["networks.lora_krea2"],
+      "network_modules": ["networks.lora_krea2", "networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "krea2_train_network.py",
         "train_network": "krea2_train_network.py",

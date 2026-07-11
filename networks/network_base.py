@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ArchConfig:
-    unet_target_modules: List[str]
+    unet_target_modules: Optional[List[str]]
     te_target_modules: List[str]
     unet_prefix: str
     te_prefixes: List[str]
@@ -30,6 +30,20 @@ class ArchConfig:
 def detect_arch_config(unet, text_encoders) -> ArchConfig:
     """Detect architecture from model structure and return ArchConfig."""
     from library.sdxl_original_unet import SdxlUNet2DConditionModel
+
+    # Krea 2 uses a single-stream MMDiT whose trainable surface is composed of
+    # Linear layers. LyCORIS-style networks can reuse their generic module
+    # implementations when every Krea2 Linear is selected.
+    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+        return ArchConfig(
+            unet_target_modules=None,
+            te_target_modules=[],
+            unet_prefix="lora_unet",
+            te_prefixes=["lora_te"],
+            default_excludes=[],
+            adapter_target_modules=[],
+            unet_conv_target_modules=[],
+        )
 
     # Check SDXL first
     if unet is not None and (
@@ -260,10 +274,10 @@ class AdditionalNetwork(torch.nn.Module):
                 skipped_te += te_skipped
 
         # Create modules for UNet/DiT
-        target_modules = list(arch_config.unet_target_modules)
-        if modules_dim is not None or conv_lora_dim is not None:
+        target_modules = None if arch_config.unet_target_modules is None else list(arch_config.unet_target_modules)
+        if target_modules is not None and (modules_dim is not None or conv_lora_dim is not None):
             target_modules.extend(arch_config.unet_conv_target_modules)
-        if train_llm_adapter and arch_config.adapter_target_modules:
+        if target_modules is not None and train_llm_adapter and arch_config.adapter_target_modules:
             target_modules.extend(arch_config.adapter_target_modules)
 
         self.unet_loras: List[torch.nn.Module]

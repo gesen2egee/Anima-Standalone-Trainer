@@ -47,6 +47,12 @@ const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
 
 // Resolve architecture from a job config's network_module
 function getArchForJob(jobConfig) {
+    // An explicit Krea2 section takes precedence over shared network names
+    // (lora_anima, LoKR, CDKA, and KRONA can all target Krea2 now).
+    if (jobConfig?.krea2_arguments || jobConfig?.model_arguments?.krea2_text_encoder) {
+        const krea2 = ARCH_REGISTRY.architectures.krea2;
+        return { id: 'krea2', ...krea2 };
+    }
     const netModule = jobConfig?.network_arguments?.network_module || '';
     for (const [archId, arch] of Object.entries(ARCH_REGISTRY.architectures)) {
         if (arch.network_modules.includes(netModule)) {
@@ -2050,6 +2056,9 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         // LoRA support
         if (req.body.network_weights) {
             const nw = stripQuotes(req.body.network_weights);
+            if (mergedConfig.network_arguments?.network_module) {
+                args.push(`--network_module=${mergedConfig.network_arguments.network_module}`);
+            }
             args.push(`--lora_weight="${nw}"`);
             args.push(`--lora_multiplier=${req.body.network_mul || 1.0}`);
         }

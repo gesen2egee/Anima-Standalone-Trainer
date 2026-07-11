@@ -29,11 +29,44 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
     def __init__(self):
         super().__init__()
         self.is_swapping_blocks = False
+        self.global_step = 0
+
+    def step_logging(self, accelerator, logs, global_step, epoch):
+        self.global_step = global_step
+        super().step_logging(accelerator, logs, global_step, epoch)
+
+    @staticmethod
+    def _dataset_needs_dynamic_caption_encoding(dataset) -> bool:
+        """Return whether caption processing changes between training samples/steps."""
+        for subset in getattr(dataset, "subsets", []):
+            if (
+                subset.caption_dropout_rate > 0
+                or subset.caption_dropout_every_n_epochs > 0
+                or subset.shuffle_caption
+                or subset.token_warmup_step > 0
+                or subset.caption_tag_dropout_rate > 0
+                or getattr(subset, "enable_fad", False)
+                or subset.caption_prefix
+                or subset.caption_suffix
+                or subset.enable_wildcard
+            ):
+                return True
+        return False
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
         if args.cache_text_encoder_outputs_to_disk and not args.cache_text_encoder_outputs:
             args.cache_text_encoder_outputs = True
-        if not args.cache_text_encoder_outputs:
+        dynamic_caption_encoding = self._dataset_needs_dynamic_caption_encoding(train_dataset_group)
+        if val_dataset_group is not None:
+            dynamic_caption_encoding = dynamic_caption_encoding or self._dataset_needs_dynamic_caption_encoding(val_dataset_group)
+
+        if dynamic_caption_encoding:
+            logger.warning(
+                "Krea 2 caption augmentation is enabled; disabling text output cache and encoding captions dynamically."
+            )
+            args.cache_text_encoder_outputs = False
+            args.cache_text_encoder_outputs_to_disk = False
+        elif not args.cache_text_encoder_outputs:
             raise ValueError(
                 "Krea 2 requires --cache_text_encoder_outputs. "
                 "Run the text-cache stage before starting training."
@@ -42,14 +75,10 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
             raise ValueError(
                 "Krea 2 requires --cache_latents because the shared trainer keeps the Qwen-Image VAE on CPU."
             )
-        if not train_dataset_group.is_text_encoder_output_cacheable(False):
-            raise ValueError(
-                "Krea 2 text cache does not support caption dropout, caption shuffle, token warmup, or tag dropout."
-            )
-        if val_dataset_group is not None and not val_dataset_group.is_text_encoder_output_cacheable(False):
-            raise ValueError("Krea 2 validation text cache has unsupported caption augmentation settings.")
         if args.network_train_text_encoder_only:
             raise ValueError("Krea 2 text encoder is frozen; --network_train_text_encoder_only is not supported")
+        if args.train_inpainting:
+            raise ValueError("Krea 2 supports masked loss, but the Anima inpainting input path is not compatible")
 
         args.network_train_unet_only = True
         args.fp8_base = False
@@ -136,6 +165,8 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         return Krea2TextEncodingStrategy()
 
     def get_text_encoder_outputs_caching_strategy(self, args):
+        if not args.cache_text_encoder_outputs:
+            return None
         return Krea2TextEncoderOutputsCachingStrategy(
             args.cache_text_encoder_outputs_to_disk,
             args.text_encoder_batch_size,
@@ -144,7 +175,7 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         )
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
-        return None
+        return None if args.cache_text_encoder_outputs else text_encoders
 
     def is_train_text_encoder(self, args):
         return False
@@ -155,12 +186,68 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
     def cache_text_encoder_outputs_if_needed(
         self, args, accelerator: Accelerator, unet, vae, text_encoders, dataset, weight_dtype
     ):
-        logger.info("Caching Krea 2 Qwen3-VL outputs")
-        text_encoders[0].to(accelerator.device)
-        dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
-        text_encoders[0].to("cpu")
-        clean_memory_on_device(accelerator.device)
-        accelerator.wait_for_everyone()
+        if args.cache_text_encoder_outputs:
+            logger.info("Caching Krea 2 Qwen3-VL outputs")
+            text_encoders[0].to(accelerator.device)
+            dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
+            text_encoders[0].to("cpu")
+            clean_memory_on_device(accelerator.device)
+            accelerator.wait_for_everyone()
+        else:
+            if args.krea2_dynamic_text_encoder_cpu:
+                logger.warning("Krea 2 dynamic caption encoding runs Qwen3-VL on CPU; training will be slower")
+                text_encoders[0].to("cpu")
+            else:
+                logger.warning("Krea 2 dynamic caption encoding keeps Qwen3-VL on the training device")
+                text_encoders[0].to(accelerator.device)
+
+    def process_batch(
+        self,
+        batch,
+        text_encoders,
+        unet,
+        network,
+        vae,
+        noise_scheduler,
+        vae_dtype,
+        weight_dtype,
+        accelerator,
+        args,
+        text_encoding_strategy,
+        tokenize_strategy,
+        is_train=True,
+        train_text_encoder=True,
+        train_unet=True,
+    ):
+        if args.train_inpainting:
+            raise ValueError("Krea 2 does not support train_inpainting")
+
+        # The shared trainer otherwise encodes masked_images with the CPU-resident VAE.
+        # Krea2 masked loss only needs conditioning_images/alpha_masks as a loss mask.
+        original_masks = batch.get("masks")
+        if original_masks is not None:
+            batch["masks"] = None
+        try:
+            return super().process_batch(
+                batch,
+                text_encoders,
+                unet,
+                network,
+                vae,
+                noise_scheduler,
+                vae_dtype,
+                weight_dtype,
+                accelerator,
+                args,
+                text_encoding_strategy,
+                tokenize_strategy,
+                is_train,
+                train_text_encoder,
+                train_unet,
+            )
+        finally:
+            if original_masks is not None:
+                batch["masks"] = original_masks
 
     def cast_unet(self, args):
         # The loader already applies bf16 or scaled FP8. The base loop must not
@@ -183,23 +270,52 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         )
 
     @staticmethod
-    def _sample_timesteps(args, latents, device):
+    def _sample_timesteps(args, latents, device, alpha_masks=None):
         height, width = latents.shape[-2:]
-        sample = torch.rand(latents.shape[0], device=device, dtype=torch.float32)
+        batch_size = latents.shape[0]
         sampling = args.timestep_sampling
 
-        if sampling in ("sigmoid", "krea2_shift", "shift"):
-            sample = torch.sigmoid(torch.erfinv(sample.mul(2.0).sub(1.0)) * math.sqrt(2.0) * args.sigmoid_scale)
+        if sampling == "sigma":
+            sample = flux_train_utils.compute_density_for_timestep_sampling(
+                weighting_scheme=args.weighting_scheme,
+                batch_size=batch_size,
+                logit_mean=args.logit_mean,
+                logit_std=args.logit_std,
+                mode_scale=args.mode_scale,
+            ).to(device=device, dtype=torch.float32)
+        elif sampling == "uniform":
+            sample = torch.rand(batch_size, device=device, dtype=torch.float32)
+        else:
+            sample = torch.sigmoid(torch.randn(batch_size, device=device, dtype=torch.float32) * args.sigmoid_scale)
 
         if sampling == "krea2_shift":
             seq_len = (height // 2) * (width // 2)
             mu = flux_train_utils.get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(seq_len)
-            shift = math.exp(mu)
-            sample = (sample * shift) / (1.0 + (shift - 1.0) * sample)
+            sample = flux_train_utils.time_shift(mu, 1.0, sample)
         elif sampling == "shift":
-            shift = math.exp(args.discrete_flow_shift)
+            sample = flux_train_utils.time_shift(args.discrete_flow_shift, 1.0, sample)
+        elif sampling == "autoshift":
+            if alpha_masks is None:
+                raise ValueError("autoshift timestep sampling requires alpha masks")
+            shift = flux_train_utils.compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
             sample = (sample * shift) / (1.0 + (shift - 1.0) * sample)
-        elif sampling not in ("uniform", "sigmoid"):
+        elif sampling == "autoshift_wavelet":
+            if alpha_masks is None:
+                raise ValueError("autoshift_wavelet timestep sampling requires alpha masks")
+            shift = flux_train_utils.compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
+            sample = (sample * shift) / (1.0 + (shift - 1.0) * sample)
+        elif sampling == "flux_shift":
+            seq_len = (height // 2) * (width // 2)
+            mu = flux_train_utils.get_lin_function(y1=0.5, y2=1.15)(seq_len)
+            sample = flux_train_utils.time_shift(mu, 1.0, sample)
+        elif sampling == "plora":
+            alpha = getattr(args, "p_lora_alpha", 1.0)
+            u = torch.rand(batch_size, device=device, dtype=torch.float32)
+            if getattr(args, "p_lora_bias", "left") == "left":
+                sample = 1.0 - torch.pow(u, 1.0 / (alpha + 1.0))
+            else:
+                sample = torch.pow(u, 1.0 / (alpha + 1.0))
+        elif sampling not in ("sigma", "uniform", "sigmoid"):
             raise ValueError(f"Unsupported Krea 2 timestep sampling: {sampling}")
 
         return sample
@@ -225,34 +341,113 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
 
         latents = latents.to(accelerator.device, dtype=weight_dtype)
         noise = train_util.sample_training_noise(args, latents)
-        t = self._sample_timesteps(args, latents, accelerator.device)
+        t = self._sample_timesteps(args, latents, accelerator.device, batch.get("alpha_masks"))
+        self.current_noise = noise
+        self.current_sigmas = t
         noisy = latents.lerp(noise, t[:, None, None, None])
+        self.current_noisy_latents = noisy
         timesteps = t * 1000.0 + 1.0
 
         prompt_embeds, attn_mask = text_encoder_conds[:2]
         prompt_embeds = prompt_embeds.to(accelerator.device, dtype=weight_dtype)
         attn_mask = attn_mask.to(accelerator.device, dtype=torch.bool)
-        img, pos, mask = krea2_sampling.prepare(noisy, prompt_embeds.shape[1], unet.config.patch, attn_mask)
-
         if args.gradient_checkpointing:
-            img.requires_grad_(True)
+            noisy.requires_grad_(True)
             prompt_embeds.requires_grad_(True)
 
-        with torch.set_grad_enabled(is_train), accelerator.autocast():
-            pred = unet(
+        def forward_model(model_input, context, context_mask):
+            img, pos, mask = krea2_sampling.prepare(
+                model_input, context.shape[1], unet.config.patch, context_mask
+            )
+            return unet(
                 img=img.to(dtype=weight_dtype),
-                context=prompt_embeds,
+                context=context,
                 t=(timesteps / 1000.0).to(device=accelerator.device),
                 pos=pos,
                 mask=mask,
             )
 
+        with torch.set_grad_enabled(is_train), accelerator.autocast():
+            pred = forward_model(noisy, prompt_embeds, attn_mask)
+
         height = noisy.shape[-2] // unet.config.patch
         width = noisy.shape[-1] // unet.config.patch
         pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
         pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
+
+        apply_ciop = bool(
+            is_train
+            and getattr(args, "ciop_prob", 0.0) > 0.0
+            and torch.rand(1, device=latents.device).item() < args.ciop_prob
+        )
+        eps_out = None
+        if apply_ciop:
+            std = args.ciop_noise_magnitude
+            if getattr(args, "ciop_noise_type", "gaussian") == "uniform":
+                limit = math.sqrt(3.0) * std
+                eps_in = (torch.rand_like(noisy) * 2 - 1.0) * limit
+                eps_out = (torch.rand_like(latents) * 2 - 1.0) * limit
+            else:
+                eps_in = torch.randn_like(noisy) * std
+                eps_out = torch.randn_like(latents) * std
+            noisy = noisy + eps_in
+            with torch.set_grad_enabled(is_train), accelerator.autocast():
+                pred = forward_model(noisy, prompt_embeds, attn_mask)
+            pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
+            pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
+            self.current_noisy_latents = noisy
+
         target = noise - latents
-        return pred, target, timesteps, None
+
+        model_guidance_weight = getattr(args, "model_guidance_weight", 0.0)
+        model_guidance_end = getattr(args, "model_guidance_end_step", 0)
+        apply_model_guidance = model_guidance_weight > 0.0 and (
+            model_guidance_end == 0 or self.global_step < model_guidance_end
+        )
+        if apply_model_guidance:
+            if getattr(args, "model_guidance_prob", 1.0) < 1.0:
+                apply_model_guidance = torch.rand(1, device=latents.device).item() <= args.model_guidance_prob
+
+        if apply_model_guidance:
+            unconditional_context = torch.zeros_like(prompt_embeds)
+            unconditional_mask = torch.zeros_like(attn_mask)
+            unconditional_mask[:, 0] = True
+            with torch.no_grad(), accelerator.autocast():
+                pred_uncond = forward_model(noisy, unconditional_context, unconditional_mask)
+            pred_uncond = pred_uncond.reshape(
+                pred_uncond.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels
+            )
+            pred_uncond = pred_uncond.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
+
+            current_weight = model_guidance_weight
+            warmup_steps = getattr(args, "model_guidance_warmup_steps", 0)
+            if warmup_steps > 0 and self.global_step < warmup_steps:
+                current_weight *= self.global_step / warmup_steps
+
+            if getattr(args, "model_guidance_cfg_zero", False):
+                dot = torch.sum(pred * pred_uncond, dim=[1, 2, 3], keepdim=True)
+                norm = torch.sum(pred_uncond**2, dim=[1, 2, 3], keepdim=True) + 1e-8
+                guidance = current_weight * (dot / norm).detach()
+                threshold = getattr(args, "model_guidance_zero_init_threshold", 0.95)
+                guidance = guidance * (timesteps < threshold).float().view(-1, 1, 1, 1)
+            elif getattr(args, "model_guidance_timestep_scaling", False):
+                min_weight = getattr(args, "model_guidance_min_weight", 0.0)
+                guidance = min_weight + (current_weight - min_weight) * 4.0 * timesteps * (1.0 - timesteps)
+                guidance = guidance.view(-1, 1, 1, 1)
+            else:
+                guidance = current_weight
+            target = target + guidance * (pred - pred_uncond).detach()
+
+        if apply_ciop:
+            target = target + eps_out
+
+        target = anima_train_utils.apply_differential_guidance_target(
+            target, pred, getattr(args, "differential_guidance_scale", 1.0)
+        )
+        weighting = anima_train_utils.compute_loss_weighting_for_anima(
+            weighting_scheme=args.weighting_scheme, sigmas=t, args=args
+        )
+        return pred, target, timesteps, weighting
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         return loss
@@ -292,6 +487,11 @@ def setup_parser() -> argparse.ArgumentParser:
         type=int,
         default=512,
         help="Maximum Krea 2 text cache length",
+    )
+    parser.add_argument(
+        "--krea2_dynamic_text_encoder_cpu",
+        action="store_true",
+        help="Keep Qwen3-VL on CPU when caption augmentation disables text cache; slower but uses less VRAM",
     )
     parser.add_argument(
         "--fp8_scaled",

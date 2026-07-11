@@ -2,6 +2,7 @@
 
 import argparse
 import gc
+import importlib
 import logging
 import os
 import random
@@ -25,6 +26,7 @@ def parse_args():
     parser.add_argument("--dit", required=True)
     parser.add_argument("--vae", required=True)
     parser.add_argument("--text_encoder", required=True)
+    parser.add_argument("--network_module", default="networks.lora_krea2")
     parser.add_argument("--krea2_tokenizer", default=krea2_utils.QWEN3_VL_4B_INSTRUCT_REPO_ID)
     parser.add_argument("--steps", type=int, default=28)
     parser.add_argument("--guidance_scale", type=float, default=5.5)
@@ -65,7 +67,8 @@ def load_pipeline(args):
         disable_mmap=True,
         disable_cache=True,
     ).to(dtype=dtype).eval()
-    lora_weights = [load_file(path) for path in args.lora_weight] if args.lora_weight else None
+    generic_lora_module = args.network_module in {"networks.cdka", "networks.krona"}
+    lora_weights = [load_file(path) for path in args.lora_weight] if args.lora_weight and not generic_lora_module else None
     dit = krea2_utils.load_krea2_dit(
         args.dit,
         device=device,
@@ -77,6 +80,18 @@ def load_pipeline(args):
         lora_weights=lora_weights,
         lora_multipliers=args.lora_multiplier,
     ).eval().requires_grad_(False)
+
+    if args.lora_weight and generic_lora_module:
+        network_module = importlib.import_module(args.network_module)
+        multipliers = args.lora_multiplier or []
+        for index, path in enumerate(args.lora_weight):
+            multiplier = multipliers[index] if index < len(multipliers) else 1.0
+            network, weights_sd = network_module.create_network_from_weights(
+                multiplier, path, None, [None], dit, for_inference=True
+            )
+            merge_device = torch.device("cpu") if args.blocks_to_swap else device
+            network.merge_to([None], dit, weights_sd, dtype=dtype, device=merge_device)
+            del network
     if args.blocks_to_swap:
         dit.enable_block_swap(args.blocks_to_swap, device)
         dit.move_to_device_except_swap_blocks(device)

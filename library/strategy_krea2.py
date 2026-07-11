@@ -37,13 +37,20 @@ class Krea2TokenizeStrategy(TokenizeStrategy):
 
 
 class Krea2TextEncodingStrategy(TextEncodingStrategy):
-    """Krea 2 requires pre-cached Qwen3-VL outputs for training."""
+    """Encode Krea2 text either from cache or dynamically for caption augmentation."""
 
     def encode_tokens(self, tokenize_strategy, models, tokens):
-        raise RuntimeError(
-            "Krea 2 training requires --cache_text_encoder_outputs. "
-            "Use the Krea2 text-cache step before training."
-        )
+        if not models or models[0] is None:
+            raise RuntimeError("Krea 2 dynamic text encoding requires the Qwen3-VL conditioner")
+
+        input_ids = tokens[0]
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
+        input_ids = input_ids.detach().cpu()
+        prompts = tokenize_strategy.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        hidden, mask = krea2_utils.get_krea2_prompt_embeds(models[0], prompts)
+        hidden, mask = krea2_sampling.gather_valid_text(hidden, mask.bool())
+        return [hidden, mask]
 
 
 class Krea2TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
