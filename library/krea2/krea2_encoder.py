@@ -241,6 +241,16 @@ class Qwen3VLConditioner(torch.nn.Module):
         self.prompt_template_encode_start_idx = 34
         self.prompt_template_encode_suffix_start_idx = 5
 
+    @property
+    def device(self) -> torch.device:
+        """Expose the wrapped Qwen device to the shared trainer interface."""
+        return next(self.qwen.parameters()).device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Expose the wrapped Qwen dtype to the shared trainer interface."""
+        return next(self.qwen.parameters()).dtype
+
     def forward(self, text: list[str]) -> tuple[Tensor, Tensor]:
         prefix_idx = self.prompt_template_encode_start_idx
         text = [self.prompt_template_encode_prefix + item for item in text]

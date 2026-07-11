@@ -93,7 +93,10 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         if args.fp8_base and not args.fp8_scaled:
             raise ValueError("Krea 2 requires FP8 Scaled together with FP8 Base; plain FP8 is not supported.")
         if args.fp8_scaled:
-            args.fp8_base = True
+            # The Krea2 loader already quantizes only the supported Linear
+            # layers. Leaving the shared flag enabled would make the generic
+            # trainer recast every DiT parameter to raw float8 afterward.
+            args.fp8_base = False
         args.fp8_base_unet = False
         train_dataset_group.verify_bucket_reso_steps(16)
         if val_dataset_group is not None:
