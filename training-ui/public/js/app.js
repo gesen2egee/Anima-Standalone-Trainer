@@ -76,12 +76,43 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture];
   const hint = $("cfg-model-architecture-hint");
   if (hint) hint.textContent = defaults.hint;
+  const dtypeHint = $("cfg-transformer-dtype-hint");
+  if (dtypeHint) {
+    dtypeHint.textContent = architecture === "krea2"
+      ? "Krea 2 的 FP8 會使用安全的 Scaled FP8 路徑，會自動同時啟用 FP8 Base。"
+      : "FP8 Scaled 目前只由 Krea 2 使用。";
+  }
+  const fp8ScaledOption = document.querySelector('#cfg-transformer-dtype option[value="fp8_scaled"]');
+  if (fp8ScaledOption) {
+    fp8ScaledOption.disabled = architecture !== "krea2";
+    if (architecture !== "krea2" && $("cfg-transformer-dtype").value === "fp8_scaled") {
+      $("cfg-transformer-dtype").value = "float32";
+    }
+  }
+  const teGroup = $("group-krea2-text-encoder");
+  if (teGroup) teGroup.classList.toggle("hidden", architecture !== "krea2");
+  updateKrea2TextEncoderUI();
   if (applyDefaults) {
     $("cfg-network-module").value = defaults.networkModule;
     $("cfg-timestep-method").value = defaults.timestepSampling;
     $("cfg-flow-shift").value = defaults.flowShift;
     updateNetworkModuleUI();
     applyNetworkModulePreset(defaults.networkModule);
+  }
+}
+
+function updateKrea2TextEncoderUI() {
+  const dynamic = $("cfg-krea2-dynamic-text-encoder")?.checked === true;
+  const cpu = $("cfg-krea2-dynamic-text-encoder-cpu");
+  const cache = $("cfg-cache-te");
+  if (cpu) cpu.disabled = !dynamic;
+  if (cache) {
+    if (dynamic) {
+      cache.checked = false;
+      cache.disabled = true;
+    } else {
+      cache.disabled = false;
+    }
   }
 }
 
@@ -1779,6 +1810,9 @@ function populateConfig(config) {
   $("cfg-save-precision").value = t.save_precision || "bf16";
   $("cfg-mixed-precision").value = t.mixed_precision || "bf16";
   $("cfg-transformer-dtype").value = t.full_bf16 ? "bfloat16" : t.full_fp16 ? "float16" : "float32";
+  if (modelArchitecture === "krea2" && a.fp8_scaled) {
+    $("cfg-transformer-dtype").value = "fp8_scaled";
+  }
   $("cfg-workers").value = t.max_data_loader_n_workers ?? 2;
   $("cfg-grad-acc").value = t.gradient_accumulation_steps ?? 1;
   $("cfg-gradient-checkpointing").checked = t.gradient_checkpointing ?? true;
@@ -1819,6 +1853,9 @@ function populateConfig(config) {
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
   $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
+  $("cfg-krea2-dynamic-text-encoder").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder ?? false);
+  $("cfg-krea2-dynamic-text-encoder-cpu").checked = modelArchitecture === "krea2" && (a.krea2_dynamic_text_encoder_cpu ?? false);
+  updateKrea2TextEncoderUI();
   $("cfg-automask").checked = t.automask ?? false;
   $("cfg-automask-alpha").value = t.automask_alpha ?? 128;
   $("cfg-automask-shrink").value = t.automask_shrink ?? 1;
@@ -2173,6 +2210,9 @@ function gatherConfig() {
   const multiGpuMode = $("cfg-multigpu-mode").value;
   const modelArchitecture = $("cfg-model-architecture").value;
   const isKrea2 = modelArchitecture === "krea2";
+  const transformerDtype = $("cfg-transformer-dtype").value;
+  const krea2DynamicTextEncoder = isKrea2 && $("cfg-krea2-dynamic-text-encoder").checked;
+  const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2240,8 +2280,8 @@ function gatherConfig() {
       // Hardware
       mixed_precision: $("cfg-mixed-precision").value,
       save_precision: $("cfg-save-precision").value || undefined,
-      ...($("cfg-transformer-dtype").value === "bfloat16" ? { full_bf16: true } : {}),
-      ...($("cfg-transformer-dtype").value === "float16" ? { full_fp16: true } : {}),
+      ...(transformerDtype === "bfloat16" ? { full_bf16: true } : {}),
+      ...(transformerDtype === "float16" ? { full_fp16: true } : {}),
       max_data_loader_n_workers: safeInt($("cfg-workers").value),
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
@@ -2279,7 +2319,7 @@ function gatherConfig() {
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
-      cache_text_encoder_outputs_to_disk: $("cfg-cache-te").checked,
+      cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder ? false : $("cfg-cache-te").checked,
       automask: $("cfg-automask").checked,
       automask_alpha: safeInt($("cfg-automask-alpha").value, 128),
       automask_shrink: safeInt($("cfg-automask-shrink").value, 1),
@@ -2425,6 +2465,10 @@ function gatherConfig() {
     },
     krea2_arguments: isKrea2
       ? {
+          fp8_base: transformerDtype === "fp8_scaled",
+          fp8_scaled: transformerDtype === "fp8_scaled",
+          krea2_dynamic_text_encoder: krea2DynamicTextEncoder,
+          krea2_dynamic_text_encoder_cpu: krea2DynamicTextEncoderCpu,
           timestep_sampling: $("cfg-timestep-method").value,
           discrete_flow_shift: safeFloat($("cfg-flow-shift").value, 2.5),
           sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value, 1.0),
@@ -2959,6 +3003,11 @@ $("cfg-model-architecture")?.addEventListener("change", () => {
   updateModelArchitectureUI({ applyDefaults: true });
   checkDirty();
 });
+$("cfg-krea2-dynamic-text-encoder")?.addEventListener("change", () => {
+  updateKrea2TextEncoderUI();
+  checkDirty();
+});
+$("cfg-krea2-dynamic-text-encoder-cpu")?.addEventListener("change", checkDirty);
 
 // Disable manual resume path when auto-resume is enabled
 $("cfg-auto-resume").addEventListener("change", (e) => {

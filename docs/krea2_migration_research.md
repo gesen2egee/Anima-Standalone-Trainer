@@ -95,6 +95,27 @@ accelerate launch --mixed_precision bf16 krea2_train_network.py `
 
 若顯存不足，可加上 `--fp8_scaled` 與 `--blocks_to_swap`。訓練中的 sample preview 仍保留為後續工作；目前可用 Training UI 的生成按鈕，或直接執行 `krea2_generate_image.py` 進行固定 seed 推論。Krea2 設定使用獨立的 `krea2_arguments`，不會改寫既有 Anima 的 `anima_arguments`。
 
+### AIT 類似的低顯存設定
+
+Training UI 的 Krea 2 選項現在包含：
+
+- `Transformer DType = FP8 Scaled（Krea 2）`：會自動同時傳入 `fp8_base` 與 `fp8_scaled`。Krea 2 目前只實作 Scaled FP8，未提供會造成誤用的 plain FP8 選項。
+- `Krea 2 訓練時即時編碼 Text Encoder（不使用 Cache）`：設定 `--krea2_dynamic_text_encoder`，直接在每個 batch 產生 Qwen3-VL conditioning，不需要建立 TE cache。
+- `將 Text Encoder 保留在 CPU`：再加上 `--krea2_dynamic_text_encoder_cpu`。TE 權重會留在 CPU RAM，訓練時只把輸入／輸出傳輸到流程中，速度較慢但可降低 VRAM。
+
+AIT 的 `layer_offloading_transformer_percent: 0.7` 可用 28 層 Krea 2 DiT 的 `--blocks_to_swap 20` 近似（約 71.4%）；12GB VRAM 建議從 batch size 1、gradient checkpointing、`--fp8_scaled --blocks_to_swap 20` 開始，再依實際 OOM 調高至 22–24。`blocks_to_swap` 不可與 `--cpu_offload_checkpointing` 同時使用。
+
+CLI 範例：
+
+```powershell
+accelerate launch --mixed_precision bf16 krea2_train_network.py `
+  --dit path/to/raw.safetensors `
+  --vae path/to/qwen_image_vae.safetensors `
+  --text_encoder path/to/qwen3vl_4b_bf16.safetensors `
+  --krea2_dynamic_text_encoder --krea2_dynamic_text_encoder_cpu `
+  --fp8_base --fp8_scaled --blocks_to_swap 20
+```
+
 ## Anima 功能在 Krea2 的支援狀態
 
 - `lora_anima`、`LoKR`、`CDKA`、`KRONA` 現在都能透過 Krea2 的 `SingleStreamDiT` Linear target 建立 adapter；`lora_anima` 會轉接到標準 Krea2 LoRA，其他三種使用共用 LyCORIS architecture adapter。

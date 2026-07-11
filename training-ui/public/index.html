@@ -346,7 +346,9 @@
                                     <option value="bfloat16">BFloat16</option>
                                     <option value="float16">Float16</option>
                                     <option value="float32">Float32</option>
+                                    <option value="fp8_scaled">FP8 Scaled（Krea 2）</option>
                                 </select>
+                                <small id="cfg-transformer-dtype-hint">Krea 2 的 FP8 會使用安全的 Scaled FP8 路徑。</small>
                             </div>
                             <div class="form-group">
                                 <label>Save Precision</label>
@@ -426,6 +428,12 @@
                             <label><input type="checkbox" id="cfg-cache-te" checked> Cache Text Encoder Outputs to
                                 Disk</label>
                             <small>Pre-encode captions. Required if text encoder is frozen.</small>
+                        </div>
+                        <div id="group-krea2-text-encoder" class="form-group hidden">
+                            <label><input type="checkbox" id="cfg-krea2-dynamic-text-encoder"> Krea 2 訓練時即時編碼 Text Encoder（不使用 Cache）</label>
+                            <small>模仿 AIT：每個 batch 即時執行 Qwen3-VL。需要指定 Krea2 Text Encoder，速度較慢但不需要建立 TE cache。</small>
+                            <label style="display: block; margin-top: 8px;"><input type="checkbox" id="cfg-krea2-dynamic-text-encoder-cpu"> 將 Text Encoder 保留在 CPU</label>
+                            <small>更省 VRAM，但會明顯降低訓練速度。</small>
                         </div>
                         <div class="form-group">
                             <label><input type="checkbox" id="cfg-vae-disable-cache"> Disable VAE Cache</label>

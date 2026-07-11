@@ -60,9 +60,14 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         if val_dataset_group is not None:
             dynamic_caption_encoding = dynamic_caption_encoding or self._dataset_needs_dynamic_caption_encoding(val_dataset_group)
 
-        if dynamic_caption_encoding:
+        dynamic_text_encoder = (
+            getattr(args, "krea2_dynamic_text_encoder", False)
+            or getattr(args, "krea2_dynamic_text_encoder_cpu", False)
+        )
+
+        if dynamic_caption_encoding or dynamic_text_encoder:
             logger.warning(
-                "Krea 2 caption augmentation is enabled; disabling text output cache and encoding captions dynamically."
+                "Krea 2 dynamic text encoding is enabled; disabling text output cache and encoding captions during training."
             )
             args.cache_text_encoder_outputs = False
             args.cache_text_encoder_outputs_to_disk = False
@@ -81,7 +86,13 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
             raise ValueError("Krea 2 supports masked loss, but the Anima inpainting input path is not compatible")
 
         args.network_train_unet_only = True
-        args.fp8_base = False
+        # Krea 2 only supports the safe scaled-FP8 path. Keep the shared
+        # fp8_base flag as the compatibility gate, but reject plain FP8 rather
+        # than silently running in a different precision than the UI requests.
+        if args.fp8_base and not args.fp8_scaled:
+            raise ValueError("Krea 2 requires FP8 Scaled together with FP8 Base; plain FP8 is not supported.")
+        if args.fp8_scaled:
+            args.fp8_base = True
         args.fp8_base_unet = False
         train_dataset_group.verify_bucket_reso_steps(16)
         if val_dataset_group is not None:
@@ -489,9 +500,14 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Maximum Krea 2 text cache length",
     )
     parser.add_argument(
+        "--krea2_dynamic_text_encoder",
+        action="store_true",
+        help="Encode captions during training instead of using cached text encoder outputs",
+    )
+    parser.add_argument(
         "--krea2_dynamic_text_encoder_cpu",
         action="store_true",
-        help="Keep Qwen3-VL on CPU when caption augmentation disables text cache; slower but uses less VRAM",
+        help="Keep Qwen3-VL on CPU during dynamic training-time caption encoding; slower but uses less VRAM",
     )
     parser.add_argument(
         "--fp8_scaled",
