@@ -442,12 +442,7 @@ def apply_masked_loss(loss, batch, masked_loss_random_strength: float = None) ->
         r_shape = [loss.shape[0]] + [1] * (mask_image.ndim - 1)
         r = torch.rand(r_shape, device=loss.device, dtype=loss.dtype)
         r = masked_loss_random_strength + (1.0 - masked_loss_random_strength) * r
-        mask_image_new = mask_image + (1.0 - mask_image) * r
-
-        # Normalize mask_image_new so that its mean is 1.0 per sample (B, 1, 1, 1)
-        mean_dims = list(range(1, mask_image.ndim))
-        mean_new = mask_image_new.mean(dim=mean_dims, keepdim=True)
-        mask_image = mask_image_new / (mean_new + 1e-8)
+        mask_image = mask_image + (1.0 - mask_image) * r
 
     loss = loss * mask_image
     return loss

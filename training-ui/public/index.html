@@ -521,6 +521,10 @@
                                 <label><input type="checkbox" id="cfg-masked-loss-random"> Random Mask Strength</label>
                                 <small>Randomize loss weight for masked-out areas between 0.0 and 1.0.</small>
                             </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-masked-loss"> Masked Loss</label>
+                                <small>Apply the Alpha/Automask map to the training loss. Krea 2 uses this without inpainting inputs.</small>
+                            </div>
                         </div>
                         <div id="automask-panel" class="form-row hidden">
                             <div class="form-group">

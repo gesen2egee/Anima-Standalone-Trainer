@@ -520,20 +520,21 @@ class NetworkTrainer:
             and not getattr(args, "automask", False)
         )
         use_masked_loss = args.masked_loss or (has_alpha_masks and not autoshift_sampling_only)
+        masked_loss_random_strength = getattr(args, "masked_loss_random_strength", None)
 
         if args.loss_type == "cwmi":
             l2_loss = train_util.conditional_loss(noise_pred.float(), target.float(), "l2", "none", None)
             if weighting is not None:
                 l2_loss = l2_loss * weighting
             if use_masked_loss:
-                l2_loss = apply_masked_loss(l2_loss, batch)
+                l2_loss = apply_masked_loss(l2_loss, batch, masked_loss_random_strength)
             l2_loss = l2_loss.mean(dim=list(range(1, l2_loss.ndim)))
 
             cwmi_pred = noise_pred.float()
             cwmi_target = target.float()
             if use_masked_loss:
-                cwmi_pred = apply_masked_loss(cwmi_pred, batch)
-                cwmi_target = apply_masked_loss(cwmi_target, batch)
+                cwmi_pred = apply_masked_loss(cwmi_pred, batch, masked_loss_random_strength)
+                cwmi_target = apply_masked_loss(cwmi_target, batch, masked_loss_random_strength)
 
             if min(cwmi_pred.shape[-2:]) < 2:
                 if not self._cwmi_warned_small_latent:
@@ -565,7 +566,7 @@ class NetworkTrainer:
             if weighting is not None:
                 loss = loss * weighting
             if use_masked_loss:
-                loss = apply_masked_loss(loss, batch)
+                loss = apply_masked_loss(loss, batch, masked_loss_random_strength)
             loss = loss.mean(dim=list(range(1, loss.ndim)))  # mean over all dims except batch
 
         loss_weights = batch["loss_weights"]  # 各sampleごとのweight

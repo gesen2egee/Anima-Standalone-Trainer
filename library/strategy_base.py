@@ -461,24 +461,23 @@ class LatentsCachingStrategy:
         key_reso_suffix = f"_{expected_latents_size[0]}x{expected_latents_size[1]}" if multi_resolution else ""
 
         try:
-            npz = np.load(npz_path)
-
-            # In old SD/SDXL npz files, if the actual latents shape does not match the expected shape, it doesn't raise an error as long as "latents" key exists (backward compatibility)
-            # In non-SD/SDXL npz files (multi-resolution support), the latents key always has the resolution suffix, and no latents key without suffix exists, so it raises an error if the expected resolution suffix key is not found (this doesn't change the behavior for non-SD/SDXL npz files).
-            if "latents" + key_reso_suffix not in npz and "latents" not in npz:
-                return False
-            if flip_aug and ("latents_flipped" + key_reso_suffix not in npz and "latents_flipped" not in npz):
-                return False
-            if apply_alpha_mask and ("alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz):
-                return False
-            from library import train_util
-
-            automask_settings = train_util.get_automask_settings_for_caching()
-            if automask_settings.enabled:
-                if "alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz:
+            with np.load(npz_path) as npz:
+                # In old SD/SDXL npz files, if the actual latents shape does not match the expected shape, it doesn't raise an error as long as "latents" key exists (backward compatibility)
+                # In non-SD/SDXL npz files (multi-resolution support), the latents key always has the resolution suffix, and no latents key without suffix exists, so it raises an error if the expected resolution suffix key is not found (this doesn't change the behavior for non-SD/SDXL npz files).
+                if "latents" + key_reso_suffix not in npz and "latents" not in npz:
                     return False
-                if not metadata_matches(npz, automask_settings):
+                if flip_aug and ("latents_flipped" + key_reso_suffix not in npz and "latents_flipped" not in npz):
                     return False
+                if apply_alpha_mask and ("alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz):
+                    return False
+                from library import train_util
+
+                automask_settings = train_util.get_automask_settings_for_caching()
+                if automask_settings.enabled:
+                    if "alpha_mask" + key_reso_suffix not in npz and "alpha_mask" not in npz:
+                        return False
+                    if not metadata_matches(npz, automask_settings):
+                        return False
         except Exception as e:
             logger.error(f"Error loading file: {npz_path}")
             raise e
@@ -605,24 +604,24 @@ class LatentsCachingStrategy:
             expected_latents_size = (bucket_reso[1] // latents_stride, bucket_reso[0] // latents_stride)  # bucket_reso is (W, H)
             key_reso_suffix = f"_{expected_latents_size[0]}x{expected_latents_size[1]}"  # e.g. "_32x64", HxW
 
-        npz = np.load(npz_path)
-        if "latents" + key_reso_suffix not in npz:
-            # raise ValueError(f"latents{key_reso_suffix} not found in {npz_path}")
-            # Fallback to old npz without resolution suffix
-            if "latents" not in npz:
-                raise ValueError(f"latents not found in {npz_path} (either with or without resolution suffix: {key_reso_suffix})")
-            if not self._warned_fallback_to_old_npz:
-                logger.warning(
-                    f"latents{key_reso_suffix} not found in {npz_path}. Falling back to latents without resolution suffix (old npz). This warning will only be shown once. To avoid this warning, please re-cache the latents with the latest version."
-                )
-                self._warned_fallback_to_old_npz = True
-            key_reso_suffix = ""
+        with np.load(npz_path) as npz:
+            if "latents" + key_reso_suffix not in npz:
+                # raise ValueError(f"latents{key_reso_suffix} not found in {npz_path}")
+                # Fallback to old npz without resolution suffix
+                if "latents" not in npz:
+                    raise ValueError(f"latents not found in {npz_path} (either with or without resolution suffix: {key_reso_suffix})")
+                if not self._warned_fallback_to_old_npz:
+                    logger.warning(
+                        f"latents{key_reso_suffix} not found in {npz_path}. Falling back to latents without resolution suffix (old npz). This warning will only be shown once. To avoid this warning, please re-cache the latents with the latest version."
+                    )
+                    self._warned_fallback_to_old_npz = True
+                key_reso_suffix = ""
 
-        latents = npz["latents" + key_reso_suffix]
-        original_size = npz["original_size" + key_reso_suffix].tolist()
-        crop_ltrb = npz["crop_ltrb" + key_reso_suffix].tolist()
-        flipped_latents = npz["latents_flipped" + key_reso_suffix] if "latents_flipped" + key_reso_suffix in npz else None
-        alpha_mask = npz["alpha_mask" + key_reso_suffix] if "alpha_mask" + key_reso_suffix in npz else None
+            latents = npz["latents" + key_reso_suffix]
+            original_size = npz["original_size" + key_reso_suffix].tolist()
+            crop_ltrb = npz["crop_ltrb" + key_reso_suffix].tolist()
+            flipped_latents = npz["latents_flipped" + key_reso_suffix] if "latents_flipped" + key_reso_suffix in npz else None
+            alpha_mask = npz["alpha_mask" + key_reso_suffix] if "alpha_mask" + key_reso_suffix in npz else None
         if alpha_mask is not None:
             alpha_mask = alpha_mask_from_uint8(alpha_mask)
         return latents, original_size, crop_ltrb, flipped_latents, alpha_mask
@@ -655,9 +654,9 @@ class LatentsCachingStrategy:
 
         if os.path.exists(npz_path):
             # load existing npz and update it
-            npz = np.load(npz_path)
-            for key in npz.files:
-                kwargs[key] = npz[key]
+            with np.load(npz_path) as npz:
+                for key in npz.files:
+                    kwargs[key] = npz[key]
 
         # TODO float() is needed if vae is in bfloat16. Remove it if vae is float16.
         if isinstance(latents_tensor, torch.Tensor):

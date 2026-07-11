@@ -30,6 +30,7 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
         super().__init__()
         self.is_swapping_blocks = False
         self.global_step = 0
+        self._unconditional_text_encoder_conds = None
 
     def step_logging(self, accelerator, logs, global_step, epoch):
         self.global_step = global_step
@@ -211,6 +212,14 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
             else:
                 logger.warning("Krea 2 dynamic caption encoding keeps Qwen3-VL on the training device")
                 text_encoders[0].to(accelerator.device)
+
+        # Model Guidance / CFG-Zero needs a real empty-prompt Qwen3-VL condition.
+        # Keep the small, frozen result on CPU so this does not defeat TE offload.
+        if self._unconditional_text_encoder_conds is None:
+            logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
+            with torch.no_grad():
+                empty_hidden, empty_mask = krea2_utils.get_krea2_prompt_embeds(text_encoders[0], [""])
+            self._unconditional_text_encoder_conds = (empty_hidden.cpu(), empty_mask.cpu())
 
     def process_batch(
         self,
@@ -420,9 +429,18 @@ class Krea2NetworkTrainer(train_network.NetworkTrainer):
                 apply_model_guidance = torch.rand(1, device=latents.device).item() <= args.model_guidance_prob
 
         if apply_model_guidance:
-            unconditional_context = torch.zeros_like(prompt_embeds)
-            unconditional_mask = torch.zeros_like(attn_mask)
-            unconditional_mask[:, 0] = True
+            if self._unconditional_text_encoder_conds is None:
+                # This only occurs for direct unit calls that bypass trainer setup.
+                # The normal training path initializes the real empty-prompt condition above.
+                unconditional_context = torch.zeros_like(prompt_embeds)
+                unconditional_mask = torch.zeros_like(attn_mask)
+                unconditional_mask[:, 0] = True
+            else:
+                empty_hidden, empty_mask = self._unconditional_text_encoder_conds
+                unconditional_context = empty_hidden.to(device=accelerator.device, dtype=weight_dtype).expand(
+                    prompt_embeds.shape[0], -1, -1, -1
+                )
+                unconditional_mask = empty_mask.to(device=accelerator.device).expand(prompt_embeds.shape[0], -1)
             with torch.no_grad(), accelerator.autocast():
                 pred_uncond = forward_model(noisy, unconditional_context, unconditional_mask)
             pred_uncond = pred_uncond.reshape(

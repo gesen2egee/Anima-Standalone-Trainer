@@ -121,7 +121,8 @@ accelerate launch --mixed_precision bf16 krea2_train_network.py `
 - `lora_anima`、`LoKR`、`CDKA`、`KRONA` 現在都能透過 Krea2 的 `SingleStreamDiT` Linear target 建立 adapter；`lora_anima` 會轉接到標準 Krea2 LoRA，其他三種使用共用 LyCORIS architecture adapter。
 - `Model Guidance`、`CFG-Zero`、`CIOP`、`differential_guidance_scale` 與 Anima weighting 已接入 Krea2 flow-matching forward。
 - `sigma`、`uniform`、`sigmoid`、`shift`、`autoshift`、`autoshift_wavelet`、`flux_shift`、`plora`、`krea2_shift` timestep sampling 均可使用；`autoshift*` 需要 alpha mask。
-- Caption prefix/suffix、wildcard、caption dropout、caption shuffle、token warmup、caption tag dropout 與 FAD 會自動切換為 dynamic Qwen3-VL encoding，不使用固定 text cache；可加 `--krea2_dynamic_text_encoder_cpu` 降低顯存但會變慢。
-- `masked_loss` 與 alpha-mask loss 可使用；Krea2 不支援 Anima 的 `train_inpainting` 輸入格式。
+- Caption prefix/suffix、wildcard、caption dropout、caption shuffle、token warmup、caption tag dropout、FAD 與 sFAD（`fad_curriculum`）會自動切換為 dynamic Qwen3-VL encoding，不使用固定 text cache；可加 `--krea2_dynamic_text_encoder_cpu` 降低顯存但會變慢。
+- `masked_loss` 與 alpha-mask loss 可使用；Krea2 不支援 Anima 的 `train_inpainting` 輸入格式。`Random Mask Strength` 現在會實際傳入 loss，依設定在非遮罩區域使用隨機權重。
+- Automask 會在 latent cache 階段產生 alpha mask，寫入 Krea2 的多解析度 `.npz`（例如 `*_1024x1024_krea2.npz`）中的 `alpha_mask_<H>x<W>`，並一併保存 automask 參數 metadata；讀取時會驗證設定是否相同。
 
 啟用 caption augmentation 時，請預期 Qwen3-VL 會與 DiT 同時佔用顯存；若顯存不足，使用 dynamic CPU text encoder。若要使用 CDKA／KRONA 推論合併 LoRA，請不要在生成命令啟用 `--fp8_scaled`，因為這兩種 adapter 需要先以完整權重合併。

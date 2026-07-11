@@ -76,14 +76,14 @@ class Krea2TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
         if self.skip_disk_cache_validity_check:
             return True
         try:
-            data = np.load(npz_path)
-            return "prompt_embeds" in data and "attn_mask" in data
+            with np.load(npz_path) as data:
+                return "prompt_embeds" in data and "attn_mask" in data
         except Exception:
             return False
 
     def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        data = np.load(npz_path)
-        return [data["prompt_embeds"], data["attn_mask"]]
+        with np.load(npz_path) as data:
+            return [data["prompt_embeds"], data["attn_mask"]]
 
     def cache_batch_outputs(self, tokenize_strategy, models, text_encoding_strategy, infos: List):
         if not models or models[0] is None:

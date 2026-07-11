@@ -1864,6 +1864,7 @@ function populateConfig(config) {
   updateAutomaskUI();
   $("cfg-masked-loss-random").checked =
     t.masked_loss_random_strength !== undefined && t.masked_loss_random_strength !== null;
+  $("cfg-masked-loss").checked = t.masked_loss ?? false;
   $("cfg-disable-bucket-shuffle").checked = t.disable_bucket_shuffle ?? false;
   // Progressive resolution schedule
   if (t.resolution_schedule) {
@@ -2320,6 +2321,7 @@ function gatherConfig() {
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
       cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder ? false : $("cfg-cache-te").checked,
+      masked_loss: $("cfg-masked-loss").checked,
       automask: $("cfg-automask").checked,
       automask_alpha: safeInt($("cfg-automask-alpha").value, 128),
       automask_shrink: safeInt($("cfg-automask-shrink").value, 1),
