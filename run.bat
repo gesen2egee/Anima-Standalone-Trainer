@@ -29,6 +29,35 @@ if errorlevel 1 (
     exit /b 1
 )
 
+where node >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] 找不到 node。請先安裝 Node.js LTS，並重新開啟終端機。
+    pause
+    exit /b 1
+)
+
+call npm --version >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] npm 無法執行，請重新安裝 Node.js LTS。
+    pause
+    exit /b 1
+)
+
+if not exist "%ROOT%venv\Scripts\python.exe" (
+    echo [ERROR] 找不到 Python venv。
+    echo 請先執行 setup.bat，完成 Python 環境安裝後再執行 run.bat。
+    pause
+    exit /b 1
+)
+
+"%ROOT%venv\Scripts\python.exe" -c "import torch, accelerate" >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Python venv 缺少必要套件。
+    echo 請重新執行 setup.bat 完成安裝。
+    pause
+    exit /b 1
+)
+
 pushd "%ROOT%training-ui"
 if errorlevel 1 (
     echo [ERROR] 無法進入 training-ui 資料夾。
@@ -38,7 +67,7 @@ if errorlevel 1 (
 
 echo 正在啟動 UI...
 set "RUN_STATUS=0"
-npm start
+call npm start
 if errorlevel 1 set "RUN_STATUS=1"
 popd
 
