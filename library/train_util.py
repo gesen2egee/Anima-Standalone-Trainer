@@ -1995,19 +1995,16 @@ class BaseDataset(torch.utils.data.Dataset):
         masked_images = []
 
         folder_shifts = []
-        any_fad_timestep = False
-        batch_timesteps = []
         for image_key in bucket[image_index : image_index + bucket_batch_size]:
             image_info = self.image_data[image_key]
             subset = self.image_to_subset[image_key]
 
-            t_img = random.random()
             if getattr(subset, "fad_timestep", False) and getattr(subset, "enable_fad", False):
-                t_val = t_img
-                any_fad_timestep = True
+                # TSFAD 的 t_val 只控制 FAD caption dropout 強度；
+                # 模型 diffusion timestep 仍由一般 sampling/folder shift 決定。
+                t_val = random.random()
             else:
                 t_val = None
-            batch_timesteps.append(t_img * 1000.0 if t_val is not None else float("nan"))
 
             custom_attributes.append(subset.custom_attributes)
             folder_shifts.append(getattr(subset, "folder_shift", "global"))
@@ -2264,9 +2261,6 @@ class BaseDataset(torch.utils.data.Dataset):
         example["flippeds"] = flippeds
 
         example["network_multipliers"] = torch.FloatTensor([self.network_multiplier] * len(captions))
-        if any_fad_timestep:
-            example["timesteps"] = torch.FloatTensor(batch_timesteps)
-
         if self.debug_dataset:
             example["image_keys"] = bucket[image_index : image_index + self.batch_size]
         return example
