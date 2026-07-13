@@ -915,30 +915,53 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
 # endregion
 
 
-def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz = latents.shape[0]
-
-    # Sample a random timestep for each image
-    # for weighting schemes where we sample timesteps non-uniformly
-    u = compute_density_for_timestep_sampling(
-        weighting_scheme=args.weighting_scheme,
-        batch_size=bsz,
-        logit_mean=args.logit_mean,
-        logit_std=args.logit_std,
-        mode_scale=args.mode_scale,
+    num_timesteps = 1000
+    override_timesteps, override_mask = train_util.prepare_batch_timestep_overrides(
+        batch_timesteps, bsz, device, dtype
     )
-    t_min = args.min_timestep if args.min_timestep is not None else 0
-    t_max = args.max_timestep if args.max_timestep is not None else 1000
-    shift = args.training_shift
 
-    # weighting shift, value >1 will shift distribution to noisy side (focus more on overall structure), value <1 will shift towards less-noisy side (focus more on details)
-    u = (u * shift) / (1 + (shift - 1) * u)
+    if override_mask is not None and bool(torch.all(override_mask)):
+        timesteps = override_timesteps
+        sigmas = timesteps / num_timesteps
+    else:
+        # Sample a random timestep for each image
+        # for weighting schemes where we sample timesteps non-uniformly
+        u = compute_density_for_timestep_sampling(
+            weighting_scheme=args.weighting_scheme,
+            batch_size=bsz,
+            logit_mean=args.logit_mean,
+            logit_std=args.logit_std,
+            mode_scale=args.mode_scale,
+        ).to(device=device, dtype=dtype)
+        t_min = args.min_timestep if args.min_timestep is not None else 0
+        t_max = args.max_timestep if args.max_timestep is not None else num_timesteps
+        shift = train_util.get_folder_shift_values(
+            folder_shifts,
+            bsz,
+            device,
+            dtype,
+            global_shift=args.training_shift if args.training_shift is not None else 1.0,
+        )
+        if shift is None:
+            shift = torch.full(
+                (bsz,),
+                float(args.training_shift if args.training_shift is not None else 1.0),
+                device=device,
+                dtype=dtype,
+            )
 
-    indices = (u * (t_max - t_min) + t_min).long()
-    timesteps = indices.to(device=device, dtype=dtype)
+        # weighting shift, value >1 will shift distribution to noisy side (focus more on overall structure), value <1 will shift towards less-noisy side (focus more on details)
+        u = train_util.apply_flow_shift(u, shift)
 
-    # sigmas according to flowmatching
-    sigmas = timesteps / 1000
+        indices = (u * (t_max - t_min) + t_min).long()
+        timesteps = indices.to(device=device, dtype=dtype)
+        sigmas = timesteps / num_timesteps
+
+    timesteps, sigmas = train_util.apply_batch_timestep_overrides(
+        timesteps, sigmas, override_timesteps, override_mask, num_timesteps
+    )
     sigmas = sigmas.view(-1, 1, 1, 1)
     noisy_model_input = sigmas * noise + (1.0 - sigmas) * latents
 

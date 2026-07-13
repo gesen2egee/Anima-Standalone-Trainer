@@ -635,7 +635,9 @@ def train(args):
                 # noise + timesteps
                 noise = torch.randn_like(latents)
                 noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
-                    args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype
+                    args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype,
+                    folder_shifts=batch.get("folder_shifts", None),
+                    batch_timesteps=batch.get("timesteps", None)
                 )
                 noisy_model_input_4d = noisy_model_input
                 timesteps = timesteps / 1000.0

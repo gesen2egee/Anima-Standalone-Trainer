@@ -58,6 +58,7 @@ class BaseSubsetParams:
     shuffle_caption: bool = False
     enable_fad: bool = False
     fad_curriculum: bool = False
+    fad_timestep: bool = False
     caption_separator: str = (",",)
     keep_tokens: int = 0
     keep_tokens_separator: str = (None,)
@@ -79,6 +80,7 @@ class BaseSubsetParams:
     validation_seed: int = 0
     validation_split: float = 0.0
     resize_interpolation: Optional[str] = None
+    folder_shift: Optional[str] = "global"
 
 
 @dataclass
@@ -203,6 +205,7 @@ class ConfigSanitizer:
         "shuffle_caption": bool,
         "enable_fad": bool,
         "fad_curriculum": bool,
+        "fad_timestep": bool,
         "keep_tokens": int,
         "keep_tokens_separator": str,
         "keep_tags": str,
@@ -215,6 +218,7 @@ class ConfigSanitizer:
         "caption_suffix": str,
         "custom_attributes": dict,
         "resize_interpolation": str,
+        "folder_shift": str,
     }
     # DO means DropOut
     DO_SUBSET_ASCENDABLE_SCHEMA = {
@@ -590,6 +594,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     shuffle_caption: {subset.shuffle_caption}
                     enable_fad: {subset.enable_fad}
                     fad_curriculum: {subset.fad_curriculum}
+                    fad_timestep: {subset.fad_timestep}
                     keep_tokens: {subset.keep_tokens}
                     keep_tags: {subset.keep_tags}
                     caption_dropout_rate: {subset.caption_dropout_rate}
@@ -605,6 +610,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     token_warmup_step: {subset.token_warmup_step},
                     alpha_mask: {subset.alpha_mask}
                     resize_interpolation: {subset.resize_interpolation}
+                    folder_shift: {subset.folder_shift}
                     custom_attributes: {subset.custom_attributes}
                 """), "  ")
 

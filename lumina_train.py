@@ -740,6 +740,8 @@ def train(args):
                         noise,
                         accelerator.device,
                         weight_dtype,
+                        folder_shifts=batch.get("folder_shifts", None),
+                        batch_timesteps=batch.get("timesteps", None),
                     )
                 )
                 # call model

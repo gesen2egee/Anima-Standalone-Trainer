@@ -330,7 +330,9 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
         # get noisy model input and timesteps
         noisy_model_input, timesteps, sigmas = sd3_train_utils.get_noisy_model_input_and_timesteps(
-            args, latents, noise, accelerator.device, weight_dtype
+            args, latents, noise, accelerator.device, weight_dtype,
+            folder_shifts=batch.get("folder_shifts", None),
+            batch_timesteps=batch.get("timesteps", None)
         )
 
         # ensure the hidden state will require grad

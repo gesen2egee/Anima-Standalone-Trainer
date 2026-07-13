@@ -512,13 +512,105 @@ def compute_autoshift_mask_flow_shift(alpha_masks: torch.Tensor, device: torch.d
     return 0.5 + background_ratios
 
 
+def compute_spectrally_guided_sigmas(latents: torch.Tensor, device, kappa_min: float = 0.01, kappa_max: float = 100.0) -> torch.Tensor:
+    # latents shape: [B, C, H, W]
+    B, C, H, W = latents.shape
+    N_f = min(H, W) // 2
+    if N_f < 2:
+        return torch.rand((B,), device=device, dtype=latents.dtype)
+
+    # 1. 2D FFT on float32 to prevent half-precision overflow
+    x = latents.float()
+    x_fft = torch.fft.fft2(x, dim=(-2, -1))
+    psd = torch.abs(x_fft) ** 2
+    psd = psd.mean(dim=1)  # Mean across channel dimension -> [B, H, W]
+
+    # 2. Compute Radially-Averaged PSD (RAPSD)
+    freq_y = torch.fft.fftfreq(H, device=device) * H
+    freq_x = torch.fft.fftfreq(W, device=device) * W
+    grid_y, grid_x = torch.meshgrid(freq_y, freq_x, indexing="ij")
+    dist = torch.sqrt(grid_y**2 + grid_x**2)
+    dist_round = torch.round(dist).long()
+
+    # Pre-compute masks for k in [1, N_f]
+    k_vals = torch.arange(1, N_f + 1, device=device).view(N_f, 1, 1)
+    mask = (dist_round.unsqueeze(0) == k_vals)  # [N_f, H, W]
+    mask_sum = mask.sum(dim=(1, 2)).float()  # [N_f]
+    mask_sum = torch.clamp(mask_sum, min=1.0)
+
+    mask_flat = mask.float().view(N_f, -1)  # [N_f, H*W]
+    psd_flat = psd.view(B, -1)  # [B, H*W]
+    psd_k = torch.matmul(psd_flat, mask_flat.t()) / mask_sum.unsqueeze(0)  # [B, N_f]
+
+    # 3. Fit power law log(psd_k) = alpha * log(k) + log(beta)
+    eps = 1e-8
+    log_psd = torch.log(psd_k + eps)  # [B, N_f]
+    log_k = torch.log(torch.arange(1, N_f + 1, device=device).float())  # [N_f]
+
+    mean_x = log_k.mean()
+    var_x = ((log_k - mean_x) ** 2).mean()
+
+    mean_y = log_psd.mean(dim=1, keepdim=True)  # [B, 1]
+    cov_xy = ((log_k.unsqueeze(0) - mean_x) * (log_psd - mean_y)).mean(dim=1, keepdim=True)  # [B, 1]
+
+    alpha = cov_xy / (var_x + 1e-8)  # [B, 1]
+    log_beta = mean_y - alpha * mean_x  # [B, 1]
+
+    alpha = torch.clamp(alpha, max=-0.1)
+
+    # 4. Sample continuous timestep t ~ U(0, 1)
+    t = torch.rand((B, 1), device=device)
+
+    # 5. Compute noise schedules log_kappa_t
+    log_kappa_t = t * math.log(kappa_max) + (1.0 - t) * math.log(kappa_min)
+
+    # mu_F(t) = N_f + (1 - N_f) * t
+    mu_F = N_f + (1.0 - N_f) * t  # [B, 1]
+
+    # mu_P(t) = [(1 - t) * (N_f^(alpha + 1) - 1) + 1]^(1 / (alpha + 1))
+    alpha_plus_1 = alpha + 1.0
+    alpha_plus_1 = torch.where(torch.abs(alpha_plus_1) < 1e-4, torch.sign(alpha_plus_1) * 1e-4, alpha_plus_1)
+    
+    term = (1.0 - t) * (torch.pow(float(N_f), alpha_plus_1) - 1.0) + 1.0
+    term = torch.clamp(term, min=1e-8)
+    mu_P = torch.pow(term, 1.0 / alpha_plus_1)  # [B, 1]
+
+    # 6. Calculate logSNRs
+    lambda_F = -log_kappa_t - log_beta - alpha * torch.log(mu_F)
+    lambda_P = -log_kappa_t - log_beta - alpha * torch.log(mu_P)
+    lambda_M = 0.5 * (lambda_F + lambda_P)  # [B, 1]
+
+    # 7. Convert to sigma = sqrt(sigmoid(-lambda_M))
+    sigmas = torch.sqrt(torch.sigmoid(-lambda_M))  # [B, 1]
+
+    return sigmas.squeeze(1).to(dtype=latents.dtype)
+
+
 def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None
+    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
-    if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid" or args.timestep_sampling == "plora":
+    override_timesteps, override_mask = train_util.prepare_batch_timestep_overrides(
+        batch_timesteps, bsz, device, dtype
+    )
+
+    if override_mask is not None and bool(torch.all(override_mask)):
+        timesteps = override_timesteps
+        sigmas = timesteps / num_timesteps
+    elif args.timestep_sampling == "spectrally_guided":
+        kappa_min = getattr(args, "spectrally_guided_kappa_min", 0.01)
+        kappa_max = getattr(args, "spectrally_guided_kappa_max", 100.0)
+        sigmas = compute_spectrally_guided_sigmas(latents, device, kappa_min=kappa_min, kappa_max=kappa_max)
+        sigmas = sigmas.to(dtype=dtype)
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
+        timesteps = sigmas * num_timesteps
+    elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid" or args.timestep_sampling == "plora":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":
             # https://github.com/XLabs-AI/x-flux/tree/main
@@ -534,21 +626,54 @@ def get_noisy_model_input_and_timesteps(
         else:
             sigmas = torch.rand((bsz,), device=device)
 
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet"):
         if args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
-            if alpha_masks is None:
+            normalized_folder_shifts = (
+                [train_util.normalize_folder_shift(value) for value in folder_shifts]
+                if folder_shifts is not None
+                else None
+            )
+            has_global_folder_shift = normalized_folder_shifts is None or any(
+                value == "global" for value in normalized_folder_shifts
+            )
+            if alpha_masks is None and has_global_folder_shift:
                 raise ValueError("autoshift timestep sampling requires alpha masks; enable latent caching with Automask")
-            if args.timestep_sampling == "autoshift_wavelet":
-                shift = compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
+            if alpha_masks is not None:
+                if args.timestep_sampling == "autoshift_wavelet":
+                    shift = compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
+                else:
+                    shift = compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
             else:
-                shift = compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
+                shift = torch.ones(bsz, device=device, dtype=dtype)
+            if folder_shifts is not None:
+                shift = train_util.get_folder_shift_values(
+                    folder_shifts, bsz, device, dtype, global_shift=shift
+                )
         else:
-            shift = args.discrete_flow_shift
+            shift = train_util.get_folder_shift_values(
+                folder_shifts,
+                bsz,
+                device,
+                dtype,
+                global_shift=args.discrete_flow_shift if args.discrete_flow_shift is not None else 1.0,
+            )
+            if shift is None:
+                shift = torch.full(
+                    (bsz,),
+                    float(args.discrete_flow_shift if args.discrete_flow_shift is not None else 1.0),
+                    device=device,
+                    dtype=dtype,
+                )
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
-        sigmas = (sigmas * shift) / (1 + (shift - 1) * sigmas)
+        sigmas = train_util.apply_flow_shift(sigmas, shift)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "flux_shift":
         sigmas = torch.randn(bsz, device=device)
@@ -556,6 +681,11 @@ def get_noisy_model_input_and_timesteps(
         sigmas = sigmas.sigmoid()
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
         timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
@@ -567,9 +697,18 @@ def get_noisy_model_input_and_timesteps(
             logit_std=args.logit_std,
             mode_scale=args.mode_scale,
         )
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, u.device, u.dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            u = train_util.apply_flow_shift(u, folder_shift_values)
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
+
+    timesteps, sigmas = train_util.apply_batch_timestep_overrides(
+        timesteps, sigmas, override_timesteps, override_mask, num_timesteps
+    )
 
     # Broadcast sigmas to latent shape
     sigmas = sigmas.view(-1, 1, 1, 1) if latents.ndim == 4 else sigmas.view(-1, 1, 1, 1, 1)
@@ -714,7 +853,7 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
 
     parser.add_argument(
         "--timestep_sampling",
-        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
+        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift", "spectrally_guided"],
         default="sigma",
         help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and FLUX.1 shifting."
         " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト。",

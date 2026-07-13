@@ -177,6 +177,99 @@ DEFAULT_KEEP_TAGS = (
     ".*_(medium), monochrome, greyscale, sketch"
 )
 
+FOLDER_SHIFT_VALUES = {
+    "high": 1.5,
+    "mid": 1.0,
+    "low": 0.5,
+}
+FOLDER_SHIFT_NAMES = frozenset(("global", *FOLDER_SHIFT_VALUES.keys()))
+
+
+def normalize_folder_shift(value: Optional[str]) -> str:
+    normalized = str(value or "global").strip().lower()
+    if normalized not in FOLDER_SHIFT_NAMES:
+        allowed = ", ".join(sorted(FOLDER_SHIFT_NAMES))
+        raise ValueError(f"folder_shift must be one of: {allowed}; got {value!r}")
+    return normalized
+
+
+def get_folder_shift_values(
+    folder_shifts: Optional[Sequence[str]],
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    global_shift: Union[float, torch.Tensor] = 1.0,
+) -> Optional[torch.Tensor]:
+    if folder_shifts is None:
+        return None
+    if len(folder_shifts) != batch_size:
+        raise ValueError(
+            f"folder_shifts length ({len(folder_shifts)}) must match batch size ({batch_size})"
+        )
+
+    if torch.is_tensor(global_shift):
+        fallback = global_shift.to(device=device, dtype=dtype).reshape(-1)
+        if fallback.numel() != batch_size:
+            raise ValueError(
+                f"global_shift tensor length ({fallback.numel()}) must match batch size ({batch_size})"
+            )
+        values = fallback.clone()
+    else:
+        values = torch.full(
+            (batch_size,),
+            float(global_shift if global_shift is not None else 1.0),
+            device=device,
+            dtype=dtype,
+        )
+
+    for index, folder_shift in enumerate(folder_shifts):
+        normalized = normalize_folder_shift(folder_shift)
+        if normalized != "global":
+            values[index] = FOLDER_SHIFT_VALUES[normalized]
+    return values
+
+
+def apply_flow_shift(values: torch.Tensor, shifts: torch.Tensor) -> torch.Tensor:
+    return (values * shifts) / (1 + (shifts - 1) * values)
+
+
+def prepare_batch_timestep_overrides(
+    batch_timesteps: Optional[torch.Tensor], batch_size: int, device: torch.device, dtype: torch.dtype
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    if batch_timesteps is None:
+        return None, None
+    values = batch_timesteps.to(device=device, dtype=dtype).reshape(-1)
+    if values.numel() != batch_size:
+        raise ValueError(
+            f"batch_timesteps length ({values.numel()}) must match batch size ({batch_size})"
+        )
+    mask = torch.isfinite(values)
+    if not torch.any(mask):
+        return None, None
+    return values, mask
+
+
+def apply_batch_timestep_overrides(
+    timesteps: torch.Tensor,
+    sigmas: torch.Tensor,
+    batch_timesteps: Optional[torch.Tensor],
+    override_mask: Optional[torch.Tensor],
+    num_timesteps: Union[int, float],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if batch_timesteps is None or override_mask is None:
+        return timesteps, sigmas
+
+    timesteps = timesteps.clone()
+    sigmas = sigmas.clone()
+    override_values = batch_timesteps[override_mask]
+    timesteps[override_mask] = override_values
+    sigma_values = override_values / num_timesteps
+    if sigmas.ndim == 1:
+        sigmas[override_mask] = sigma_values
+    else:
+        sigmas[override_mask] = sigma_values.view(-1, *([1] * (sigmas.ndim - 1)))
+    return timesteps, sigmas
+
 try:
     import pillow_avif
 
@@ -521,7 +614,9 @@ class BaseSubset:
         resize_interpolation: Optional[str] = None,
         enable_fad: bool = False,
         fad_curriculum: bool = False,
+        fad_timestep: bool = False,
         keep_tags: Optional[str] = None,
+        folder_shift: Optional[str] = "global",
     ) -> None:
         self.image_dir = image_dir
         self.alpha_mask = alpha_mask if alpha_mask is not None else False
@@ -556,9 +651,11 @@ class BaseSubset:
 
         self.enable_fad = enable_fad
         self.fad_curriculum = fad_curriculum
+        self.fad_timestep = fad_timestep
         self.fad_tag_frequencies = {}
         self.keep_tags = DEFAULT_KEEP_TAGS if keep_tags is None else keep_tags
         self.keep_tag_patterns = self.compile_keep_tag_patterns(self.keep_tags)
+        self.folder_shift = normalize_folder_shift(folder_shift)
 
     @staticmethod
     def split_keep_tags(keep_tags: Optional[str]) -> List[str]:
@@ -1062,7 +1159,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         return flex_tokens
 
-    def process_caption(self, subset: BaseSubset, caption):
+    def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None):
         # caption に prefix/suffix を付ける
         if subset.caption_prefix:
             caption = subset.caption_prefix + " " + caption
@@ -1175,6 +1272,9 @@ class BaseDataset(torch.utils.data.Dataset):
                                 p_step = self.fad_step_start + (self.fad_step_end - self.fad_step_start) * p_step_normalized
                         else:
                             p_step = 1.0
+
+                        if t_val is not None and getattr(subset, "fad_timestep", False):
+                            p_step = p_step + t_val * (1.0 - p_step)
 
                         l = []
                         for token in flex_tokens:
@@ -1894,11 +1994,23 @@ class BaseDataset(torch.utils.data.Dataset):
         masks = []
         masked_images = []
 
+        folder_shifts = []
+        any_fad_timestep = False
+        batch_timesteps = []
         for image_key in bucket[image_index : image_index + bucket_batch_size]:
             image_info = self.image_data[image_key]
             subset = self.image_to_subset[image_key]
 
+            t_img = random.random()
+            if getattr(subset, "fad_timestep", False) and getattr(subset, "enable_fad", False):
+                t_val = t_img
+                any_fad_timestep = True
+            else:
+                t_val = None
+            batch_timesteps.append(t_img * 1000.0 if t_val is not None else float("nan"))
+
             custom_attributes.append(subset.custom_attributes)
+            folder_shifts.append(getattr(subset, "folder_shift", "global"))
 
             # in case of fine tuning, is_reg is always False
             loss_weights.append(self.prior_loss_weight if image_info.is_reg else 1.0)
@@ -2041,7 +2153,7 @@ class BaseDataset(torch.utils.data.Dataset):
             text_encoder_outputs_list.append(text_encoder_outputs)
 
             if tokenization_required:
-                caption = self.process_caption(subset, image_info.caption)
+                caption = self.process_caption(subset, image_info.caption, t_val=t_val)
                 input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(caption)]  # remove batch dimension
                 # if self.XTI_layers:
                 #     caption_layer = []
@@ -2110,7 +2222,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
         # set example
         example = {}
-        example["custom_attributes"] = custom_attributes  # may be list of empty dict
+        example["custom_attributes"] = custom_attributes
+        example["folder_shifts"] = folder_shifts  # may be list of empty dict
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
@@ -2151,6 +2264,8 @@ class BaseDataset(torch.utils.data.Dataset):
         example["flippeds"] = flippeds
 
         example["network_multipliers"] = torch.FloatTensor([self.network_multiplier] * len(captions))
+        if any_fad_timestep:
+            example["timesteps"] = torch.FloatTensor(batch_timesteps)
 
         if self.debug_dataset:
             example["image_keys"] = bucket[image_index : image_index + self.batch_size]
@@ -2902,7 +3017,9 @@ class ControlNetDataset(BaseDataset):
                 resize_interpolation=subset.resize_interpolation,
                 enable_fad=subset.enable_fad,
                 fad_curriculum=subset.fad_curriculum,
+                fad_timestep=getattr(subset, "fad_timestep", False),
                 keep_tags=subset.keep_tags,
+                folder_shift=getattr(subset, "folder_shift", "global"),
             )
             db_subsets.append(db_subset)
 
@@ -5184,6 +5301,9 @@ def add_dataset_arguments(
         "--fad_curriculum", action="store_true", help="enable Curriculum-inspired Scheduling for FAD (sFAD) / sFAD (Curriculum-inspired Scheduling) を有効にする"
     )
     parser.add_argument(
+        "--fad_timestep", action="store_true", help="enable Time-Step FAD (TSFAD) / Time-Step FAD (TSFAD) を有効にする"
+    )
+    parser.add_argument(
         "--fad_p_min", type=float, default=0.35, help="minimum dropout probability for FAD / FADの最小ドロップアウト確率"
     )
     parser.add_argument(
@@ -6820,6 +6940,16 @@ def save_sd_model_on_train_end_common(
         if args.huggingface_repo_id is not None:
             huggingface_util.upload(args, out_dir, "/" + model_name, force_sync_upload=True)
 
+    # Write explicit completion signal
+    try:
+        signal_file = os.path.join(args.output_dir, "completed.signal")
+        with open(signal_file, "w", encoding="utf-8") as f:
+            f.write("success")
+        logger.info(f"wrote training completion signal to {signal_file}")
+    except Exception as e:
+        logger.warning(f"failed to write training completion signal: {e}")
+
+
 
 def get_timesteps(min_timestep: int, max_timestep: int, b_size: int, device: torch.device) -> torch.Tensor:
     if min_timestep < max_timestep:
@@ -6934,7 +7064,7 @@ def apply_cep_noise(
 
 
 def get_noise_noisy_latents_and_timesteps(
-    args, noise_scheduler, latents: torch.FloatTensor
+    args, noise_scheduler, latents: torch.FloatTensor, batch_timesteps: Optional[torch.Tensor] = None
 ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.IntTensor]:
     # Sample noise that we'll add to the latents
     noise = sample_training_noise(args, latents)
@@ -6950,10 +7080,17 @@ def get_noise_noisy_latents_and_timesteps(
         )
 
     # Sample a random timestep for each image
-    b_size = latents.shape[0]
-    min_timestep = 0 if args.min_timestep is None else args.min_timestep
-    max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
-    timesteps = get_timesteps(min_timestep, max_timestep, b_size, latents.device)
+    if batch_timesteps is not None:
+        # Convert to appropriate long type if the scheduler config indicates integer-based steps
+        if getattr(noise_scheduler.config, "num_train_timesteps", 1000) > 0:
+            timesteps = batch_timesteps.to(device=latents.device, dtype=torch.long)
+        else:
+            timesteps = batch_timesteps.to(device=latents.device)
+    else:
+        b_size = latents.shape[0]
+        min_timestep = 0 if args.min_timestep is None else args.min_timestep
+        max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
+        timesteps = get_timesteps(min_timestep, max_timestep, b_size, latents.device)
 
     # Add noise to the latents according to the noise magnitude at each timestep
     # (this is the forward diffusion process)

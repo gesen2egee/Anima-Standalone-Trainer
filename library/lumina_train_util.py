@@ -805,12 +805,19 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None) -> Tensor
 
 # mainly copied from flux_train_utils.get_noisy_model_input_and_timesteps
 def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype
+    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, _, h, w = latents.shape
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
-    if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
+    override_timesteps, override_mask = train_util.prepare_batch_timestep_overrides(
+        batch_timesteps, bsz, device, dtype
+    )
+
+    if override_mask is not None and bool(torch.all(override_mask)):
+        timesteps = override_timesteps
+        sigmas = timesteps / num_timesteps
+    elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":
             # https://github.com/XLabs-AI/x-flux/tree/main
@@ -818,19 +825,42 @@ def get_noisy_model_input_and_timesteps(
         else:
             sigmas = torch.rand((bsz,), device=device)
 
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "shift":
-        shift = args.discrete_flow_shift
+        shift = train_util.get_folder_shift_values(
+            folder_shifts,
+            bsz,
+            device,
+            dtype,
+            global_shift=args.discrete_flow_shift if args.discrete_flow_shift is not None else 1.0,
+        )
+        if shift is None:
+            shift = torch.full(
+                (bsz,),
+                float(args.discrete_flow_shift if args.discrete_flow_shift is not None else 1.0),
+                device=device,
+                dtype=dtype,
+            )
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
-        sigmas = (sigmas * shift) / (1 + (shift - 1) * sigmas)
+        sigmas = train_util.apply_flow_shift(sigmas, shift)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "nextdit_shift":
         sigmas = torch.rand((bsz,), device=device)
         sigmas = torch.clamp(sigmas, min=1e-7).to(device)
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
         sigmas = time_shift(mu, 1.0, sigmas)
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
 
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "flux_shift":
@@ -840,6 +870,11 @@ def get_noisy_model_input_and_timesteps(
         sigmas = torch.clamp(sigmas, min=1e-7).to(device)
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, device, dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
         timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
@@ -851,9 +886,18 @@ def get_noisy_model_input_and_timesteps(
             logit_std=args.logit_std,
             mode_scale=args.mode_scale,
         )
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts, bsz, u.device, u.dtype, global_shift=1.0
+        )
+        if folder_shift_values is not None:
+            u = train_util.apply_flow_shift(u, folder_shift_values)
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
+
+    timesteps, sigmas = train_util.apply_batch_timestep_overrides(
+        timesteps, sigmas, override_timesteps, override_mask, num_timesteps
+    )
 
     # Broadcast sigmas to latent shape
     sigmas = sigmas.view(-1, 1, 1, 1)
