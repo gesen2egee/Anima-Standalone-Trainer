@@ -329,7 +329,9 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
         # get noisy model input and timesteps
         noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
-            args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
+            args, noise_scheduler, latents, noise, accelerator.device, weight_dtype,
+            folder_shifts=batch.get("folder_shifts", None),
+            batch_timesteps=batch.get("timesteps", None)
         )
         self.current_noise = noise
         self.current_noisy_latents = noisy_model_input

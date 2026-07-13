@@ -17,7 +17,7 @@ function parseTemplate(relPath) {
 test("default config template follows my_job_v1 training and network defaults", () => {
   const config = parseTemplate("templates/config_template.toml");
 
-  assert.strictEqual(config.training_arguments.learning_rate, 0.0001);
+  assert.strictEqual(config.training_arguments.learning_rate, 0.0003);
   assert.strictEqual(config.training_arguments.lr_scheduler, "warmup_stable_decay");
   assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0.1);
   assert.strictEqual(config.training_arguments.lr_decay_steps, 0.1);
@@ -39,12 +39,12 @@ test("default config template follows my_job_v1 training and network defaults", 
     'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
     "allora=True",
   ]);
-  assert.strictEqual(config.anima_arguments.timestep_sampling, "uniform");
+  assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift_wavelet");
   assert.strictEqual(config.anima_arguments.differential_guidance_scale, 3);
   assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
   assert.strictEqual(config.training_arguments.masked_loss_random_strength, 0);
-  assert.strictEqual(config.anima_arguments.ciop_prob, 0.6);
-  assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0.01);
+  assert.strictEqual(config.anima_arguments.ciop_prob, 0);
+  assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0);
 });
 
 test("default dataset template follows my_job_v1 dataset defaults", () => {

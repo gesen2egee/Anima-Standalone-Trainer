@@ -16,7 +16,7 @@ function normalizeCaptionExtension(value) {
 function normalizeCaptionPrefix(value) {
   const triggerWords = String(value || '').trim();
   if (!triggerWords) return '';
-  return /,\s*$/.test(triggerWords) ? triggerWords : `${triggerWords},`;
+  return /,\s*$/.test(triggerWords) ? triggerWords : `${triggerWords}, `;
 }
 
 function isSdScriptsImageName(name) {
@@ -60,9 +60,30 @@ function parseBatchFolderName(folderName) {
   const match = String(folderName || '').match(/^(\d+)_(.+)$/);
   if (!match) return null;
   const repeats = Number.parseInt(match[1], 10);
-  const triggerWords = match[2].trim();
+  let triggerWords = match[2].trim();
   if (!Number.isFinite(repeats) || repeats < 1 || !triggerWords) return null;
-  return { repeats, triggerWords };
+
+  let folder_shift = 'global';
+  const highMatch = triggerWords.match(/\{(high|suggested\s*high)\}/i);
+  const lowMatch = triggerWords.match(/\{(low|suggested\s*low)\}/i);
+  const midMatch = triggerWords.match(/\{mid\}/i);
+  const uniformMatch = triggerWords.match(/\{uniform\}/i);
+
+  if (highMatch) {
+    folder_shift = 'high';
+    triggerWords = triggerWords.replace(highMatch[0], '').trim();
+  } else if (lowMatch) {
+    folder_shift = 'low';
+    triggerWords = triggerWords.replace(lowMatch[0], '').trim();
+  } else if (midMatch) {
+    folder_shift = 'mid';
+    triggerWords = triggerWords.replace(midMatch[0], '').trim();
+  } else if (uniformMatch) {
+    folder_shift = 'uniform';
+    triggerWords = triggerWords.replace(uniformMatch[0], '').trim();
+  }
+
+  return { repeats, triggerWords, folder_shift };
 }
 
 function joinDisplayPath(parent, child) {
@@ -73,7 +94,7 @@ function joinDisplayPath(parent, child) {
   return path.join(base, child);
 }
 
-function buildFolderMatch({ imageDir, nativeImageDir, repeats = 1, triggerWords = '' }) {
+function buildFolderMatch({ imageDir, nativeImageDir, repeats = 1, triggerWords = '', folder_shift = 'global' }) {
   const imagePaths = listSdScriptsImages(nativeImageDir);
   return {
     imageDir,
@@ -83,6 +104,7 @@ function buildFolderMatch({ imageDir, nativeImageDir, repeats = 1, triggerWords 
     repeats,
     triggerWords,
     captionPrefix: normalizeCaptionPrefix(triggerWords),
+    folder_shift,
   };
 }
 
@@ -108,6 +130,7 @@ function resolveDatasetImageFolders({
         nativeImageDir: childNativeDir,
         repeats: parsed.repeats,
         triggerWords: parsed.triggerWords,
+        folder_shift: parsed.folder_shift,
       });
       if (match.imageCount < 1) continue;
       if (autoBalanceRepeats) {

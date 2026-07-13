@@ -15,7 +15,7 @@ save_last_n_steps_state = 1
 save_state = true
 save_state_on_train_end = true
 log_with = "tensorboard"
-learning_rate = 0.0001
+learning_rate = 0.0003
 text_encoder_lr = 0
 optimizer_type = "library.came.CAME"
 optimizer_args = [ "weight_decay=0.1" ]
@@ -107,7 +107,7 @@ auto_resume_last_state = true
 auto_resume_last_state_user_set = true
 
 [anima_arguments]
-timestep_sampling = "uniform"
+timestep_sampling = "autoshift_wavelet"
 discrete_flow_shift = 1
 sigmoid_scale = 1
 qwen3_max_token_length = 512
@@ -122,6 +122,6 @@ model_guidance_zero_init_threshold = 1
 model_guidance_end_step = 0
 model_guidance_prob = 1
 differential_guidance_scale = 3
-ciop_prob = 0.6
-ciop_noise_magnitude = 0.01
+ciop_prob = 0.0
+ciop_noise_magnitude = 0.0
 ciop_noise_type = "gaussian"

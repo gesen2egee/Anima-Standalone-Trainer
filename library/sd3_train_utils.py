@@ -954,6 +954,7 @@ def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype, fol
 
         # weighting shift, value >1 will shift distribution to noisy side (focus more on overall structure), value <1 will shift towards less-noisy side (focus more on details)
         u = train_util.apply_flow_shift(u, shift)
+        u = train_util.apply_uniform_folder_sampling(u, folder_shifts)
 
         indices = (u * (t_max - t_min) + t_min).long()
         timesteps = indices.to(device=device, dtype=dtype)

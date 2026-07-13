@@ -40,3 +40,28 @@ test("partial progress with non-zero code remains failed", () => {
     logText: "steps:  55%|█████▌    | 5507/10000",
   }), false);
 });
+
+test("Anima and Flux 'model saved.' logs with non-zero code counts as completed", () => {
+  assert.strictEqual(isSuccessfulTrainingExit({
+    code: 3221226505,
+    stoppedByRequest: false,
+    logText: "some training logs...\nepoch 10/10\nmodel saved.",
+  }), true);
+});
+
+test("StableDiffusion train_util 'save trained model as' logs with non-zero code counts as completed", () => {
+  assert.strictEqual(isSuccessfulTrainingExit({
+    code: 1,
+    stoppedByRequest: false,
+    logText: "save trained model as StableDiffusion checkpoint to D:\\output\\model.safetensors",
+  }), true);
+});
+
+test("100% progress and saving checkpoint with non-zero code counts as completed", () => {
+  assert.strictEqual(isSuccessfulTrainingExit({
+    code: -1073740791,
+    stoppedByRequest: false,
+    logText: "100%|██████████| 1000/1000\nsaving checkpoint: model.safetensors",
+  }), true);
+});
+

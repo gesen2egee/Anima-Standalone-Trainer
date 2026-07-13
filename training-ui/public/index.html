@@ -839,7 +839,10 @@
                         <div
                             style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px;">
                             <h4>Dataset Folders</h4>
-                            <button id="btn-add-dataset" class="btn btn-primary btn-sm">+ Add Dataset</button>
+                            <div style="display: flex; gap: 8px;">
+                                <button id="btn-tag-all-datasets" type="button" class="btn btn-secondary btn-sm" style="background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border);">🏷️ 一鍵打標所有資料集</button>
+                                <button id="btn-add-dataset" class="btn btn-primary btn-sm">+ Add Dataset</button>
+                            </div>
                         </div>
                         <div id="dataset-subsets-list" class="prompts-list-editable"
                             style="display: flex; flex-direction: column; gap: 15px; margin-top: 10px;">
@@ -1413,7 +1416,12 @@ custom_cli_args = ""</textarea>
                     <div id="tab-console" class="tab-pane hidden">
                         <div class="console-header">
                             <h4>Training Console</h4>
-                            <button id="btn-clear-console" class="btn btn-ghost btn-sm">Clear</button>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="select-history-logs" style="background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 8px; font-size: 0.85rem; font-family: inherit; max-width: 250px;">
+                                    <option value="">(Select history logs)</option>
+                                </select>
+                                <button id="btn-clear-console" class="btn btn-ghost btn-sm">Clear</button>
+                            </div>
                         </div>
                         <pre id="console-output" class="console-output">Waiting for training to start...</pre>
                     </div>
@@ -1641,6 +1649,22 @@ custom_cli_args = ""</textarea>
 
     <!-- Add Prompt Modal -->
 
+
+    <!-- 通用進度條對話框 -->
+    <div id="modal-progress-dialog" class="modal hidden">
+        <div class="modal-content" style="max-width: 500px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius);">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                <h4 id="progress-dialog-title" style="margin: 0;">處理中...</h4>
+            </div>
+            <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 10px;">
+                <progress id="progress-dialog-bar" value="0" max="100" style="width: 100%; height: 16px; border-radius: 4px; overflow: hidden;"></progress>
+                <div id="progress-dialog-status" style="font-size: 0.9rem; text-align: center; color: var(--text-secondary);">準備中...</div>
+            </div>
+            <div class="modal-actions" style="margin-top: 20px; justify-content: flex-end; display: flex;">
+                <button id="btn-close-progress-dialog" class="btn btn-ghost">關閉</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Hardware Monitor Bar -->
     <div id="hw-monitor" class="hw-monitor">

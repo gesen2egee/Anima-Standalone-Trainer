@@ -44,5 +44,9 @@ def apply_masked_loss(loss, batch, masked_loss_random_strength: float = None) ->
         r = masked_loss_random_strength + (1.0 - masked_loss_random_strength) * r
         mask_image = mask_image + (1.0 - mask_image) * r
 
+    # Apply mean normalization to prevent loss scale collapse on smaller mask regions
+    mean_dims = list(range(1, mask_image.ndim))
+    mask_image = mask_image / (mask_image.mean(dim=mean_dims, keepdim=True) + 1e-8)
+
     loss = loss * mask_image
     return loss

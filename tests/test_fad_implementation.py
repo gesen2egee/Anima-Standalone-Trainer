@@ -300,6 +300,69 @@ class TestFADImplementation(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertEqual(subset.is_keep_tag(token), expected)
 
+    def test_tsfad_interpolation(self):
+        # Verify interpolation formula (1 - t) * sFAD + t * 1.0
+        subset = BaseSubset(
+            image_dir="/mock/img/dir",
+            alpha_mask=False,
+            num_repeats=1,
+            shuffle_caption=False,
+            caption_separator=",",
+            keep_tokens=0,
+            keep_tokens_separator=None,
+            secondary_separator=None,
+            enable_wildcard=False,
+            color_aug=False,
+            flip_aug=False,
+            face_crop_aug_range=None,
+            random_crop=False,
+            caption_dropout_rate=0.0,
+            caption_dropout_every_n_epochs=0,
+            caption_tag_dropout_rate=0.0,
+            caption_prefix=None,
+            caption_suffix=None,
+            token_warmup_min=0,
+            token_warmup_step=0,
+            enable_fad=True,
+            fad_curriculum=True,
+            fad_timestep=True,
+            keep_tags=None,
+        )
+        dataset = create_dataset(
+            subset,
+            fad_curriculum_start=0.0,
+            fad_curriculum_end=1.0,
+            fad_curriculum_beta=3.0,
+            fad_step_start=0.0,
+            fad_step_end=1.0,
+            fad_p_min=1.0,
+            fad_p_max=1.0,
+            fad_alpha=10.0,
+            fad_c=0.5,
+        )
+        info = ImageInfo(
+            image_key="img",
+            num_repeats=1,
+            caption="trigger, cat",
+            is_reg=False,
+            absolute_path="/mock/img/dir/img.jpg",
+        )
+        info.image_size = (512, 512)
+        dataset.register_image(info, subset)
+        dataset.make_buckets()
+        dataset.set_max_train_steps(1000)
+        
+        # At step 0, sFAD p_step is 0.0 (no dropout)
+        dataset.set_current_step(0)
+        
+        # With t_val = 0.0, TSFAD intensity is 0.0 -> no dropout
+        caption = dataset.process_caption(subset, "trigger, cat", t_val=0.0)
+        self.assertIn("cat", caption)
+        
+        # With t_val = 1.0, TSFAD intensity is 1.0 -> full dropout
+        caption = dataset.process_caption(subset, "trigger, cat", t_val=1.0)
+        self.assertNotIn("cat", caption)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,8 +46,11 @@ test("UI loads and saves subset-level FAD switches", () => {
 
   assert.match(appJs, /enable_fad:\s*s\.enable_fad\s*\?\?\s*false/);
   assert.match(appJs, /fad_curriculum:\s*s\.fad_curriculum\s*\?\?\s*false/);
+  assert.match(appJs, /fad_timestep:\s*s\.fad_timestep\s*\?\?\s*false/);
   assert.match(appJs, /class="sub-enable-fad"/);
   assert.match(appJs, /class="sub-fad-curriculum"/);
+  assert.match(appJs, /class="sub-fad-timestep"/);
   assert.match(appJs, /enable_fad:\s*s\.enable_fad/);
   assert.match(appJs, /fad_curriculum:\s*s\.fad_curriculum/);
+  assert.match(appJs, /fad_timestep:\s*s\.fad_timestep/);
 });

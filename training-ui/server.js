@@ -1201,7 +1201,6 @@ app.post('/api/jobs', (req, res) => {
         if (network_module && supportedNetworkModules.includes(network_module)) {
             config.network_arguments = config.network_arguments || {};
             config.network_arguments.network_module = network_module;
-            config.training_arguments.learning_rate = getNetworkModuleLearningRate(network_module);
         }
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
@@ -1411,6 +1410,152 @@ function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '') {
         matchedFolderCount: folders.filter(folder => folder.imagePaths.length > 0).length
     };
 }
+
+app.post('/api/jobs/:name/datasets/split-timesteps', async (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        if (!fs.existsSync(jobPath)) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+        const { image_dir, trigger_word } = req.body;
+        if (!image_dir) {
+            return res.status(400).json({ error: 'Image directory required' });
+        }
+
+        const cleanImgDir = stripQuotes(String(image_dir || '').trim());
+        const nativeImgDir = toNativePath(cleanImgDir);
+        if (!fs.existsSync(nativeImgDir) || !fs.statSync(nativeImgDir).isDirectory()) {
+            return res.status(400).json({ error: `Image directory not found: ${nativeImgDir}` });
+        }
+
+        // 初始化進度檔案
+        const progressPath = path.join(jobPath, 'split_progress.json');
+        fs.writeFileSync(progressPath, JSON.stringify({ current: 0, total: 100, status: 'Initializing classify model...' }), 'utf8');
+
+        // 異步啟動 Python 分類進程
+        const { spawn } = require('child_process');
+        const globalConfig = getGlobalConfig();
+        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
+        const venv = getVenvPaths(venvPath);
+        const scriptPath = path.join(ROOT_DIR, 'library/classify_timesteps.py');
+
+        // 檢查 image_dir 底下是否有「數字_名稱」子資料夾
+        const hasNumberedSubdirs = fs.readdirSync(nativeImgDir, { withFileTypes: true })
+            .some(entry => entry.isDirectory() && /^\d+_(.+)$/.test(entry.name));
+
+        const args = [
+            scriptPath,
+            '--image_dir', nativeImgDir,
+            '--trigger_word', trigger_word || 'miku',
+            '--job_dir', jobPath
+        ];
+        if (hasNumberedSubdirs) {
+            args.push('--batch_import');
+        }
+
+        console.log(`Running auto split: ${venv.python} ${args.join(' ')}`);
+        const child = spawn(venv.python, args, {
+            cwd: ROOT_DIR,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8',
+                PYTHONUTF8: '1',
+            },
+            windowsHide: true,
+        });
+
+        child.stdout.on('data', (data) => {
+            console.log(`[split-stdout]: ${data}`);
+        });
+
+        child.stderr.on('data', (data) => {
+            console.error(`[split-stderr]: ${data}`);
+        });
+
+        child.on('close', (code) => {
+            console.log(`classify_timesteps.py exited with code ${code}`);
+            if (code === 0) {
+                try {
+                    const datasetPath = path.join(jobPath, 'dataset.toml');
+                    if (fs.existsSync(datasetPath)) {
+                        const datasetConfig = TOML.parse(fs.readFileSync(datasetPath, 'utf8'));
+                        const datasets = Array.isArray(datasetConfig.datasets) ? datasetConfig.datasets : [datasetConfig.datasets || {}];
+                        const firstDataset = datasets[0] || {};
+                        const subsets = Array.isArray(firstDataset.subsets) ? firstDataset.subsets : [firstDataset.subsets || {}];
+                        
+                        const resolvedSubsets = buildNewJobSubsets({
+                            imageDir: cleanImgDir,
+                            triggerCaptionPrefix: trigger_word ? normalizeCaptionPrefixFromTriggerWords(trigger_word) : '',
+                            batchImport: true,
+                            autoBalanceRepeats: false,
+                            baseSubset: subsets[0] || {},
+                            toNativePath: p => toNativePath(stripQuotes(String(p || '').trim()))
+                        });
+
+                        const cleanTarget = stripQuotes(String(image_dir || '').trim()).toLowerCase();
+                        const newSubsets = [];
+                        let replaced = false;
+                        for (const sub of subsets) {
+                            const cleanSubDir = stripQuotes(String(sub.image_dir || '').trim()).toLowerCase();
+                            if (cleanSubDir === cleanTarget) {
+                                newSubsets.push(...resolvedSubsets);
+                                replaced = true;
+                            } else {
+                                newSubsets.push(sub);
+                            }
+                        }
+                        
+                        if (!replaced) {
+                            const validSubsets = subsets.filter(sub => {
+                                if (!sub.image_dir) return false;
+                                return fs.existsSync(toNativePath(stripQuotes(String(sub.image_dir).trim())));
+                            });
+                            const existingDirs = new Set(validSubsets.map(s => stripQuotes(String(s.image_dir).trim()).toLowerCase()));
+                            for (const newSub of resolvedSubsets) {
+                                const newDirClean = stripQuotes(String(newSub.image_dir).trim()).toLowerCase();
+                                if (!existingDirs.has(newDirClean)) {
+                                    validSubsets.push(newSub);
+                                }
+                            }
+                            firstDataset.subsets = validSubsets;
+                        } else {
+                            firstDataset.subsets = newSubsets;
+                        }
+
+                        datasets[0] = firstDataset;
+                        datasetConfig.datasets = datasets;
+                        fs.writeFileSync(datasetPath, TOML.stringify(datasetConfig), 'utf8');
+                        console.log("Successfully rebuilt dataset.toml after auto split timesteps.");
+                    }
+                } catch (err) {
+                    console.error("Failed to rebuild dataset.toml after auto split:", err);
+                }
+                fs.writeFileSync(progressPath, JSON.stringify({ current: 100, total: 100, status: 'done' }), 'utf8');
+            } else {
+                fs.writeFileSync(progressPath, JSON.stringify({ current: 0, total: 100, status: `error: exited with code ${code}` }), 'utf8');
+            }
+        });
+
+        res.json({ success: true, message: 'Classify task started' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:name/datasets/split-timesteps/progress', (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        const progressPath = path.join(jobPath, 'split_progress.json');
+        if (fs.existsSync(progressPath)) {
+            const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+            return res.json(data);
+        }
+        res.json({ current: 0, total: 100, status: 'Not started' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 app.post('/api/jobs/:name/tag-captions', async (req, res) => {
     try {
@@ -2379,11 +2524,24 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         proc.on('close', (code) => {
             const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
-            const completedSuccessfully = isSuccessfulTrainingExit({
-                code,
-                stoppedByRequest,
-                logText: logBuffer.join('')
-            });
+            
+            // Explicit completion signal detection
+            const signalPath = path.join(outputDir, 'completed.signal');
+            let completedSuccessfully = false;
+            if (fs.existsSync(signalPath)) {
+                completedSuccessfully = true;
+                try {
+                    fs.unlinkSync(signalPath);
+                } catch (e) {
+                    console.error(`[Queue] Failed to delete completion signal file: ${e.message}`);
+                }
+            } else {
+                // Fallback for cases without signal file
+                if (!stoppedByRequest && code === 0) {
+                    completedSuccessfully = true;
+                }
+            }
+
             const msg = `\n--- Training ${completedSuccessfully ? 'completed' : 'stopped'} (exit code: ${code}) ---\n`;
             appendLog(Buffer.from(msg));
             logStream.end();
@@ -2840,4 +2998,70 @@ async function findAvailablePort(startPort, maxAttempts = 10) {
     });
 })();
 
+app.get('/api/jobs/:name/logs', (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        const logsDir = path.join(jobPath, 'logs');
+        if (!fs.existsSync(logsDir)) return res.json([]);
 
+        const files = fs.readdirSync(logsDir)
+            .filter(f => f.endsWith('.log'))
+            .map(f => {
+                const stat = fs.statSync(path.join(logsDir, f));
+                return { name: f, size: stat.size, mtime: stat.mtimeMs };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+
+        res.json(files);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:name/logs/latest', (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        const logsDir = path.join(jobPath, 'logs');
+        if (!fs.existsSync(logsDir)) {
+            return res.json({ name: null, content: "" });
+        }
+
+        const files = fs.readdirSync(logsDir)
+            .filter(f => f.endsWith('.log'))
+            .map(f => {
+                const stat = fs.statSync(path.join(logsDir, f));
+                return { name: f, mtime: stat.mtimeMs };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+
+        if (files.length === 0) {
+            return res.json({ name: null, content: "" });
+        }
+
+        const latestFile = files[0].name;
+        const filePath = path.join(logsDir, latestFile);
+        const content = fs.readFileSync(filePath, 'utf8');
+
+        res.json({ name: latestFile, content });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:name/logs/:filename', (req, res) => {
+    try {
+        const jobPath = getJobPath(req.params.name);
+        const logsDir = path.join(jobPath, 'logs');
+        const filename = path.basename(req.params.filename);
+        const logFilePath = path.join(logsDir, filename);
+
+        if (!fs.existsSync(logFilePath)) {
+            return res.status(404).json({ error: 'Log file not found' });
+        }
+
+        const content = fs.readFileSync(logFilePath, 'utf8');
+        res.json({ name: filename, content });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});

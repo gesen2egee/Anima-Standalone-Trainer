@@ -102,3 +102,53 @@ test("folder inspection reports matched folders, total images, and caption cover
   assert.strictEqual(summary.missing_caption, 1);
   assert.strictEqual(summary.empty_caption, 1);
 });
+
+test("batch selection parses {high}, {low}, suggested, mid, and uniform suffixes (case-insensitive)", () => {
+  const root = makeTempDir();
+  writeFile(path.join(root, "10_miku {high}", "a.png"));
+  writeFile(path.join(root, "5_saber {LOW}", "b.png"));
+  writeFile(path.join(root, "8_rin", "c.png"));
+  writeFile(path.join(root, "3_illya {Suggested High}", "d.png"));
+  writeFile(path.join(root, "2_sakura {suggested low}", "e.png"));
+  writeFile(path.join(root, "4_archer {MId}", "f.png"));
+  writeFile(path.join(root, "6_mei {UNIFORM}", "g.png"));
+
+  const result = resolveDatasetImageFolders({ imageDir: root, batchImport: true });
+
+  assert.strictEqual(result.mode, "batch");
+  assert.strictEqual(result.matchedFolderCount, 7);
+  
+  // 檢查第一個 folder
+  const folderMiku = result.folders.find(f => f.imageDir.includes("miku"));
+  assert.strictEqual(folderMiku.repeats, 10);
+  assert.strictEqual(folderMiku.triggerWords, "miku");
+  assert.strictEqual(folderMiku.folder_shift, "high");
+  assert.strictEqual(folderMiku.captionPrefix, "miku, "); 
+
+  // 檢查第二個 folder
+  const folderSaber = result.folders.find(f => f.imageDir.includes("saber"));
+  assert.strictEqual(folderSaber.repeats, 5);
+  assert.strictEqual(folderSaber.triggerWords, "saber");
+  assert.strictEqual(folderSaber.folder_shift, "low");
+  assert.strictEqual(folderSaber.captionPrefix, "saber, ");
+
+  // Suggested High
+  const folderIllya = result.folders.find(f => f.imageDir.includes("illya"));
+  assert.strictEqual(folderIllya.folder_shift, "high");
+  assert.strictEqual(folderIllya.triggerWords, "illya");
+
+  // Suggested Low
+  const folderSakura = result.folders.find(f => f.imageDir.includes("sakura"));
+  assert.strictEqual(folderSakura.folder_shift, "low");
+  assert.strictEqual(folderSakura.triggerWords, "sakura");
+
+  // Mid
+  const folderArcher = result.folders.find(f => f.imageDir.includes("archer"));
+  assert.strictEqual(folderArcher.folder_shift, "mid");
+  assert.strictEqual(folderArcher.triggerWords, "archer");
+
+  // Uniform
+  const folderMei = result.folders.find(f => f.imageDir.includes("mei"));
+  assert.strictEqual(folderMei.folder_shift, "uniform");
+  assert.strictEqual(folderMei.triggerWords, "mei");
+});

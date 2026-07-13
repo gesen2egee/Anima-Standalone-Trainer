@@ -182,7 +182,7 @@ FOLDER_SHIFT_VALUES = {
     "mid": 1.0,
     "low": 0.5,
 }
-FOLDER_SHIFT_NAMES = frozenset(("global", *FOLDER_SHIFT_VALUES.keys()))
+FOLDER_SHIFT_NAMES = frozenset(("global", "uniform", *FOLDER_SHIFT_VALUES.keys()))
 
 
 def normalize_folder_shift(value: Optional[str]) -> str:
@@ -224,13 +224,33 @@ def get_folder_shift_values(
 
     for index, folder_shift in enumerate(folder_shifts):
         normalized = normalize_folder_shift(folder_shift)
-        if normalized != "global":
+        if normalized not in ("global", "uniform"):
             values[index] = FOLDER_SHIFT_VALUES[normalized]
     return values
 
 
 def apply_flow_shift(values: torch.Tensor, shifts: torch.Tensor) -> torch.Tensor:
     return (values * shifts) / (1 + (shifts - 1) * values)
+
+
+def apply_uniform_folder_sampling(values: torch.Tensor, folder_shifts: Optional[Sequence[str]]) -> torch.Tensor:
+    """Replace samples marked as uniform with an unshifted U(0, 1) sample."""
+    if folder_shifts is None:
+        return values
+    uniform_mask = torch.tensor(
+        [normalize_folder_shift(value) == "uniform" for value in folder_shifts],
+        device=values.device,
+        dtype=torch.bool,
+    )
+    if uniform_mask.numel() != values.shape[0]:
+        raise ValueError(
+            f"folder_shifts length ({uniform_mask.numel()}) must match batch size ({values.shape[0]})"
+        )
+    if not torch.any(uniform_mask).item():
+        return values
+    values = values.clone()
+    values[uniform_mask] = torch.rand_like(values[uniform_mask])
+    return values
 
 
 def prepare_batch_timestep_overrides(

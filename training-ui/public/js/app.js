@@ -1793,8 +1793,9 @@ async function selectJob(name) {
     lastSavedNegativePrompt = $("global-negative-prompt").value;
     // Subscribe WS
     subscribeToJob(name);
-    // Reset console
-    consoleOutput.textContent = "Waiting for training to start...";
+    // Load history logs and latest log content
+    loadHistoryLogs(name);
+    loadLatestLog(name);
     // Reset save button
     $("btn-save").classList.add("hidden");
     $("btn-discard").classList.add("hidden");
@@ -2152,8 +2153,10 @@ function populateDataset(dataset) {
     enable_wildcard: s.enable_wildcard ?? true,
     enable_fad: s.enable_fad ?? false,
     fad_curriculum: s.fad_curriculum ?? false,
+    fad_timestep: s.fad_timestep ?? false,
     is_reg: s.is_reg ?? false,
     alpha_mask: s.alpha_mask === true,
+    folder_shift: s.folder_shift || "global",
   }));
   // Edge case: if empty, force at least 1
   if (currentSubsets.length === 0) {
@@ -2620,6 +2623,8 @@ function gatherDataset() {
               enable_wildcard: s.enable_wildcard,
               enable_fad: s.enable_fad,
               fad_curriculum: s.fad_curriculum,
+              fad_timestep: s.fad_timestep,
+              folder_shift: s.folder_shift || "global",
             };
             if (s.is_reg) subset.is_reg = true;
             if ($("cfg-automask").checked) {
@@ -2643,17 +2648,18 @@ function addSubset(shouldRender = true) {
   currentSubsets.push({
     image_dir: "",
     num_repeats: 1,
-    keep_tokens: 5,
+    keep_tokens: 0,
     keep_tags: DEFAULT_KEEP_TAGS,
     flip_aug: false,
     caption_prefix: "",
-    caption_dropout_rate: 0.0,
-    caption_tag_dropout_rate: 0.3,
+    caption_dropout_rate: 0.1,
+    caption_tag_dropout_rate: 0.0,
     caption_dropout_every_n_epochs: 0,
     shuffle_caption: true,
     enable_wildcard: true,
-    enable_fad: false,
-    fad_curriculum: false,
+    enable_fad: true,
+    fad_curriculum: true,
+    fad_timestep: false,
     is_reg: false,
     alpha_mask: $("cfg-alpha-mask")?.checked === true && $("cfg-alpha-mask")?.indeterminate !== true,
     collapsed: false,
@@ -2701,6 +2707,7 @@ function renderSubsets() {
                     <div class="path-input-row">
                         <input type="text" class="sub-image-dir" value="${escapeHtml(subset.image_dir)}" placeholder="C:\\path\\to\\images" style="flex: 1;">
                         <button type="button" class="btn btn-secondary btn-select-sub-image-dir" title="Select folder">📂</button>
+                        <button type="button" class="btn btn-secondary btn-auto-split-timesteps" style="margin-left: 8px;">自動分時間步</button>
                     </div>
                     <small class="folder-inspection-status sub-image-dir-status">No folder selected.</small>
                 </div>
@@ -2712,6 +2719,16 @@ function renderSubsets() {
                     <div class="form-group">
                         <label style="font-size: 0.8rem;">Keep Tokens</label>
                         <input type="number" class="sub-keep-tokens" value="${subset.keep_tokens}" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size: 0.8rem;">Folder Shift (時間步/Flow Shift)</label>
+                        <select class="sub-folder-shift" style="background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; font-size: 1.05rem; font-family: inherit; width: 100%;">
+                            <option value="global" style="background: var(--bg-tertiary); color: var(--text-primary);" ${subset.folder_shift === "global" || !subset.folder_shift ? "selected" : ""}>全域 (預設)</option>
+                            <option value="high" style="background: var(--bg-tertiary); color: var(--text-primary);" ${subset.folder_shift === "high" ? "selected" : ""}>高時間步 (Flow Shift 1.5)</option>
+                            <option value="mid" style="background: var(--bg-tertiary); color: var(--text-primary);" ${subset.folder_shift === "mid" ? "selected" : ""}>中時間步 (Sigmoid 採樣)</option>
+                            <option value="low" style="background: var(--bg-tertiary); color: var(--text-primary);" ${subset.folder_shift === "low" ? "selected" : ""}>低時間步 (Flow Shift 0.5)</option>
+                            <option value="uniform" style="background: var(--bg-tertiary); color: var(--text-primary);" ${subset.folder_shift === "uniform" ? "selected" : ""}>均勻採樣 (Uniform)</option>
+                        </select>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
@@ -2778,6 +2795,7 @@ function renderSubsets() {
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-flip-aug" ${subset.flip_aug ? "checked" : ""}> Flip Augmentations</label>
                     </div>
                     <div class="form-group">
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-fad-timestep" ${subset.fad_timestep ? "checked" : ""}> Enable TSFAD</label>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
@@ -2820,13 +2838,18 @@ function renderSubsets() {
         ).checked;
         subset.enable_fad = card.querySelector(".sub-enable-fad").checked;
         subset.fad_curriculum = card.querySelector(".sub-fad-curriculum").checked;
+        subset.fad_timestep = card.querySelector(".sub-fad-timestep").checked;
         subset.flip_aug = card.querySelector(".sub-flip-aug").checked;
         subset.is_reg = card.querySelector(".sub-is-reg").checked;
+        subset.folder_shift = card.querySelector(".sub-folder-shift").value;
         checkDirty();
       };
-      card.querySelectorAll("input, textarea").forEach((input) => {
+      card.querySelectorAll("input, textarea, select").forEach((input) => {
         input.addEventListener("input", updateSubset);
         if (input.type === "checkbox") {
+          input.addEventListener("change", updateSubset);
+        }
+        if (input.tagName === "SELECT") {
           input.addEventListener("change", updateSubset);
         }
       });
@@ -2840,6 +2863,9 @@ function renderSubsets() {
       card
         .querySelector(".btn-run-subset-tagger")
         .addEventListener("click", () => runSubsetTagger(card, idx));
+      card
+        .querySelector(".btn-auto-split-timesteps")
+        .addEventListener("click", () => runAutoSplitTimesteps(card, subset));
       updateSubsetImageDirStatus(card, subset);
     }
     if (!isLastOne) {
@@ -3079,7 +3105,7 @@ function updateNetworkModuleUI() {
   $("network-rank-alpha-row").classList.toggle("hidden", hidesRankAlpha);
 }
 function applyNetworkModulePreset(moduleName) {
-  $("cfg-learning-rate").value = getNetworkModuleLearningRate(moduleName);
+  // 學習率不再與網路模組預設值強行綁定
 }
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
@@ -4694,6 +4720,14 @@ const btnAddDataset = $("btn-add-dataset");
 if (btnAddDataset) {
   btnAddDataset.addEventListener("click", () => addSubset(true));
 }
+const btnTagAll = document.getElementById("btn-tag-all-datasets");
+if (btnTagAll) {
+  btnTagAll.addEventListener("click", runAllDatasetsTagger);
+}
+const btnCloseProgress = document.getElementById("btn-close-progress-dialog");
+if (btnCloseProgress) {
+  btnCloseProgress.addEventListener("click", () => closeModal("modal-progress-dialog"));
+}
 // New Job
 $("btn-queue-start")?.addEventListener("click", startQueue);
 $("btn-queue-stop")?.addEventListener("click", pauseQueue);
@@ -5633,3 +5667,222 @@ async function init() {
 }
 init();
 window.addEventListener("beforeunload", () => savePromptTransientSettings());
+
+// ==========================================
+//  History Logs Support
+// ==========================================
+async function loadHistoryLogs(jobName) {
+  const select = document.getElementById("select-history-logs");
+  if (!select) return;
+  select.innerHTML = '<option value="">(Select history logs)</option>';
+  try {
+    const logs = await api(`/api/jobs/${jobName}/logs`);
+    if (logs && logs.length > 0) {
+      logs.forEach(log => {
+        const opt = document.createElement("option");
+        opt.value = log.name;
+        const timeStr = new Date(log.mtime).toLocaleString();
+        opt.textContent = `${log.name} (${(log.size / 1024).toFixed(1)} KB) - ${timeStr}`;
+        select.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    console.error("Failed to load history logs list:", e);
+  }
+}
+
+async function loadLatestLog(jobName) {
+  consoleOutput.textContent = "Loading logs...";
+  try {
+    const data = await api(`/api/jobs/${jobName}/logs/latest`);
+    if (data && data.content) {
+      consoleOutput.textContent = "";
+      appendConsole(data.content);
+    } else {
+      consoleOutput.textContent = "Waiting for training to start...";
+    }
+  } catch (e) {
+    console.error("Failed to load latest log:", e);
+    consoleOutput.textContent = "Waiting for training to start...";
+  }
+}
+
+// 註冊歷史日誌下拉選單變更監聽器
+setTimeout(() => {
+  const selectHistoryLogs = document.getElementById("select-history-logs");
+  if (selectHistoryLogs) {
+    selectHistoryLogs.addEventListener("change", async () => {
+      const val = selectHistoryLogs.value;
+      if (!currentJob) return;
+      if (!val) {
+        await loadLatestLog(currentJob);
+      } else {
+        consoleOutput.textContent = "Loading log...";
+        try {
+          const data = await api(`/api/jobs/${currentJob}/logs/${val}`);
+          if (data && data.content) {
+            consoleOutput.textContent = "";
+            appendConsole(data.content);
+          } else {
+            consoleOutput.textContent = "Empty log.";
+          }
+        } catch (e) {
+          console.error("Failed to load log file:", e);
+          consoleOutput.textContent = `Failed to load log: ${e.message}`;
+        }
+      }
+    });
+  }
+}, 500);
+
+// ==========================================
+//  自動分時間步與打標所有資料集圖片
+// ==========================================
+async function runAutoSplitTimesteps(card, subset) {
+  if (!currentJob) return;
+  const imageDir = subset.image_dir ? subset.image_dir.trim() : "";
+  const triggerWord = subset.caption_prefix ? subset.caption_prefix.replace(/,\s*$/, '').trim() : "miku";
+  
+  if (!imageDir) {
+    showToast("請先設定圖片資料夾", "danger");
+    return;
+  }
+
+  const titleEl = document.getElementById("progress-dialog-title");
+  const barEl = document.getElementById("progress-dialog-bar");
+  const statusEl = document.getElementById("progress-dialog-status");
+  const closeBtn = document.getElementById("btn-close-progress-dialog");
+
+  titleEl.textContent = "自動分時間步 (去背景比例分類)";
+  barEl.max = 100;
+  barEl.value = 0;
+  statusEl.textContent = "正在發送分類請求...";
+  closeBtn.classList.add("hidden");
+  openModal("modal-progress-dialog");
+
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(currentJob)}/datasets/split-timesteps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_dir: imageDir, trigger_word: triggerWord })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "分類請求失敗");
+    }
+
+    // 啟動進度輪詢
+    let timer = setInterval(async () => {
+      try {
+        const progressRes = await fetch(`/api/jobs/${encodeURIComponent(currentJob)}/datasets/split-timesteps/progress`);
+        if (progressRes.ok) {
+          const progress = await progressRes.json();
+          if (progress.status === "done") {
+            clearInterval(timer);
+            barEl.max = 100;
+            barEl.value = 100;
+            statusEl.textContent = "分類與搬移完成！正在重整資料集...";
+            setTimeout(async () => {
+              closeModal("modal-progress-dialog");
+              // 重新讀取 Job 資訊以重整 UI 中新產生的 Suggested subsets
+              await selectJob(currentJob);
+              showToast("自動分時間步完成");
+            }, 1000);
+          } else if (progress.status.startsWith("error")) {
+            clearInterval(timer);
+            statusEl.textContent = `分類失敗：${progress.status}`;
+            closeBtn.classList.remove("hidden");
+          } else {
+            barEl.max = progress.total || 100;
+            barEl.value = progress.current || 0;
+            statusEl.textContent = `進度：${progress.current}/${progress.total} (${progress.status})`;
+          }
+        }
+      } catch (err) {
+        console.error("Progress polling failed:", err);
+      }
+    }, 500);
+
+  } catch (err) {
+    statusEl.textContent = `錯誤：${err.message}`;
+    closeBtn.classList.remove("hidden");
+  }
+}
+
+async function runAllDatasetsTagger() {
+  if (!currentJob) return;
+
+  const titleEl = document.getElementById("progress-dialog-title");
+  const barEl = document.getElementById("progress-dialog-bar");
+  const statusEl = document.getElementById("progress-dialog-status");
+  const closeBtn = document.getElementById("btn-close-progress-dialog");
+
+  titleEl.textContent = "打標所有資料集圖片";
+  barEl.max = 100;
+  barEl.value = 0;
+  statusEl.textContent = "正在讀取資料集圖片列表...";
+  closeBtn.classList.add("hidden");
+  openModal("modal-progress-dialog");
+
+  const captionExtension = $("cfg-caption-ext")?.value || ".txt";
+
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(currentJob)}/tag-captions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_dir: "", // 留空以指示打標所有 datasets
+        caption_extension: captionExtension,
+        include_char: true,
+        include_rating: true,
+        include_general: true,
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Tagger 啟動失敗");
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("Browser does not support stream progress");
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let latestError = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "start") {
+            barEl.max = event.total || 1;
+            barEl.value = 0;
+            statusEl.textContent = event.total ? `0/${event.total} 成功 0 失敗 0` : "沒有可打標圖片";
+          } else if (event.type === "progress") {
+            barEl.max = event.total || 1;
+            barEl.value = event.current || 0;
+            if (event.error) latestError = event.error;
+            statusEl.textContent = `${event.current}/${event.total} 成功 ${event.written} 失敗 ${event.failed}${latestError ? `，最後錯誤：${latestError}` : ""}`;
+          } else if (event.type === "done") {
+            barEl.max = event.total || 1;
+            barEl.value = event.total || 0;
+            statusEl.textContent = `完成！打標 ${event.written}/${event.total}，失敗 ${event.failed}${latestError ? `，最後錯誤：${latestError}` : ""}`;
+            closeBtn.classList.remove("hidden");
+          } else if (event.type === "error") {
+            throw new Error(event.error || "打標出錯");
+          }
+        } catch (pe) {
+          console.error("JSON parse error on tag stream:", pe);
+        }
+      }
+    }
+  } catch (err) {
+    statusEl.textContent = `錯誤：${err.message}`;
+    closeBtn.classList.remove("hidden");
+  }
+}

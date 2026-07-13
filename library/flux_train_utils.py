@@ -609,6 +609,7 @@ def get_noisy_model_input_and_timesteps(
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
+        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid" or args.timestep_sampling == "plora":
         # Simple random sigma-based noise sampling
@@ -631,6 +632,7 @@ def get_noisy_model_input_and_timesteps(
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
+        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet"):
         if args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
@@ -674,6 +676,7 @@ def get_noisy_model_input_and_timesteps(
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
         sigmas = train_util.apply_flow_shift(sigmas, shift)
+        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "flux_shift":
         sigmas = torch.randn(bsz, device=device)
@@ -686,6 +689,7 @@ def get_noisy_model_input_and_timesteps(
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
+        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
@@ -702,6 +706,7 @@ def get_noisy_model_input_and_timesteps(
         )
         if folder_shift_values is not None:
             u = train_util.apply_flow_shift(u, folder_shift_values)
+        u = train_util.apply_uniform_folder_sampling(u, folder_shifts)
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
