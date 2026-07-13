@@ -2486,6 +2486,15 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
         if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
+        // A completion signal belongs to one training run. Remove a stale signal
+        // before starting so a previous server crash cannot mark this run as done.
+        const completionSignalPath = path.join(outputDir, 'completed.signal');
+        try {
+            fs.rmSync(completionSignalPath, { force: true });
+        } catch (err) {
+            return res.status(500).json({ error: `Failed to clear completion signal: ${err.message}` });
+        }
+
         const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
         if (launch.error) return res.status(400).json({ error: launch.error });
         const { trainScript } = launch;
@@ -2524,21 +2533,23 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         proc.on('close', (code) => {
             const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
-            
-            // Explicit completion signal detection
-            const signalPath = path.join(outputDir, 'completed.signal');
-            let completedSuccessfully = false;
-            if (fs.existsSync(signalPath)) {
-                completedSuccessfully = true;
+
+            // The signal file is the strongest completion indication, while the
+            // exit/log fallback handles wrappers such as Accelerate/PowerShell
+            // that can return a non-zero code after a successful final save.
+            const hasCompletionSignal = fs.existsSync(completionSignalPath);
+            const completedSuccessfully = !stoppedByRequest && (
+                hasCompletionSignal || isSuccessfulTrainingExit({
+                    code,
+                    stoppedByRequest,
+                    logText: logBuffer.join('')
+                })
+            );
+            if (hasCompletionSignal) {
                 try {
-                    fs.unlinkSync(signalPath);
+                    fs.unlinkSync(completionSignalPath);
                 } catch (e) {
                     console.error(`[Queue] Failed to delete completion signal file: ${e.message}`);
-                }
-            } else {
-                // Fallback for cases without signal file
-                if (!stoppedByRequest && code === 0) {
-                    completedSuccessfully = true;
                 }
             }
 
