@@ -208,8 +208,8 @@ def calculate_fad_step_scale(
         # Preserve the existing sFAD + TFAD behavior: curriculum -> full FAD.
         return base_scale + t * (1.0 - base_scale)
 
-    # Without sFAD, TFAD starts at full FAD (t=0) and decays to zero (t=1).
-    return 1.0 - t
+    # Without sFAD, TFAD starts with no dropout (t=0) and reaches full FAD (t=1).
+    return t
 
 
 def get_folder_shift_values(
