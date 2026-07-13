@@ -353,6 +353,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             timesteps,
             model_pred_uncond=model_pred_uncond,
             ciop_output=ciop[1] if ciop is not None else None,
+            folder_shifts=batch.get("folder_shifts", None),
         )
 
         return model_pred, target, timesteps, weighting

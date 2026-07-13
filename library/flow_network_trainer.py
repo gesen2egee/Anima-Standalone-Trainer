@@ -2,7 +2,7 @@
 
 import argparse
 import math
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 
@@ -126,6 +126,7 @@ class FlowNetworkTrainerMixin:
         timestep_fractions: torch.Tensor,
         model_pred_uncond: Optional[torch.Tensor] = None,
         ciop_output: Optional[torch.Tensor] = None,
+        folder_shifts: Optional[Sequence[str]] = None,
     ):
         target = self.apply_model_guidance_target(
             args, noise - latents, model_pred, model_pred_uncond, timestep_fractions
@@ -136,7 +137,10 @@ class FlowNetworkTrainerMixin:
             target, model_pred, args.differential_guidance_scale
         )
         weighting = anima_train_utils.compute_loss_weighting_for_anima(
-            weighting_scheme=args.weighting_scheme, sigmas=sigmas, args=args
+            weighting_scheme=args.weighting_scheme,
+            sigmas=sigmas,
+            args=args,
+            folder_shifts=folder_shifts,
         )
         return target, weighting
 

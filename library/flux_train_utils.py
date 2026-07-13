@@ -604,12 +604,7 @@ def get_noisy_model_input_and_timesteps(
         kappa_max = getattr(args, "spectrally_guided_kappa_max", 100.0)
         sigmas = compute_spectrally_guided_sigmas(latents, device, kappa_min=kappa_min, kappa_max=kappa_max)
         sigmas = sigmas.to(dtype=dtype)
-        folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
-        )
-        if folder_shift_values is not None:
-            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
-        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
+        sigmas = train_util.apply_folder_timestep_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid" or args.timestep_sampling == "plora":
         # Simple random sigma-based noise sampling
@@ -627,12 +622,7 @@ def get_noisy_model_input_and_timesteps(
         else:
             sigmas = torch.rand((bsz,), device=device)
 
-        folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
-        )
-        if folder_shift_values is not None:
-            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
-        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
+        sigmas = train_util.apply_folder_timestep_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet"):
         if args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
@@ -684,12 +674,7 @@ def get_noisy_model_input_and_timesteps(
         sigmas = sigmas.sigmoid()
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
-        folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
-        )
-        if folder_shift_values is not None:
-            sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
-        sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
+        sigmas = train_util.apply_folder_timestep_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
@@ -701,12 +686,7 @@ def get_noisy_model_input_and_timesteps(
             logit_std=args.logit_std,
             mode_scale=args.mode_scale,
         )
-        folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, u.device, u.dtype, global_shift=1.0
-        )
-        if folder_shift_values is not None:
-            u = train_util.apply_flow_shift(u, folder_shift_values)
-        u = train_util.apply_uniform_folder_sampling(u, folder_shifts)
+        u = train_util.apply_folder_timestep_sampling(u, folder_shifts)
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)

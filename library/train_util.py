@@ -272,6 +272,24 @@ def apply_uniform_folder_sampling(values: torch.Tensor, folder_shifts: Optional[
     return values
 
 
+def apply_folder_timestep_sampling(
+    values: torch.Tensor,
+    folder_shifts: Optional[Sequence[str]],
+    global_shift: Union[float, torch.Tensor] = 1.0,
+) -> torch.Tensor:
+    """Apply per-folder flow shifting, including true uniform folder sampling."""
+    folder_shift_values = get_folder_shift_values(
+        folder_shifts,
+        values.shape[0],
+        values.device,
+        values.dtype,
+        global_shift=global_shift,
+    )
+    if folder_shift_values is not None:
+        values = apply_flow_shift(values, folder_shift_values)
+    return apply_uniform_folder_sampling(values, folder_shifts)
+
+
 def prepare_batch_timestep_overrides(
     batch_timesteps: Optional[torch.Tensor], batch_size: int, device: torch.device, dtype: torch.dtype
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:

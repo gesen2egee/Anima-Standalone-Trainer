@@ -672,7 +672,10 @@ def train(args):
                 target = noise - latents
 
                 weighting = anima_train_utils.compute_loss_weighting_for_anima(
-                    weighting_scheme=args.weighting_scheme, sigmas=sigmas
+                    weighting_scheme=args.weighting_scheme,
+                    sigmas=sigmas,
+                    args=args,
+                    folder_shifts=batch.get("folder_shifts", None),
                 )
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler_copy)
                 loss = train_util.conditional_loss(

@@ -649,7 +649,10 @@ def train(args):
 
                 # Weighting
                 weighting = anima_train_utils.compute_loss_weighting_for_anima(
-                    weighting_scheme=args.weighting_scheme, sigmas=sigmas
+                    weighting_scheme=args.weighting_scheme,
+                    sigmas=sigmas,
+                    args=args,
+                    folder_shifts=batch.get("folder_shifts", None),
                 )
 
                 # Loss

@@ -5,7 +5,7 @@ import gc
 import math
 import os
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -184,7 +184,54 @@ def apply_differential_guidance_target(
     return model_anchor + scale * (target - model_anchor)
 
 
-def compute_loss_weighting_for_anima(weighting_scheme: str, sigmas: torch.Tensor, args: Optional[argparse.Namespace] = None) -> torch.Tensor:
+def compute_plora_proposal_density(
+    sigmas: torch.Tensor,
+    alpha: float = 1.0,
+    bias: str = "left",
+    folder_shifts: Optional[Sequence[str]] = None,
+) -> torch.Tensor:
+    """Return the PLoRA proposal density after per-folder timestep transforms."""
+    sigmas = torch.clamp(sigmas.float(), min=1e-6, max=1.0 - 1e-6)
+
+    def base_density(values: torch.Tensor) -> torch.Tensor:
+        if bias == "left":
+            return (alpha + 1.0) * ((1.0 - values) ** alpha)
+        return (alpha + 1.0) * (values**alpha)
+
+    if folder_shifts is None:
+        return base_density(sigmas)
+
+    normalized = [train_util.normalize_folder_shift(value) for value in folder_shifts]
+    batch_size = sigmas.shape[0]
+    if len(normalized) != batch_size:
+        raise ValueError(f"folder_shifts length ({len(normalized)}) must match batch size ({batch_size})")
+
+    shift_values = train_util.get_folder_shift_values(
+        normalized,
+        batch_size,
+        sigmas.device,
+        sigmas.dtype,
+        global_shift=1.0,
+    )
+    uniform_mask = torch.tensor(
+        [value == "uniform" for value in normalized], device=sigmas.device, dtype=torch.bool
+    )
+    mask = uniform_mask.view(-1, *([1] * (sigmas.ndim - 1)))
+    shift_values = shift_values.view(-1, *([1] * (sigmas.ndim - 1)))
+
+    # Invert y = s*x / (1 + (s - 1)*x), then multiply by |dx/dy|.
+    denominator = shift_values - (shift_values - 1.0) * sigmas
+    base_sigmas = sigmas / denominator
+    shifted_density = base_density(base_sigmas) * shift_values / (denominator**2)
+    return torch.where(mask, torch.ones_like(shifted_density), shifted_density)
+
+
+def compute_loss_weighting_for_anima(
+    weighting_scheme: str,
+    sigmas: torch.Tensor,
+    args: Optional[argparse.Namespace] = None,
+    folder_shifts: Optional[Sequence[str]] = None,
+) -> torch.Tensor:
     """Compute loss weighting for Anima training."""
     sigmas_device = sigmas.device
     
@@ -205,10 +252,12 @@ def compute_loss_weighting_for_anima(weighting_scheme: str, sigmas: torch.Tensor
         if sampling == "plora":
             alpha = getattr(args, "p_lora_alpha", 1.0)
             bias = getattr(args, "p_lora_bias", "left")
-            if bias == "left":
-                q_t = (alpha + 1.0) * ((1.0 - sigmas_clipped) ** alpha)
-            else:
-                q_t = (alpha + 1.0) * (sigmas_clipped ** alpha)
+            q_t = compute_plora_proposal_density(
+                sigmas_f,
+                alpha=alpha,
+                bias=bias,
+                folder_shifts=folder_shifts,
+            )
         elif sampling == "sigmoid":
             S_a = getattr(args, "sigmoid_scale", 1.0)
             # 原始 PDF
