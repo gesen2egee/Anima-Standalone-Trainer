@@ -193,6 +193,25 @@ def normalize_folder_shift(value: Optional[str]) -> str:
     return normalized
 
 
+def calculate_fad_step_scale(
+    base_scale: float,
+    t_val: Optional[float] = None,
+    use_timestep: bool = False,
+    use_curriculum: bool = False,
+) -> float:
+    """Calculate the FAD dropout scale for the current TFAD state."""
+    if not use_timestep or t_val is None:
+        return base_scale
+
+    t = max(0.0, min(1.0, float(t_val)))
+    if use_curriculum:
+        # Preserve the existing sFAD + TFAD behavior: curriculum -> full FAD.
+        return base_scale + t * (1.0 - base_scale)
+
+    # Without sFAD, TFAD starts at full FAD (t=0) and decays to zero (t=1).
+    return 1.0 - t
+
+
 def get_folder_shift_values(
     folder_shifts: Optional[Sequence[str]],
     batch_size: int,
@@ -1293,8 +1312,12 @@ class BaseDataset(torch.utils.data.Dataset):
                         else:
                             p_step = 1.0
 
-                        if t_val is not None and getattr(subset, "fad_timestep", False):
-                            p_step = p_step + t_val * (1.0 - p_step)
+                        p_step = calculate_fad_step_scale(
+                            p_step,
+                            t_val=t_val,
+                            use_timestep=getattr(subset, "fad_timestep", False),
+                            use_curriculum=getattr(subset, "fad_curriculum", False),
+                        )
 
                         l = []
                         for token in flex_tokens:
@@ -2020,7 +2043,7 @@ class BaseDataset(torch.utils.data.Dataset):
             subset = self.image_to_subset[image_key]
 
             if getattr(subset, "fad_timestep", False) and getattr(subset, "enable_fad", False):
-                # TSFAD 的 t_val 只控制 FAD caption dropout 強度；
+                # TFAD 的 t_val 只控制 FAD caption dropout 強度；
                 # 模型 diffusion timestep 仍由一般 sampling/folder shift 決定。
                 t_val = random.random()
             else:
@@ -5315,7 +5338,7 @@ def add_dataset_arguments(
         "--fad_curriculum", action="store_true", help="enable Curriculum-inspired Scheduling for FAD (sFAD) / sFAD (Curriculum-inspired Scheduling) を有効にする"
     )
     parser.add_argument(
-        "--fad_timestep", action="store_true", help="enable Time-Step FAD (TSFAD) / Time-Step FAD (TSFAD) を有効にする"
+        "--fad_timestep", action="store_true", help="enable Time-Step FAD (TFAD) / Time-Step FAD (TFAD) を有効にする"
     )
     parser.add_argument(
         "--fad_p_min", type=float, default=0.35, help="minimum dropout probability for FAD / FADの最小ドロップアウト確率"

@@ -2795,7 +2795,7 @@ function renderSubsets() {
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-flip-aug" ${subset.flip_aug ? "checked" : ""}> Flip Augmentations</label>
                     </div>
                     <div class="form-group">
-                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-fad-timestep" ${subset.fad_timestep ? "checked" : ""}> Enable TSFAD</label>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-fad-timestep" ${subset.fad_timestep ? "checked" : ""}> Enable TFAD</label>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
