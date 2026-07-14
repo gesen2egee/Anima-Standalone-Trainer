@@ -7,6 +7,7 @@
 # https://github.com/microsoft/LoRA/blob/main/loralib/layers.py
 # https://github.com/cloneofsimo/lora/blob/master/lora_diffusion/lora.py
 
+import ast
 import math
 import os
 from contextlib import contextmanager
@@ -456,6 +457,21 @@ def create_network(
     if network_alpha is None:
         network_alpha = 1.0
 
+    def parse_patterns(value, name):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                value = ast.literal_eval(value)
+            except (SyntaxError, ValueError) as error:
+                raise ValueError(f"{name} must be a Python-style list of regex strings") from error
+        if not isinstance(value, (list, tuple)) or not all(isinstance(pattern, str) for pattern in value):
+            raise ValueError(f"{name} must be a list of regex strings")
+        return list(value)
+
+    exclude_patterns = parse_patterns(kwargs.get("exclude_patterns"), "exclude_patterns")
+    include_patterns = parse_patterns(kwargs.get("include_patterns"), "include_patterns")
+
     # extract dim/alpha for conv2d, and block dim
     conv_dim = kwargs.get("conv_dim", None)
     conv_alpha = kwargs.get("conv_alpha", None)
@@ -646,6 +662,8 @@ def create_network(
         reg_lrs=reg_lrs,
         verbose=verbose,
         target_all_linears=kwargs.get("target_all_linears", False),
+        exclude_patterns=exclude_patterns,
+        include_patterns=include_patterns,
     )
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)
@@ -751,6 +769,8 @@ class LoRANetwork(torch.nn.Module):
         reg_lrs: Optional[Dict[str, float]] = None,
         verbose: Optional[bool] = False,
         target_all_linears: bool = False,
+        exclude_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -766,6 +786,18 @@ class LoRANetwork(torch.nn.Module):
         self.split_qkv = split_qkv
         self.train_t5xxl = train_t5xxl
         self.target_all_linears = target_all_linears
+
+        def compile_patterns(patterns: Optional[List[str]], kind: str) -> List[re.Pattern]:
+            compiled = []
+            for pattern in patterns or []:
+                try:
+                    compiled.append(re.compile(pattern))
+                except re.error as error:
+                    raise ValueError(f"Invalid {kind} pattern {pattern!r}: {error}") from error
+            return compiled
+
+        exclude_re_patterns = compile_patterns(exclude_patterns, "exclude")
+        include_re_patterns = compile_patterns(include_patterns, "include")
 
         self.type_dims = type_dims
         self.in_dims = in_dims
@@ -831,6 +863,14 @@ class LoRANetwork(torch.nn.Module):
                         is_conv2d_1x1 = is_conv2d and child_module.kernel_size == (1, 1)
 
                         if is_linear or is_conv2d:
+                            original_name = (name + "." if name else "") + child_name
+                            excluded = any(pattern.fullmatch(original_name) for pattern in exclude_re_patterns)
+                            included = any(pattern.fullmatch(original_name) for pattern in include_re_patterns)
+                            if excluded and not included:
+                                if verbose:
+                                    logger.info(f"exclude: {original_name}")
+                                continue
+
                             lora_name = prefix + "." + (name + "." if name else "") + child_name
                             lora_name = lora_name.replace(".", "_")
 
