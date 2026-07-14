@@ -6,6 +6,7 @@ function createQueueCoordinator(options = {}) {
         startJob,
         onQueueEmpty = () => {},
         onError = () => {},
+        onTransition = () => {},
         retryDelayMs = 2000,
         setTimer = setTimeout,
         clearTimer = clearTimeout
@@ -23,6 +24,7 @@ function createQueueCoordinator(options = {}) {
         if (!scheduledTimer) return;
         clearTimer(scheduledTimer);
         scheduledTimer = null;
+        onTransition({ type: 'cancelled' });
     }
 
     function requestAdvance(delayMs = 0) {
@@ -37,16 +39,19 @@ function createQueueCoordinator(options = {}) {
             }
         }, Math.max(0, Number(delayMs) || 0));
         scheduledTimer?.unref?.();
+        onTransition({ type: 'scheduled', delayMs: Math.max(0, Number(delayMs) || 0) });
         return true;
     }
 
     async function advanceNow() {
         if (!isEnabled()) {
             cancel();
+            onTransition({ type: 'disabled' });
             return { status: 'disabled', started: false };
         }
         if (advanceInFlight) {
             requestAdvance(retryDelayMs);
+            onTransition({ type: 'busy' });
             return { status: 'busy', started: false };
         }
 
@@ -56,18 +61,23 @@ function createQueueCoordinator(options = {}) {
             const runningJob = await getRunningJob();
             if (runningJob) {
                 requestAdvance(retryDelayMs);
+                onTransition({ type: 'waiting', runningJob });
                 return { status: 'waiting', started: false, runningJob };
             }
 
             const nextJob = getNextJob();
             if (!nextJob) {
                 onQueueEmpty();
+                onTransition({ type: 'empty' });
                 return { status: 'empty', started: false };
             }
 
+            onTransition({ type: 'starting', jobName: nextJob });
             const result = await startJob(nextJob);
+            onTransition({ type: 'started', jobName: nextJob });
             return { status: 'started', started: true, jobName: nextJob, result };
         } catch (err) {
+            onTransition({ type: 'error', error: err.message });
             onError(err);
             throw err;
         } finally {

@@ -23,7 +23,7 @@ test("queue stop interrupts the current training process and preserves queue sta
   assert.match(serverJs, /function stopTrainingJob\(/);
   assert.match(serverJs, /function stopRunningTrainingForQueue\(/);
   assert.match(block, /stopRunningTrainingForQueue\(\)/);
-  assert.match(block, /queueAutoRunning\s*=\s*false/);
+  assert.match(block, /setQueueAutoRunning\(false\)/);
 });
 
 test("queue start uses the retrying coordinator for transition control", () => {
@@ -42,11 +42,39 @@ test("queue start can arm while an existing training process is still running", 
   const serverJs = read("server.js");
   const block = routeBlock(serverJs, "/api/queue/start");
 
-  assert.match(block, /queueAutoRunning\s*=\s*true/);
+  assert.match(block, /setQueueAutoRunning\(true\)/);
   assert.match(block, /if \(runningTraining\)/);
   assert.match(block, /queueCoordinator\.requestAdvance\(2000\)/);
   assert.match(block, /waitingFor:\s*runningTraining/);
   assert.doesNotMatch(block, /res\.status\(409\)/);
+});
+
+test("queue execution intent is persisted and reconciled after restart", () => {
+  const serverJs = read("server.js");
+
+  assert.match(serverJs, /trainingQueue\.getState\(\)\.autoRunning/);
+  assert.match(serverJs, /trainingQueue\.setAutoRunning/);
+  assert.match(serverJs, /async function reconcileQueue\(/);
+  assert.match(serverJs, /reconcileQueue\('startup'\)/);
+  assert.match(serverJs, /recovered-stale-active/);
+});
+
+test("server refuses a second instance instead of drifting to another port", () => {
+  const serverJs = read("server.js");
+
+  assert.match(serverJs, /acquireServerInstance/);
+  assert.match(serverJs, /Refusing to start a second Training UI instance/);
+  assert.doesNotMatch(serverJs, /findAvailablePort/);
+  assert.doesNotMatch(serverJs, /using \$\{port\} instead/);
+});
+
+test("queue transitions and start failures are written to a durable journal", () => {
+  const serverJs = read("server.js");
+
+  assert.match(serverJs, /QUEUE_EVENT_LOG_PATH/);
+  assert.match(serverJs, /recordQueueEvent\('start-failed'/);
+  assert.match(serverJs, /recordQueueEvent\('job-completed'/);
+  assert.match(serverJs, /onTransition:\s*event => recordQueueEvent/);
 });
 
 test("status changes broadcast a queue refresh to every websocket client", () => {

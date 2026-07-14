@@ -45,6 +45,7 @@ test('queue state persists to disk', () => {
     queue.enqueue('alpha');
     queue.enqueue('beta');
     queue.markActive('alpha');
+    queue.setAutoRunning(true);
 
     const restored = createJobQueue({
         statePath,
@@ -53,6 +54,42 @@ test('queue state persists to disk', () => {
 
     assert.deepStrictEqual(restored.getState().items, ['alpha', 'beta']);
     assert.strictEqual(restored.getState().active, 'alpha');
+    assert.strictEqual(restored.getState().autoRunning, true);
+});
+
+test('queue instances reload state written by another instance', () => {
+    const { statePath, queue } = makeQueue();
+    const second = createJobQueue({
+        statePath,
+        jobExists: (name) => ['alpha', 'beta', 'gamma'].includes(name)
+    });
+
+    queue.enqueue('alpha');
+    second.enqueue('beta');
+
+    assert.deepStrictEqual(queue.getState().items, ['alpha', 'beta']);
+    assert.deepStrictEqual(second.getState().items, ['alpha', 'beta']);
+});
+
+test('auto-running intent and last error are durable', () => {
+    const { statePath, queue } = makeQueue();
+
+    queue.setAutoRunning(true);
+    queue.setAutoRunning(false, { error: 'failed to start beta' });
+
+    const restored = createJobQueue({ statePath, jobExists: () => true });
+    assert.strictEqual(restored.getState().autoRunning, false);
+    assert.strictEqual(restored.getState().lastError, 'failed to start beta');
+});
+
+test('queue state is written through an atomic temporary file', () => {
+    const { dir, statePath, queue } = makeQueue();
+
+    queue.enqueue('alpha');
+
+    assert.strictEqual(fs.existsSync(statePath), true);
+    assert.deepStrictEqual(fs.readdirSync(dir).filter(name => name.endsWith('.tmp')), []);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).items, ['alpha']);
 });
 
 test('clearing active keeps the job queued for a later retry', () => {

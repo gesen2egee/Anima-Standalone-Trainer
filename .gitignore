@@ -22,6 +22,7 @@ training-ui/jobs/
 training-ui/global_config.toml
 training-ui/queue_state.json
 training-ui/training_process_state.json
+training-ui/server_instance.json
 
 
 

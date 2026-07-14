@@ -98,3 +98,19 @@ test('empty queue reports completion exactly once', async () => {
     assert.strictEqual(result.status, 'empty');
     assert.strictEqual(emptyCalls, 1);
 });
+
+test('coordinator reports durable transition events', async () => {
+    const events = [];
+    const coordinator = createQueueCoordinator({
+        isEnabled: () => true,
+        getRunningJob: async () => null,
+        getNextJob: () => 'next-job',
+        startJob: async () => {},
+        onTransition: event => events.push(event)
+    });
+
+    await coordinator.advanceNow();
+
+    assert.deepStrictEqual(events.map(event => event.type), ['starting', 'started']);
+    assert.strictEqual(events[0].jobName, 'next-job');
+});

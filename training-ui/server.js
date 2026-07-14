@@ -13,6 +13,7 @@ const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 const { buildNewJobSubsets } = require('./lib/newJobDataset');
 const { buildNewJobSamplePrompts } = require('./lib/newJobSamples');
+const { acquireServerInstance } = require('./lib/serverInstance');
 const {
     inspectDatasetImageFolders,
     listSdScriptsImages,
@@ -20,7 +21,8 @@ const {
     resolveDatasetImageFolders
 } = require('./lib/datasetImageMatch');
 
-require('./lib/setup').runSetup();
+const isWindows = process.platform === 'win32';
+const isWSL = process.platform === 'linux' && !!process.env.WSL_DISTRO_NAME;
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +45,39 @@ const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
 const ARCHITECTURES_PATH = path.join(__dirname, 'architectures.json');
 const QUEUE_STATE_PATH = path.join(__dirname, 'queue_state.json');
 const TRAINING_PROCESS_STATE_PATH = path.join(__dirname, 'training_process_state.json');
+const SERVER_INSTANCE_LOCK_PATH = path.join(__dirname, 'server_instance.json');
+const QUEUE_EVENT_LOG_PATH = path.join(__dirname, 'queue_events.log');
+
+let serverInstanceHandle = acquireServerInstance({
+    lockPath: SERVER_INSTANCE_LOCK_PATH,
+    port: DEFAULT_PORT
+});
+if (!serverInstanceHandle.acquired) {
+    const existing = serverInstanceHandle.existing || {};
+    console.error(`\nERROR: Training UI is already running (PID ${existing.pid || 'unknown'}, port ${existing.port || DEFAULT_PORT}).`);
+    process.exit(1);
+}
+
+require('./lib/setup').runSetup();
+
+let lastQueueEventSignature = '';
+let lastQueueEventAt = 0;
+
+function recordQueueEvent(type, details = {}) {
+    const now = Date.now();
+    const signature = JSON.stringify({ type, ...details });
+    if (signature === lastQueueEventSignature && now - lastQueueEventAt < 60000) return;
+    lastQueueEventSignature = signature;
+    lastQueueEventAt = now;
+
+    const entry = { time: new Date(now).toISOString(), type, ...details };
+    try {
+        fs.appendFileSync(QUEUE_EVENT_LOG_PATH, `${JSON.stringify(entry)}\n`, 'utf8');
+    } catch (err) {
+        console.warn(`[Queue] Failed to write event log: ${err.message}`);
+    }
+    console.log(`[Queue] ${type}`, details);
+}
 
 // Load architecture registry
 const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
@@ -597,7 +632,12 @@ const trainingQueue = createJobQueue({
     statePath: QUEUE_STATE_PATH,
     jobExists
 });
-let queueAutoRunning = false;
+let queueAutoRunning = trainingQueue.getState().autoRunning;
+
+function setQueueAutoRunning(enabled, error = null) {
+    queueAutoRunning = enabled === true;
+    trainingQueue.setAutoRunning(queueAutoRunning, { error });
+}
 
 const queueCoordinator = createQueueCoordinator({
     isEnabled: () => queueAutoRunning,
@@ -605,25 +645,44 @@ const queueCoordinator = createQueueCoordinator({
     getNextJob: () => trainingQueue.getNext(),
     startJob: (jobName) => startQueuedJob(jobName),
     onQueueEmpty: () => {
-        queueAutoRunning = false;
+        setQueueAutoRunning(false);
     },
     onError: (err) => {
-        queueAutoRunning = false;
+        setQueueAutoRunning(false, err.message);
         console.error(`[Queue] ${err.message}`);
     },
+    onTransition: event => recordQueueEvent(`coordinator-${event.type}`, event),
     retryDelayMs: 2000
 });
 
-// Reconcile an enabled queue whose active marker disappeared. This is a safety
-// net for missed process-close notifications and temporary process-detection
-// races; requestAdvance de-duplicates concurrent transition attempts.
-const queueReconcileTimer = setInterval(() => {
+async function reconcileQueue(reason = 'watchdog') {
     if (!queueAutoRunning) return;
     const state = trainingQueue.getState();
-    if (state.active || state.items.length === 0) return;
+    if (state.items.length === 0) {
+        setQueueAutoRunning(false);
+        return;
+    }
+
+    const runningJob = await getRunningTrainingJobNameFresh();
+    if (runningJob) return;
+    if (state.active) {
+        trainingQueue.clearActive(state.active);
+        recordQueueEvent('recovered-stale-active', { reason, jobName: state.active });
+    }
     queueCoordinator.requestAdvance(0);
-}, 5000);
-queueReconcileTimer.unref?.();
+}
+
+// Periodically reconcile persisted queue intent. This recovers missed close
+// notifications and server restarts without relying on an open browser.
+let queueReconcileTimer = null;
+
+function startQueueReconciler() {
+    if (queueReconcileTimer) return;
+    queueReconcileTimer = setInterval(() => {
+        reconcileQueue().catch(err => recordQueueEvent('reconcile-error', { error: err.message }));
+    }, 5000);
+    queueReconcileTimer.unref?.();
+}
 
 function getRunningTrainingJobName() {
     for (const [name, job] of runningJobs.entries()) {
@@ -1827,6 +1886,7 @@ const GEN_SERVER_PORT = 5000; // Fixed port for now
 // Kill all running jobs when the Node server itself exits
 function killAllJobs() {
     queueCoordinator.cancel();
+    if (queueReconcileTimer) clearInterval(queueReconcileTimer);
     for (const [, job] of runningJobs) {
         if (job.pid) {
             try {
@@ -1858,6 +1918,7 @@ function killAllJobs() {
             }
         } catch (_) {}
     }
+    serverInstanceHandle?.release();
 }
 
 for (const sig of ['exit', 'SIGINT', 'SIGTERM']) {
@@ -1912,10 +1973,6 @@ function killProcess(pid, gracefulMs = 8000) {
 }
 
 // --- Cross-platform venv/spawn helpers ---
-
-const isWindows = process.platform === 'win32';
-// WSL2: platform is 'linux' but explorer.exe is available via Windows interop
-const isWSL = process.platform === 'linux' && !!process.env.WSL_DISTRO_NAME;
 
 // Open a file path or URL in the system file manager / browser
 function openNative(target, isUrl = false) {
@@ -2119,7 +2176,7 @@ app.post('/api/jobs/:name/train/stop', async (req, res) => {
             return res.status(400).json({ error: 'Job not running' });
         }
 
-        queueAutoRunning = false;
+        setQueueAutoRunning(false);
         queueCoordinator.cancel();
         trainingQueue.clearActive(jobName);
         res.json({ success: true });
@@ -2357,6 +2414,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
 // --- Training Control ---
 
 async function startQueuedJob(jobName) {
+    recordQueueEvent('start-requested', { jobName, port: activePort });
     const response = await fetch(`http://127.0.0.1:${activePort}/api/jobs/${encodeURIComponent(jobName)}/train/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2364,11 +2422,14 @@ async function startQueuedJob(jobName) {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.error) {
-        queueAutoRunning = false;
+        const error = body.error || `Failed to start queued job "${jobName}"`;
+        setQueueAutoRunning(false, error);
         trainingQueue.clearActive(jobName);
         broadcastStatus(jobName, 'failed');
-        throw new Error(body.error || `Failed to start queued job "${jobName}"`);
+        recordQueueEvent('start-failed', { jobName, status: response.status, error });
+        throw new Error(error);
     }
+    recordQueueEvent('start-succeeded', { jobName, pid: body.pid });
     return body;
 }
 
@@ -2427,7 +2488,8 @@ app.post('/api/queue/start', async (req, res) => {
             trainingQueue.clearActive(state.active);
         }
 
-        queueAutoRunning = true;
+        setQueueAutoRunning(true);
+        recordQueueEvent('queue-armed', { runningTraining, items: trainingQueue.getState().items });
         if (runningTraining) {
             queueCoordinator.requestAdvance(2000);
             return res.json({
@@ -2453,8 +2515,9 @@ app.post('/api/queue/start', async (req, res) => {
 
 app.post('/api/queue/stop', async (req, res) => {
     try {
-        queueAutoRunning = false;
+        setQueueAutoRunning(false);
         queueCoordinator.cancel();
+        recordQueueEvent('queue-paused');
         const stoppedJob = await stopRunningTrainingForQueue();
         res.json({
             success: true,
@@ -2602,9 +2665,14 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
                 if (completedSuccessfully) {
                     trainingQueue.finishQueuedJob(jobName, { success: true });
                     broadcastStatus(jobName, 'completed');
+                    recordQueueEvent('job-completed', {
+                        jobName,
+                        remaining: trainingQueue.getState().items,
+                        autoRunning: queueAutoRunning
+                    });
                     queueCoordinator.requestAdvance(1000);
                 } else {
-                    queueAutoRunning = false;
+                    setQueueAutoRunning(false, `Training job "${jobName}" exited with code ${code}`);
                     queueCoordinator.cancel();
                     trainingQueue.finishQueuedJob(jobName, { success: false });
                     broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
@@ -2622,7 +2690,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             invalidateDetectedTrainingProcesses();
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
-                queueAutoRunning = false;
+                setQueueAutoRunning(false, err.message);
                 queueCoordinator.cancel();
                 trainingQueue.finishQueuedJob(jobName, { success: false });
                 broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
@@ -3016,30 +3084,29 @@ function checkPort(port) {
     });
 }
 
-async function findAvailablePort(startPort, maxAttempts = 10) {
-    for (let port = startPort; port < startPort + maxAttempts; port++) {
-        if (await checkPort(port)) return port;
-    }
-    return null;
-}
-
 (async () => {
-    const port = await findAvailablePort(DEFAULT_PORT);
-
-    if (!port) {
-        console.error(`\nERROR: No available port found in range ${DEFAULT_PORT}-${DEFAULT_PORT + 10}`);
+    if (!await checkPort(DEFAULT_PORT)) {
+        serverInstanceHandle.release();
+        console.error(`\nERROR: Port ${DEFAULT_PORT} is already in use. Refusing to start a second Training UI instance.`);
         process.exit(1);
     }
 
-    if (port !== DEFAULT_PORT) {
-        console.warn(`Port ${DEFAULT_PORT} was busy, using ${port} instead.`);
-    }
-
-    activePort = port;
-    server.listen(port, () => {
-        console.log(`Anima Training UI running at http://localhost:${port}`);
+    activePort = DEFAULT_PORT;
+    server.listen(DEFAULT_PORT, () => {
+        console.log(`Anima Training UI running at http://localhost:${DEFAULT_PORT}`);
+        recordQueueEvent('server-started', {
+            pid: process.pid,
+            port: DEFAULT_PORT,
+            autoRunning: queueAutoRunning,
+            items: trainingQueue.getState().items
+        });
+        startQueueReconciler();
+        reconcileQueue('startup').catch(err => recordQueueEvent('reconcile-error', {
+            reason: 'startup',
+            error: err.message
+        }));
         try {
-            openNative(`http://localhost:${port}`, true);
+            openNative(`http://localhost:${DEFAULT_PORT}`, true);
         } catch (e) {
             console.warn('Could not open browser automatically.');
         }
