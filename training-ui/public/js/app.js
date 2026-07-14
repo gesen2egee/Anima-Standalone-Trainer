@@ -4750,7 +4750,7 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-image-dir-status").classList.remove("warning", "ok");
   $("new-job-batch-import").checked = false;
   $("new-job-auto-balance").checked = false;
-  $("new-job-generate-samples").checked = true;
+  $("new-job-generate-samples").checked = false;
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();

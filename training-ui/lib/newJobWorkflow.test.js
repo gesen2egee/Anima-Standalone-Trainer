@@ -36,8 +36,8 @@ test("new job can generate two trigger-word sample prompts", () => {
   const serverJs = read("server.js");
   const block = routeBlock(serverJs, "/api/jobs");
 
-  assert.match(html, /id="new-job-generate-samples" checked/);
-  assert.match(appJs, /\$\("new-job-generate-samples"\)\.checked = true/);
+  assert.match(html, /id="new-job-generate-samples"(?! checked)/);
+  assert.match(appJs, /\$\("new-job-generate-samples"\)\.checked = false/);
   assert.match(appJs, /generate_samples:\s*\$\("new-job-generate-samples"\)\.checked/);
   assert.match(block, /buildNewJobSamplePrompts\(trigger_words\)/);
   assert.match(block, /delete config\.training_arguments\.sample_at_first/);
