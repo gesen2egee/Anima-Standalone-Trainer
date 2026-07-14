@@ -4750,6 +4750,7 @@ $("btn-new-job").addEventListener("click", () => {
   $("new-job-image-dir-status").classList.remove("warning", "ok");
   $("new-job-batch-import").checked = false;
   $("new-job-auto-balance").checked = false;
+  $("new-job-generate-samples").checked = true;
   $("new-job-max-steps").value = "3000";
   openModal("modal-new-job");
   $("new-job-name").focus();
@@ -4796,6 +4797,7 @@ async function createJobFromModal({ autoTag = false } = {}) {
         network_module: $("new-job-network-module").value,
         image_dir: imageDir,
         trigger_words: $("new-job-trigger-words").value.trim(),
+        generate_samples: $("new-job-generate-samples").checked,
         batch_import: $("new-job-batch-import").checked,
         auto_balance_repeats: $("new-job-auto-balance").checked,
         max_train_steps: safeInt($("new-job-max-steps").value, 3000),

@@ -13,12 +13,12 @@ fad_p_min = 0.35
 fad_p_max = 1
 fad_alpha = 10
 fad_c = 0.5
-fad_curriculum_start = 0.05
-fad_curriculum_end = 0.5
+fad_curriculum_start = 0.1
+fad_curriculum_end = 1
 fad_curriculum_beta = 3
 fad_step_start = 0
 fad_step_end = 1
-folder_shift_curriculum = false
+folder_shift_curriculum = true
 
   [[datasets.subsets]]
   image_dir = ""
@@ -34,5 +34,6 @@ folder_shift_curriculum = false
   enable_wildcard = true
   enable_fad = true
   fad_curriculum = true
+  fad_timestep = true
   alpha_mask = true
   folder_shift = "global"

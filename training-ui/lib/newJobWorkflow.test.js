@@ -2,6 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const test = require("node:test");
+const { buildNewJobSamplePrompts } = require("./newJobSamples");
 
 const ROOT = path.join(__dirname, "..");
 
@@ -27,6 +28,30 @@ test("new job modal exposes trigger words and auto tag action", () => {
   assert.ok(triggerIndex >= 0 && triggerIndex < imageDirIndex, "trigger words should be above image folder");
   assert.match(html, /id="btn-create-job-auto-tag"/);
   assert.match(html, /Create \+ Auto Tag/);
+});
+
+test("new job can generate two trigger-word sample prompts", () => {
+  const html = read("public/index.html");
+  const appJs = read("public/js/app.js");
+  const serverJs = read("server.js");
+  const block = routeBlock(serverJs, "/api/jobs");
+
+  assert.match(html, /id="new-job-generate-samples" checked/);
+  assert.match(appJs, /\$\("new-job-generate-samples"\)\.checked = true/);
+  assert.match(appJs, /generate_samples:\s*\$\("new-job-generate-samples"\)\.checked/);
+  assert.match(block, /buildNewJobSamplePrompts\(trigger_words\)/);
+  assert.match(block, /delete config\.training_arguments\.sample_at_first/);
+  assert.match(block, /delete config\.training_arguments\.sample_every_n_steps/);
+});
+
+test("generated samples contain trigger words and two distinct seeds", () => {
+  const seeds = [10528, 31583];
+  const prompts = buildNewJobSamplePrompts("vegapunk york", () => seeds.shift()).split("\n");
+
+  assert.strictEqual(prompts.length, 2);
+  assert.match(prompts[0], /^vegapunk york --w 832 --h 1216 --s 28 --d 10528 --l 3\.5 --n /);
+  assert.match(prompts[1], /^vegapunk york --w 832 --h 1216 --s 28 --d 31583 --l 3\.5 --n /);
+  assert.match(buildNewJobSamplePrompts("  ", () => 42), /^1girl --w 832 --h 1216 --s 28 --d 42 --l 3\.5 --n /);
 });
 
 test("new job trigger words follow job name until manually edited", () => {

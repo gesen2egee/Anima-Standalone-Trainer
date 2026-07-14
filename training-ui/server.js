@@ -12,6 +12,7 @@ const { findAutoResumeSource } = require('./lib/autoResume');
 const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 const { buildNewJobSubsets } = require('./lib/newJobDataset');
+const { buildNewJobSamplePrompts } = require('./lib/newJobSamples');
 const {
     inspectDatasetImageFolders,
     listSdScriptsImages,
@@ -1190,6 +1191,7 @@ app.post('/api/jobs', (req, res) => {
             max_train_steps,
             model_architecture,
             trigger_words,
+            generate_samples,
             batch_import,
             auto_balance_repeats
         } = req.body;
@@ -1232,6 +1234,10 @@ app.post('/api/jobs', (req, res) => {
             config.network_arguments = config.network_arguments || {};
             config.network_arguments.network_module = network_module;
         }
+        if (generate_samples !== true) {
+            delete config.training_arguments.sample_at_first;
+            delete config.training_arguments.sample_every_n_steps;
+        }
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
         const datasetConfig = getDefaultDataset();
@@ -1270,9 +1276,14 @@ app.post('/api/jobs', (req, res) => {
         }
         fs.writeFileSync(path.join(jobPath, 'dataset.toml'), TOML.stringify(datasetConfig), 'utf8');
 
-        // Copy sample prompts template
+        // Generate two sample prompts when requested; otherwise keep the template behavior.
         const promptsTemplate = path.join(TEMPLATES_DIR, 'sample_prompts.txt');
-        if (fs.existsSync(promptsTemplate)) {
+        const generatedSamplePrompts = generate_samples === true
+            ? buildNewJobSamplePrompts(trigger_words)
+            : '';
+        if (generatedSamplePrompts) {
+            fs.writeFileSync(path.join(jobPath, 'sample_prompts.txt'), `${generatedSamplePrompts}\n`, 'utf8');
+        } else if (fs.existsSync(promptsTemplate)) {
             fs.copyFileSync(promptsTemplate, path.join(jobPath, 'sample_prompts.txt'));
         } else {
             fs.writeFileSync(path.join(jobPath, 'sample_prompts.txt'), '', 'utf8');

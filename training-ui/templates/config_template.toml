@@ -12,6 +12,8 @@ save_model_as = "safetensors"
 max_train_steps = 3000
 save_every_n_steps = 200
 save_last_n_steps_state = 1
+sample_at_first = true
+sample_every_n_steps = 200
 save_state = true
 save_state_on_train_end = true
 log_with = "tensorboard"
@@ -107,7 +109,7 @@ auto_resume_last_state = true
 auto_resume_last_state_user_set = true
 
 [anima_arguments]
-timestep_sampling = "autoshift_wavelet"
+timestep_sampling = "autoshift"
 discrete_flow_shift = 1
 sigmoid_scale = 1
 qwen3_max_token_length = 512

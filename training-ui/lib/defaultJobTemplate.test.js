@@ -39,7 +39,9 @@ test("default config template follows my_job_v1 training and network defaults", 
     'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
     "allora=True",
   ]);
-  assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift_wavelet");
+  assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift");
+  assert.strictEqual(config.training_arguments.sample_at_first, true);
+  assert.strictEqual(config.training_arguments.sample_every_n_steps, 200);
   assert.strictEqual(config.anima_arguments.differential_guidance_scale, 3);
   assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
   assert.strictEqual(config.training_arguments.masked_loss_random_strength, 0);
@@ -56,11 +58,13 @@ test("default dataset template follows my_job_v1 dataset defaults", () => {
   assert.strictEqual(dataset.general.max_bucket_reso, 1536);
   assert.deepStrictEqual(firstDataset.resolution, [768, 768]);
   assert.strictEqual(firstDataset.batch_size, 1);
-  assert.strictEqual(firstDataset.fad_curriculum_start, 0.05);
-  assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
+  assert.strictEqual(firstDataset.fad_curriculum_start, 0.1);
+  assert.strictEqual(firstDataset.fad_curriculum_end, 1);
+  assert.strictEqual(firstDataset.folder_shift_curriculum, true);
   assert.strictEqual(firstSubset.keep_tokens, 1);
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
+  assert.strictEqual(firstSubset.fad_timestep, true);
   assert.strictEqual(firstSubset.alpha_mask, true);
   assert.strictEqual(firstSubset.caption_tag_dropout_rate, 0);
 });
