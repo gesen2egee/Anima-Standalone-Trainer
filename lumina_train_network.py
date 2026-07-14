@@ -255,7 +255,8 @@ class LuminaNetworkTrainer(train_network.NetworkTrainer):
         noisy_model_input, timesteps, sigmas = lumina_train_util.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype,
             folder_shifts=batch.get("folder_shifts", None),
-            batch_timesteps=batch.get("timesteps", None)
+            batch_timesteps=batch.get("timesteps", None),
+            folder_shift_progress=batch.get("folder_shift_progress", None),
         )
         self.current_noise = noise
         self.current_noisy_latents = noisy_model_input

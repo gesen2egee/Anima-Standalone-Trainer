@@ -18,6 +18,7 @@ fad_curriculum_end = 0.5
 fad_curriculum_beta = 3
 fad_step_start = 0
 fad_step_end = 1
+folder_shift_curriculum = false
 
   [[datasets.subsets]]
   image_dir = ""

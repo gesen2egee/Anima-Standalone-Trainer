@@ -742,6 +742,7 @@ def train(args):
                         weight_dtype,
                         folder_shifts=batch.get("folder_shifts", None),
                         batch_timesteps=batch.get("timesteps", None),
+                        folder_shift_progress=batch.get("folder_shift_progress", None),
                     )
                 )
                 # call model

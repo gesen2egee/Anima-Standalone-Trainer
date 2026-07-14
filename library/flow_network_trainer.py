@@ -127,6 +127,7 @@ class FlowNetworkTrainerMixin:
         model_pred_uncond: Optional[torch.Tensor] = None,
         ciop_output: Optional[torch.Tensor] = None,
         folder_shifts: Optional[Sequence[str]] = None,
+        folder_shift_progress: Optional[float] = None,
     ):
         target = self.apply_model_guidance_target(
             args, noise - latents, model_pred, model_pred_uncond, timestep_fractions
@@ -141,6 +142,7 @@ class FlowNetworkTrainerMixin:
             sigmas=sigmas,
             args=args,
             folder_shifts=folder_shifts,
+            folder_shift_progress=folder_shift_progress,
         )
         return target, weighting
 

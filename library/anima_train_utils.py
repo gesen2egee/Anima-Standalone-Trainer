@@ -189,6 +189,7 @@ def compute_plora_proposal_density(
     alpha: float = 1.0,
     bias: str = "left",
     folder_shifts: Optional[Sequence[str]] = None,
+    folder_shift_progress: Optional[float] = None,
 ) -> torch.Tensor:
     """Return the PLoRA proposal density after per-folder timestep transforms."""
     sigmas = torch.clamp(sigmas.float(), min=1e-6, max=1.0 - 1e-6)
@@ -212,6 +213,7 @@ def compute_plora_proposal_density(
         sigmas.device,
         sigmas.dtype,
         global_shift=1.0,
+        folder_shift_progress=folder_shift_progress,
     )
     uniform_mask = torch.tensor(
         [value == "uniform" for value in normalized], device=sigmas.device, dtype=torch.bool
@@ -231,6 +233,7 @@ def compute_loss_weighting_for_anima(
     sigmas: torch.Tensor,
     args: Optional[argparse.Namespace] = None,
     folder_shifts: Optional[Sequence[str]] = None,
+    folder_shift_progress: Optional[float] = None,
 ) -> torch.Tensor:
     """Compute loss weighting for Anima training."""
     sigmas_device = sigmas.device
@@ -257,6 +260,7 @@ def compute_loss_weighting_for_anima(
                 alpha=alpha,
                 bias=bias,
                 folder_shifts=folder_shifts,
+                folder_shift_progress=folder_shift_progress,
             )
         elif sampling == "sigmoid":
             S_a = getattr(args, "sigmoid_scale", 1.0)

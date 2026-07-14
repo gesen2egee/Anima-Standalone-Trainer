@@ -637,7 +637,8 @@ def train(args):
                 noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
                     args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype,
                     folder_shifts=batch.get("folder_shifts", None),
-                    batch_timesteps=batch.get("timesteps", None)
+                    batch_timesteps=batch.get("timesteps", None),
+                    folder_shift_progress=batch.get("folder_shift_progress", None),
                 )
                 noisy_model_input_4d = noisy_model_input
                 timesteps = timesteps / 1000.0
@@ -676,6 +677,7 @@ def train(args):
                     sigmas=sigmas,
                     args=args,
                     folder_shifts=batch.get("folder_shifts", None),
+                    folder_shift_progress=batch.get("folder_shift_progress", None),
                 )
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler_copy)
                 loss = train_util.conditional_loss(

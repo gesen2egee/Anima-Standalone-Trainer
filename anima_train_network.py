@@ -271,7 +271,8 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype, batch.get("alpha_masks"),
             folder_shifts=batch.get("folder_shifts", None),
-            batch_timesteps=batch.get("timesteps", None)
+            batch_timesteps=batch.get("timesteps", None),
+            folder_shift_progress=batch.get("folder_shift_progress", None),
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
@@ -354,6 +355,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             model_pred_uncond=model_pred_uncond,
             ciop_output=ciop[1] if ciop is not None else None,
             folder_shifts=batch.get("folder_shifts", None),
+            folder_shift_progress=batch.get("folder_shift_progress", None),
         )
 
         return model_pred, target, timesteps, weighting

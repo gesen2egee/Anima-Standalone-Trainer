@@ -124,6 +124,7 @@ class BaseDatasetParams:
     fad_curriculum_beta: float = 3.0
     fad_step_start: float = 0.0
     fad_step_end: float = 1.0
+    folder_shift_curriculum: bool = False
 
 @dataclass
 class DreamBoothDatasetParams(BaseDatasetParams):
@@ -275,6 +276,7 @@ class ConfigSanitizer:
         "fad_curriculum_beta": Any(float, int),
         "fad_step_start": Any(float, int),
         "fad_step_end": Any(float, int),
+        "folder_shift_curriculum": bool,
     }
 
     # options handled by argparse but not handled by user config
@@ -573,6 +575,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                   fad_curriculum_beta: {getattr(dataset, "fad_curriculum_beta", 3.0)}
                   fad_step_start: {getattr(dataset, "fad_step_start", 0.0)}
                   fad_step_end: {getattr(dataset, "fad_step_end", 1.0)}
+                  folder_shift_curriculum: {getattr(dataset, "folder_shift_curriculum", False)}
             """)
 
             if dataset.enable_bucket:

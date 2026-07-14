@@ -218,6 +218,7 @@ def get_folder_shift_values(
     device: torch.device,
     dtype: torch.dtype,
     global_shift: Union[float, torch.Tensor] = 1.0,
+    folder_shift_progress: Optional[float] = None,
 ) -> Optional[torch.Tensor]:
     if folder_shifts is None:
         return None
@@ -241,10 +242,14 @@ def get_folder_shift_values(
             dtype=dtype,
         )
 
+    progress = None if folder_shift_progress is None else max(0.0, min(1.0, float(folder_shift_progress)))
     for index, folder_shift in enumerate(folder_shifts):
         normalized = normalize_folder_shift(folder_shift)
         if normalized not in ("global", "uniform"):
-            values[index] = FOLDER_SHIFT_VALUES[normalized]
+            shift = FOLDER_SHIFT_VALUES[normalized]
+            if progress is not None and normalized in ("high", "low"):
+                shift = 1.0 + (shift - 1.0) * (1.0 - progress)
+            values[index] = shift
     return values
 
 
@@ -276,6 +281,7 @@ def apply_folder_timestep_sampling(
     values: torch.Tensor,
     folder_shifts: Optional[Sequence[str]],
     global_shift: Union[float, torch.Tensor] = 1.0,
+    folder_shift_progress: Optional[float] = None,
 ) -> torch.Tensor:
     """Apply per-folder flow shifting, including true uniform folder sampling."""
     folder_shift_values = get_folder_shift_values(
@@ -284,6 +290,7 @@ def apply_folder_timestep_sampling(
         values.device,
         values.dtype,
         global_shift=global_shift,
+        folder_shift_progress=folder_shift_progress,
     )
     if folder_shift_values is not None:
         values = apply_flow_shift(values, folder_shift_values)
@@ -1001,6 +1008,7 @@ class BaseDataset(torch.utils.data.Dataset):
         fad_curriculum_beta: float = 3.0,
         fad_step_start: float = 0.0,
         fad_step_end: float = 1.0,
+        folder_shift_curriculum: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1067,6 +1075,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self.fad_curriculum_beta = fad_curriculum_beta
         self.fad_step_start = fad_step_start
         self.fad_step_end = fad_step_end
+        self.folder_shift_curriculum = folder_shift_curriculum
 
     def set_current_strategies(self):
         self.tokenize_strategy = TokenizeStrategy.get_strategy()
@@ -1125,6 +1134,12 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_max_train_steps(self, max_train_steps):
         self.max_train_steps = max_train_steps
+
+    def get_folder_shift_progress(self) -> Optional[float]:
+        if not self.folder_shift_curriculum or self.max_train_steps <= 0:
+            return None
+        denominator = max(int(self.max_train_steps) - 1, 1)
+        return max(0.0, min(1.0, float(self.current_step) / float(denominator)))
 
     def set_tag_frequency(self, dir_name, captions):
         frequency_for_dir = self.tag_frequency.get(dir_name, {})
@@ -2282,6 +2297,7 @@ class BaseDataset(torch.utils.data.Dataset):
         example = {}
         example["custom_attributes"] = custom_attributes
         example["folder_shifts"] = folder_shifts  # may be list of empty dict
+        example["folder_shift_progress"] = self.get_folder_shift_progress()
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
@@ -2452,6 +2468,7 @@ class DreamBoothDataset(BaseDataset):
         fad_curriculum_beta: float = 3.0,
         fad_step_start: float = 0.0,
         fad_step_end: float = 1.0,
+        folder_shift_curriculum: bool = False,
     ) -> None:
         super().__init__(
             resolution,
@@ -2469,6 +2486,7 @@ class DreamBoothDataset(BaseDataset):
             fad_curriculum_beta,
             fad_step_start,
             fad_step_end,
+            folder_shift_curriculum,
         )
 
         assert resolution is not None, f"resolution is required / resolution（解像度）指定は必須です"
@@ -2782,6 +2800,7 @@ class FineTuningDataset(BaseDataset):
         fad_curriculum_beta: float = 3.0,
         fad_step_start: float = 0.0,
         fad_step_end: float = 1.0,
+        folder_shift_curriculum: bool = False,
     ) -> None:
         super().__init__(
             resolution,
@@ -2799,6 +2818,7 @@ class FineTuningDataset(BaseDataset):
             fad_curriculum_beta,
             fad_step_start,
             fad_step_end,
+            folder_shift_curriculum,
         )
 
         self.batch_size = batch_size
@@ -3020,6 +3040,7 @@ class ControlNetDataset(BaseDataset):
         fad_curriculum_beta: float = 3.0,
         fad_step_start: float = 0.0,
         fad_step_end: float = 1.0,
+        folder_shift_curriculum: bool = False,
     ) -> None:
         super().__init__(
             resolution,
@@ -3037,6 +3058,7 @@ class ControlNetDataset(BaseDataset):
             fad_curriculum_beta,
             fad_step_start,
             fad_step_end,
+            folder_shift_curriculum,
         )
 
         db_subsets = []
@@ -3105,6 +3127,7 @@ class ControlNetDataset(BaseDataset):
             fad_curriculum_beta,
             fad_step_start,
             fad_step_end,
+            folder_shift_curriculum,
         )
 
         # config_util等から参照される値をいれておく（若干微妙なのでなんとかしたい）
@@ -3115,6 +3138,18 @@ class ControlNetDataset(BaseDataset):
         self.validation_split = validation_split
         self.validation_seed = validation_seed
         self.resize_interpolation = resize_interpolation
+
+    def set_current_epoch(self, epoch):
+        super().set_current_epoch(epoch)
+        self.dreambooth_dataset_delegate.set_current_epoch(epoch)
+
+    def set_current_step(self, step):
+        super().set_current_step(step)
+        self.dreambooth_dataset_delegate.set_current_step(step)
+
+    def set_max_train_steps(self, max_train_steps):
+        super().set_max_train_steps(max_train_steps)
+        self.dreambooth_dataset_delegate.set_max_train_steps(max_train_steps)
 
         # assert all conditioning data exists
         missing_imgs = []
@@ -3352,6 +3387,11 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
     def set_max_train_steps(self, max_train_steps):
         for dataset in self.datasets:
             dataset.set_max_train_steps(max_train_steps)
+
+    def get_folder_shift_progress(self) -> Optional[float]:
+        if not self.datasets:
+            return None
+        return self.datasets[0].get_folder_shift_progress()
 
     def disable_token_padding(self):
         for dataset in self.datasets:
@@ -8011,6 +8051,9 @@ class collator_class:
         # set epoch and step
         dataset.set_current_epoch(self.current_epoch.value)
         dataset.set_current_step(self.current_step.value)
+        get_folder_shift_progress = getattr(dataset, "get_folder_shift_progress", None)
+        if isinstance(examples[0], dict) and "folder_shift_progress" in examples[0] and get_folder_shift_progress:
+            examples[0]["folder_shift_progress"] = get_folder_shift_progress()
         return examples[0]
 
 

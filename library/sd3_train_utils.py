@@ -915,7 +915,7 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
 # endregion
 
 
-def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None, folder_shift_progress: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz = latents.shape[0]
     num_timesteps = 1000
     override_timesteps, override_mask = train_util.prepare_batch_timestep_overrides(
@@ -943,6 +943,7 @@ def get_noisy_model_input_and_timesteps(args, latents, noise, device, dtype, fol
             device,
             dtype,
             global_shift=args.training_shift if args.training_shift is not None else 1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if shift is None:
             shift = torch.full(

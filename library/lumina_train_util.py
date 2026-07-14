@@ -805,7 +805,7 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None) -> Tensor
 
 # mainly copied from flux_train_utils.get_noisy_model_input_and_timesteps
 def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None
+    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None, folder_shift_progress: Optional[float] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, _, h, w = latents.shape
     assert bsz > 0, "Batch size not large enough"
@@ -826,7 +826,8 @@ def get_noisy_model_input_and_timesteps(
             sigmas = torch.rand((bsz,), device=device)
 
         folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
+            folder_shifts, bsz, device, dtype, global_shift=1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
@@ -839,6 +840,7 @@ def get_noisy_model_input_and_timesteps(
             device,
             dtype,
             global_shift=args.discrete_flow_shift if args.discrete_flow_shift is not None else 1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if shift is None:
             shift = torch.full(
@@ -859,7 +861,8 @@ def get_noisy_model_input_and_timesteps(
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
         sigmas = time_shift(mu, 1.0, sigmas)
         folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
+            folder_shifts, bsz, device, dtype, global_shift=1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
@@ -874,7 +877,8 @@ def get_noisy_model_input_and_timesteps(
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
         folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, device, dtype, global_shift=1.0
+            folder_shifts, bsz, device, dtype, global_shift=1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if folder_shift_values is not None:
             sigmas = train_util.apply_flow_shift(sigmas, folder_shift_values)
@@ -891,7 +895,12 @@ def get_noisy_model_input_and_timesteps(
             mode_scale=args.mode_scale,
         )
         folder_shift_values = train_util.get_folder_shift_values(
-            folder_shifts, bsz, u.device, u.dtype, global_shift=1.0
+            folder_shifts,
+            bsz,
+            u.device,
+            u.dtype,
+            global_shift=1.0,
+            folder_shift_progress=folder_shift_progress,
         )
         if folder_shift_values is not None:
             u = train_util.apply_flow_shift(u, folder_shift_values)

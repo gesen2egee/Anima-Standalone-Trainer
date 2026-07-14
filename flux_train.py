@@ -630,7 +630,8 @@ def train(args):
                 noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
                     args, noise_scheduler_copy, latents, noise, accelerator.device, weight_dtype,
                     folder_shifts=batch.get("folder_shifts", None),
-                    batch_timesteps=batch.get("timesteps", None)
+                    batch_timesteps=batch.get("timesteps", None),
+                    folder_shift_progress=batch.get("folder_shift_progress", None),
                 )
 
                 # pack latents and get img_ids

@@ -2123,6 +2123,7 @@ function populateDataset(dataset) {
 
   const d = dArray[0];
   $("cfg-caption-ext").value = d.caption_extension || ".txt";
+  $("cfg-folder-shift-curriculum").checked = d.folder_shift_curriculum ?? false;
   $("cfg-fad-p-min").value = d.fad_p_min ?? 0.35;
   $("cfg-fad-p-max").value = d.fad_p_max ?? 1.0;
   $("cfg-fad-alpha").value = d.fad_alpha ?? 10.0;
@@ -2599,6 +2600,7 @@ function gatherDataset() {
           resolution: [r, r],
           batch_size: b,
           caption_extension: $("cfg-caption-ext").value,
+          folder_shift_curriculum: $("cfg-folder-shift-curriculum").checked,
           fad_p_min: safeFloat($("cfg-fad-p-min").value),
           fad_p_max: safeFloat($("cfg-fad-p-max").value),
           fad_alpha: safeFloat($("cfg-fad-alpha").value),
