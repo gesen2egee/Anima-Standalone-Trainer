@@ -29,6 +29,17 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         self._unconditional_text_encoder_conds = None
 
     @staticmethod
+    def _unpatchify_prediction(pred: torch.Tensor, reference: torch.Tensor, patch: int, channels: int) -> torch.Tensor:
+        """Restore Krea 2 ``(c ph pw)`` image tokens to a channel-first latent."""
+        height = reference.shape[-2] // patch
+        width = reference.shape[-1] // patch
+        expected_shape = (reference.shape[0], height * width, channels * patch * patch)
+        if tuple(pred.shape) != expected_shape:
+            raise ValueError(f"Krea 2 prediction shape must be {expected_shape}, got {tuple(pred.shape)}")
+        pred = pred.reshape(pred.shape[0], height, width, channels, patch, patch)
+        return pred.permute(0, 3, 1, 4, 2, 5).reshape_as(reference)
+
+    @staticmethod
     def _dataset_needs_dynamic_caption_encoding(dataset) -> bool:
         """Return whether caption processing changes between training samples/steps."""
         datasets = getattr(dataset, "datasets", None)
@@ -406,10 +417,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         with torch.set_grad_enabled(is_train), accelerator.autocast():
             pred = forward_model(noisy, prompt_embeds, attn_mask)
 
-        height = noisy.shape[-2] // unet.config.patch
-        width = noisy.shape[-1] // unet.config.patch
-        pred = pred.reshape(pred.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels)
-        pred = pred.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
+        pred = self._unpatchify_prediction(pred, noisy, unet.config.patch, unet.config.channels)
 
         pred_uncond = None
         if self.should_apply_model_guidance(args, latents.device):
@@ -429,10 +437,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                 unet.prepare_block_swap_before_forward()
             with torch.no_grad(), accelerator.autocast():
                 pred_uncond = forward_model(noisy, unconditional_context, unconditional_mask)
-            pred_uncond = pred_uncond.reshape(
-                pred_uncond.shape[0], height, width, unet.config.patch, unet.config.patch, unet.config.channels
+            pred_uncond = self._unpatchify_prediction(
+                pred_uncond, noisy, unet.config.patch, unet.config.channels
             )
-            pred_uncond = pred_uncond.permute(0, 5, 1, 3, 2, 4).reshape_as(noisy)
 
         target, weighting = self.finalize_flow_target(
             args,
