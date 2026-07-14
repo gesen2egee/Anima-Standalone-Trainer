@@ -33,17 +33,17 @@ test("top training start uses queue APIs instead of direct train start", () => {
   assert.doesNotMatch(trainBlock[0], /\/train\/start/);
 });
 
-test("top training start only queues selected job when another job is already running", () => {
+test("top training start arms the queue when another job is already running", () => {
   const appJs = read("public/js/app.js");
   const helperBlock = getQueueStartHelper(appJs);
-  const runningBranch = helperBlock.match(/if \(runningJob\) \{[\s\S]*?return;\n  \}/);
+  const runningBranch = helperBlock.match(/if \(runningJob\) \{[\s\S]*?return;\r?\n  \}/);
 
   assert.match(helperBlock, /const jobs = await loadJobs\(\)/);
   assert.match(helperBlock, /const runningJob = jobs\.find\(\(job\) => job\.running\)/);
   assert.ok(runningBranch, "running branch should return before starting queue");
   assert.match(runningBranch[0], /\/api\/queue\/jobs\/\$\{encodeURIComponent\(currentJob\)\}/);
+  assert.match(runningBranch[0], /\/api\/queue\/start/);
   assert.match(runningBranch[0], /return;/);
-  assert.doesNotMatch(runningBranch[0], /\/api\/queue\/start/);
 });
 
 test("top training stop stops the queue instead of only the selected job", () => {

@@ -26,14 +26,27 @@ test("queue stop interrupts the current training process and preserves queue sta
   assert.match(block, /queueAutoRunning\s*=\s*false/);
 });
 
-test("queue start uses an in-flight guard so duplicate starts cannot stop auto-run", () => {
+test("queue start uses the retrying coordinator for transition control", () => {
   const serverJs = read("server.js");
   const block = serverJs.match(/async function runNextQueuedJob\(\) \{[\s\S]*?\n\}/);
 
   assert.ok(block, "runNextQueuedJob should exist");
-  assert.match(serverJs, /let queueStartInFlight\s*=\s*false/);
-  assert.match(block[0], /queueStartInFlight/);
-  assert.match(block[0], /finally/);
+  assert.match(serverJs, /createQueueCoordinator/);
+  assert.match(block[0], /queueCoordinator\.advanceNow\(\)/);
+  assert.match(serverJs, /queueCoordinator\.requestAdvance\(1000\)/);
+  assert.match(serverJs, /invalidateDetectedTrainingProcesses\(\)/);
+  assert.match(serverJs, /queueReconcileTimer/);
+});
+
+test("queue start can arm while an existing training process is still running", () => {
+  const serverJs = read("server.js");
+  const block = routeBlock(serverJs, "/api/queue/start");
+
+  assert.match(block, /queueAutoRunning\s*=\s*true/);
+  assert.match(block, /if \(runningTraining\)/);
+  assert.match(block, /queueCoordinator\.requestAdvance\(2000\)/);
+  assert.match(block, /waitingFor:\s*runningTraining/);
+  assert.doesNotMatch(block, /res\.status\(409\)/);
 });
 
 test("status changes broadcast a queue refresh to every websocket client", () => {

@@ -7,6 +7,7 @@ const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 const { createJobQueue } = require('./lib/jobQueue');
+const { createQueueCoordinator } = require('./lib/queueCoordinator');
 const { findAutoResumeSource } = require('./lib/autoResume');
 const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
@@ -182,6 +183,10 @@ const runningJobs = new Map();
 let detectedTrainingCache = { time: 0, jobs: new Map() };
 let detectedTrainingRefreshPromise = null;
 const DETECTED_TRAINING_CACHE_MS = 5000;
+
+function invalidateDetectedTrainingProcesses() {
+    detectedTrainingCache = { time: 0, jobs: new Map() };
+}
 
 // WebSocket clients per job
 const wsClients = new Map(); // jobName -> Set<ws>
@@ -592,7 +597,32 @@ const trainingQueue = createJobQueue({
     jobExists
 });
 let queueAutoRunning = false;
-let queueStartInFlight = false;
+
+const queueCoordinator = createQueueCoordinator({
+    isEnabled: () => queueAutoRunning,
+    getRunningJob: () => getRunningTrainingJobNameFresh(),
+    getNextJob: () => trainingQueue.getNext(),
+    startJob: (jobName) => startQueuedJob(jobName),
+    onQueueEmpty: () => {
+        queueAutoRunning = false;
+    },
+    onError: (err) => {
+        queueAutoRunning = false;
+        console.error(`[Queue] ${err.message}`);
+    },
+    retryDelayMs: 2000
+});
+
+// Reconcile an enabled queue whose active marker disappeared. This is a safety
+// net for missed process-close notifications and temporary process-detection
+// races; requestAdvance de-duplicates concurrent transition attempts.
+const queueReconcileTimer = setInterval(() => {
+    if (!queueAutoRunning) return;
+    const state = trainingQueue.getState();
+    if (state.active || state.items.length === 0) return;
+    queueCoordinator.requestAdvance(0);
+}, 5000);
+queueReconcileTimer.unref?.();
 
 function getRunningTrainingJobName() {
     for (const [name, job] of runningJobs.entries()) {
@@ -1785,6 +1815,7 @@ const GEN_SERVER_PORT = 5000; // Fixed port for now
 
 // Kill all running jobs when the Node server itself exits
 function killAllJobs() {
+    queueCoordinator.cancel();
     for (const [, job] of runningJobs) {
         if (job.pid) {
             try {
@@ -2078,6 +2109,7 @@ app.post('/api/jobs/:name/train/stop', async (req, res) => {
         }
 
         queueAutoRunning = false;
+        queueCoordinator.cancel();
         trainingQueue.clearActive(jobName);
         res.json({ success: true });
     } catch (err) {
@@ -2330,21 +2362,8 @@ async function startQueuedJob(jobName) {
 }
 
 async function runNextQueuedJob() {
-    if (!queueAutoRunning) return null;
-    if (queueStartInFlight) return null;
-    const runningTraining = await getRunningTrainingJobNameFresh();
-    if (runningTraining) return null;
-    const nextJob = trainingQueue.getNext();
-    if (!nextJob) {
-        queueAutoRunning = false;
-        return null;
-    }
-    queueStartInFlight = true;
-    try {
-        return await startQueuedJob(nextJob);
-    } finally {
-        queueStartInFlight = false;
-    }
+    const outcome = await queueCoordinator.advanceNow();
+    return outcome.started ? outcome.result : null;
 }
 
 app.get('/api/queue', (req, res) => {
@@ -2392,16 +2411,23 @@ app.post('/api/queue/jobs/:name/move', (req, res) => {
 app.post('/api/queue/start', async (req, res) => {
     try {
         const runningTraining = await getRunningTrainingJobNameFresh();
-        if (runningTraining) {
-            return res.status(409).json({ error: `Training job "${runningTraining}" is already running` });
-        }
-
         const state = trainingQueue.getState();
         if (state.active && !runningJobs.has(state.active)) {
             trainingQueue.clearActive(state.active);
         }
 
         queueAutoRunning = true;
+        if (runningTraining) {
+            queueCoordinator.requestAdvance(2000);
+            return res.json({
+                success: true,
+                started: false,
+                waitingFor: runningTraining,
+                queue: trainingQueue.getState(),
+                autoRunning: queueAutoRunning
+            });
+        }
+
         const result = await runNextQueuedJob();
         res.json({
             success: true,
@@ -2417,6 +2443,7 @@ app.post('/api/queue/start', async (req, res) => {
 app.post('/api/queue/stop', async (req, res) => {
     try {
         queueAutoRunning = false;
+        queueCoordinator.cancel();
         const stoppedJob = await stopRunningTrainingForQueue();
         res.json({
             success: true,
@@ -2558,19 +2585,16 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             logStream.end();
             runningJobs.delete(jobName);
             clearTrainingProcessState(jobName);
+            invalidateDetectedTrainingProcesses();
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 if (completedSuccessfully) {
                     trainingQueue.finishQueuedJob(jobName, { success: true });
                     broadcastStatus(jobName, 'completed');
-                    setTimeout(() => {
-                        runNextQueuedJob().catch(err => {
-                            queueAutoRunning = false;
-                            console.error(`[Queue] ${err.message}`);
-                        });
-                    }, 1000);
+                    queueCoordinator.requestAdvance(1000);
                 } else {
                     queueAutoRunning = false;
+                    queueCoordinator.cancel();
                     trainingQueue.finishQueuedJob(jobName, { success: false });
                     broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
                 }
@@ -2584,9 +2608,11 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
             if (!isPidAlive(proc.pid)) clearTrainingProcessState(jobName);
+            invalidateDetectedTrainingProcesses();
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 queueAutoRunning = false;
+                queueCoordinator.cancel();
                 trainingQueue.finishQueuedJob(jobName, { success: false });
                 broadcastStatus(jobName, stoppedByRequest ? 'stopped' : 'failed');
             } else {

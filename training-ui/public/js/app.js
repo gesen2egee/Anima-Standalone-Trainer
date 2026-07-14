@@ -1642,8 +1642,10 @@ async function runCurrentJobFromTopButton(warningMsg = "") {
         method: "POST",
       });
       showToast("Job added to queue");
-      await loadJobs();
     }
+    await api("/api/queue/start", { method: "POST" });
+    await loadJobs();
+    showToast("Queue started");
     return;
   }
 
