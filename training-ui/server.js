@@ -2107,6 +2107,7 @@ function buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfig
         trainCmd,
         baseTrainScript: buildShellScript(venv.activate, trainEnvVars, baseTrainCmd),
         trainScript: buildShellScript(venv.activate, trainEnvVars, trainCmd),
+        gpuIds: currentGpuIds,
         customCliArgs
     };
 }
@@ -2531,8 +2532,12 @@ app.post('/api/queue/stop', async (req, res) => {
 });
 
 app.post('/api/jobs/:name/train/start', async (req, res) => {
+    let spawnedProcess = null;
+    let processRegistered = false;
+    let startedJobName = null;
     try {
         const jobName = sanitizeName(req.params.name);
+        startedJobName = jobName;
         const fromQueue = req.body?.fromQueue === true;
         const jobPath = getJobPath(jobName);
         const configPath = path.join(jobPath, 'config.toml');
@@ -2598,7 +2603,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
 
         const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
         if (launch.error) return res.status(400).json({ error: launch.error });
-        const { trainScript } = launch;
+        const { trainScript, gpuIds } = launch;
 
         const scriptPath = path.join(jobPath, isWindows ? 'launch_command.ps1' : 'launch_command.sh');
         fs.writeFileSync(scriptPath, trainScript, 'utf8');
@@ -2607,6 +2612,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         console.log("----------------------------------------------\n");
 
         const proc = spawnShell(trainScript, ROOT_DIR);
+        spawnedProcess = proc;
 
         const logBuffer = [];
         const MAX_LOG_LINES = 5000;
@@ -2706,7 +2712,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             startTime,
             logBuffer,
             type: 'training',
-            gpuIds: currentGpuIds,
+            gpuIds,
             fromQueue
         });
         writeTrainingProcessState(jobName, {
@@ -2714,7 +2720,7 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             pid: proc.pid,
             startTime,
             type: 'training',
-            gpuIds: currentGpuIds,
+            gpuIds,
             fromQueue,
             mergedConfigPath
         });
@@ -2722,9 +2728,21 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         if (fromQueue) {
             trainingQueue.markActive(jobName);
         }
+        processRegistered = true;
         broadcastStatus(jobName, 'running');
         res.json({ success: true, pid: proc.pid });
     } catch (err) {
+        // Once spawn succeeds, never leave an untracked process behind. Otherwise
+        // the queue can retry the same job while the first process is still alive.
+        if (spawnedProcess && !processRegistered) {
+            console.error(`[Train] Registration failed after spawning ${startedJobName || 'unknown job'}: ${err.message}`);
+            await killProcess(spawnedProcess.pid, 0);
+            if (startedJobName) {
+                runningJobs.delete(startedJobName);
+                clearTrainingProcessState(startedJobName);
+            }
+            invalidateDetectedTrainingProcesses();
+        }
         res.status(500).json({ error: err.message });
     }
 });

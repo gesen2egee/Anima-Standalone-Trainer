@@ -42,3 +42,17 @@ test("training launch appends custom CLI args after the config file argument", (
   assert.match(helperBlock[0], /baseTrainCmd/);
   assert.match(helperBlock[0], /customCliArgs \? `\$\{baseTrainCmd\} \$\{customCliArgs\}` : baseTrainCmd/);
 });
+
+test("training start carries GPU IDs from launch config into registered process state", () => {
+  const serverJs = read("server.js");
+  const helperBlock = serverJs.match(/function buildTrainingLaunchCommand\([\s\S]*?\n\}/);
+  const startBlock = routeBlock(serverJs, "post", "/api/jobs/:name/train/start");
+
+  assert.ok(helperBlock, "buildTrainingLaunchCommand helper should exist");
+  assert.match(helperBlock[0], /gpuIds: currentGpuIds/);
+  assert.match(startBlock, /const \{ trainScript, gpuIds \} = launch/);
+  assert.match(startBlock, /gpuIds,\s*fromQueue/);
+  assert.doesNotMatch(startBlock, /gpuIds: currentGpuIds/);
+  assert.match(startBlock, /if \(spawnedProcess && !processRegistered\)/);
+  assert.match(startBlock, /await killProcess\(spawnedProcess\.pid, 0\)/);
+});
