@@ -701,11 +701,17 @@ def get_noisy_model_input_and_timesteps(
         sigmas = train_util.apply_flow_shift(sigmas, shift)
         sigmas = train_util.apply_uniform_folder_sampling(sigmas, folder_shifts)
         timesteps = sigmas * num_timesteps
-    elif args.timestep_sampling == "flux_shift":
+    elif args.timestep_sampling in ("flux_shift", "krea2_shift"):
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
-        mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
+        image_seq_len = (h // 2) * (w // 2)  # latents are packed into 2x2 image tokens
+        if args.timestep_sampling == "krea2_shift":
+            # Krea 2 interpolates its dynamic shift through 1280px / 6400 tokens,
+            # while the Flux schedule uses 1024px / 4096 tokens.
+            mu = get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(image_seq_len)
+        else:
+            mu = get_lin_function(y1=0.5, y2=1.15)(image_seq_len)
         sigmas = time_shift(mu, 1.0, sigmas)
         sigmas = train_util.apply_folder_timestep_sampling(
             sigmas, folder_shifts, folder_shift_progress=folder_shift_progress

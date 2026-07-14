@@ -340,57 +340,6 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     def cast_text_encoder(self, args):
         return False
 
-    @staticmethod
-    def _sample_timesteps(args, latents, device, alpha_masks=None):
-        height, width = latents.shape[-2:]
-        batch_size = latents.shape[0]
-        sampling = args.timestep_sampling
-
-        if sampling == "sigma":
-            sample = flux_train_utils.compute_density_for_timestep_sampling(
-                weighting_scheme=args.weighting_scheme,
-                batch_size=batch_size,
-                logit_mean=args.logit_mean,
-                logit_std=args.logit_std,
-                mode_scale=args.mode_scale,
-            ).to(device=device, dtype=torch.float32)
-        elif sampling == "uniform":
-            sample = torch.rand(batch_size, device=device, dtype=torch.float32)
-        else:
-            sample = torch.sigmoid(torch.randn(batch_size, device=device, dtype=torch.float32) * args.sigmoid_scale)
-
-        if sampling == "krea2_shift":
-            seq_len = (height // 2) * (width // 2)
-            mu = flux_train_utils.get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(seq_len)
-            sample = flux_train_utils.time_shift(mu, 1.0, sample)
-        elif sampling == "shift":
-            sample = flux_train_utils.time_shift(args.discrete_flow_shift, 1.0, sample)
-        elif sampling == "autoshift":
-            if alpha_masks is None:
-                raise ValueError("autoshift timestep sampling requires alpha masks")
-            shift = flux_train_utils.compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
-            sample = (sample * shift) / (1.0 + (shift - 1.0) * sample)
-        elif sampling == "autoshift_wavelet":
-            if alpha_masks is None:
-                raise ValueError("autoshift_wavelet timestep sampling requires alpha masks")
-            shift = flux_train_utils.compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
-            sample = (sample * shift) / (1.0 + (shift - 1.0) * sample)
-        elif sampling == "flux_shift":
-            seq_len = (height // 2) * (width // 2)
-            mu = flux_train_utils.get_lin_function(y1=0.5, y2=1.15)(seq_len)
-            sample = flux_train_utils.time_shift(mu, 1.0, sample)
-        elif sampling == "plora":
-            alpha = getattr(args, "p_lora_alpha", 1.0)
-            u = torch.rand(batch_size, device=device, dtype=torch.float32)
-            if getattr(args, "p_lora_bias", "left") == "left":
-                sample = 1.0 - torch.pow(u, 1.0 / (alpha + 1.0))
-            else:
-                sample = torch.pow(u, 1.0 / (alpha + 1.0))
-        elif sampling not in ("sigma", "uniform", "sigmoid"):
-            raise ValueError(f"Unsupported Krea 2 timestep sampling: {sampling}")
-
-        return sample
-
     def get_noise_pred_and_target(
         self,
         args,
@@ -412,15 +361,22 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
         latents = latents.to(accelerator.device, dtype=weight_dtype)
         noise = train_util.sample_training_noise(args, latents)
-        t = self._sample_timesteps(args, latents, accelerator.device, batch.get("alpha_masks"))
+        noisy, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+            args,
+            noise_scheduler,
+            latents,
+            noise,
+            accelerator.device,
+            weight_dtype,
+            batch.get("alpha_masks"),
+            folder_shifts=batch.get("folder_shifts"),
+            batch_timesteps=batch.get("timesteps"),
+            folder_shift_progress=batch.get("folder_shift_progress"),
+            automask_shift_values=batch.get("automask_shift_values"),
+        )
+        t = sigmas.reshape(sigmas.shape[0], -1)[:, 0].to(dtype=torch.float32)
         self.current_noise = noise
-        self.current_sigmas = t
-        # torch.lerp requires a tensor weight to use the same dtype as its
-        # BF16 inputs. Keep the canonical timestep in FP32 for scheduling and
-        # loss weighting, and cast only the broadcast weight used for mixing.
-        latent_mix = t.to(dtype=latents.dtype).view(-1, 1, 1, 1)
-        noisy = latents.lerp(noise, latent_mix)
-        timesteps = t * 1000.0 + 1.0
+        self.current_sigmas = sigmas
 
         ciop = self.sample_ciop_perturbations(args, noisy, is_train)
         if ciop is not None:
