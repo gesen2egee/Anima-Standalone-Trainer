@@ -647,7 +647,12 @@ def get_noisy_model_input_and_timesteps(
                     shift = compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
             else:
                 shift = torch.ones(bsz, device=device, dtype=dtype)
-            if folder_shifts is not None:
+            # Automask already provides a per-sample shift from pixel ratio or
+            # frequency. Regress that shift itself toward 1.0 during training.
+            if alpha_masks is not None:
+                shift = train_util.apply_shift_curriculum(shift, folder_shift_progress)
+            elif folder_shifts is not None:
+                # Without Automask, retain the folder HIGH/LOW fallback behavior.
                 shift = train_util.get_folder_shift_values(
                     folder_shifts,
                     bsz,
@@ -672,8 +677,8 @@ def get_noisy_model_input_and_timesteps(
                     device=device,
                     dtype=dtype,
                 )
-        # AUTOSHIFT keeps the per-sample sigmoid proposal. Folder HIGH/LOW labels
-        # replace the corresponding per-sample flow shift and follow the curriculum.
+        # AUTOSHIFT keeps the per-sample sigmoid proposal and applies the selected
+        # Automask or folder-derived flow shift for each sample.
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()

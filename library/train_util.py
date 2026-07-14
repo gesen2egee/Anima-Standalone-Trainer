@@ -253,6 +253,14 @@ def get_folder_shift_values(
     return values
 
 
+def apply_shift_curriculum(values: torch.Tensor, progress: Optional[float]) -> torch.Tensor:
+    """Linearly move per-sample flow shifts toward the neutral value 1.0."""
+    if progress is None:
+        return values
+    progress = max(0.0, min(1.0, float(progress)))
+    return 1.0 + (values - 1.0) * (1.0 - progress)
+
+
 def apply_flow_shift(values: torch.Tensor, shifts: torch.Tensor) -> torch.Tensor:
     return (values * shifts) / (1 + (shifts - 1) * values)
 
