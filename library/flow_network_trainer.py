@@ -2,7 +2,7 @@
 
 import argparse
 import math
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import torch
 
@@ -128,6 +128,7 @@ class FlowNetworkTrainerMixin:
         ciop_output: Optional[torch.Tensor] = None,
         folder_shifts: Optional[Sequence[str]] = None,
         folder_shift_progress: Optional[float] = None,
+        proposal_flow_shift: Optional[Union[float, torch.Tensor]] = None,
     ):
         target = self.apply_model_guidance_target(
             args, noise - latents, model_pred, model_pred_uncond, timestep_fractions
@@ -143,6 +144,7 @@ class FlowNetworkTrainerMixin:
             args=args,
             folder_shifts=folder_shifts,
             folder_shift_progress=folder_shift_progress,
+            proposal_flow_shift=proposal_flow_shift,
         )
         return target, weighting
 

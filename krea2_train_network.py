@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 import torch
 from accelerate import Accelerator
 
@@ -442,6 +443,15 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             t,
             model_pred_uncond=pred_uncond,
             ciop_output=ciop[1] if ciop is not None else None,
+            folder_shifts=batch.get("folder_shifts"),
+            folder_shift_progress=batch.get("folder_shift_progress"),
+            proposal_flow_shift=math.exp(
+                flux_train_utils.get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(
+                    (latents.shape[-2] // 2) * (latents.shape[-1] // 2)
+                )
+            )
+            if args.timestep_sampling == "krea2_shift"
+            else None,
         )
         return pred, target, timesteps, weighting
 

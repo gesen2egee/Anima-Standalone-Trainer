@@ -5,7 +5,7 @@ import gc
 import math
 import os
 import time
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -228,12 +228,66 @@ def compute_plora_proposal_density(
     return torch.where(mask, torch.ones_like(shifted_density), shifted_density)
 
 
+def compute_shifted_sigmoid_proposal_density(
+    sigmas: torch.Tensor,
+    sigmoid_scale: float,
+    base_shift: Union[float, torch.Tensor],
+    folder_shifts: Optional[Sequence[str]] = None,
+    folder_shift_progress: Optional[float] = None,
+) -> torch.Tensor:
+    """Return the density of a shifted logit-normal timestep proposal."""
+    sigmas = torch.clamp(sigmas.float(), min=1e-6, max=1.0 - 1e-6)
+    batch_size = sigmas.shape[0]
+    if torch.is_tensor(base_shift):
+        total_shifts = base_shift.to(device=sigmas.device, dtype=sigmas.dtype).reshape(-1)
+        if total_shifts.numel() == 1:
+            total_shifts = total_shifts.expand(batch_size)
+        elif total_shifts.numel() != batch_size:
+            raise ValueError(f"base_shift length ({total_shifts.numel()}) must match batch size ({batch_size})")
+    else:
+        total_shifts = torch.full((batch_size,), float(base_shift), device=sigmas.device, dtype=sigmas.dtype)
+
+    uniform_mask = torch.zeros(batch_size, device=sigmas.device, dtype=torch.bool)
+    if folder_shifts is not None:
+        if len(folder_shifts) != batch_size:
+            raise ValueError(f"folder_shifts length ({len(folder_shifts)}) must match batch size ({batch_size})")
+        folder_shift_values = train_util.get_folder_shift_values(
+            folder_shifts,
+            batch_size,
+            sigmas.device,
+            sigmas.dtype,
+            global_shift=1.0,
+            folder_shift_progress=folder_shift_progress,
+        )
+        total_shifts = total_shifts * folder_shift_values
+        uniform_mask = torch.tensor(
+            [train_util.normalize_folder_shift(value) == "uniform" for value in folder_shifts],
+            device=sigmas.device,
+            dtype=torch.bool,
+        )
+
+    view_shape = (-1, *([1] * (sigmas.ndim - 1)))
+    shifts = total_shifts.view(view_shape)
+    denominator = shifts - (shifts - 1.0) * sigmas
+    base_sigmas = torch.clamp(sigmas / denominator, min=1e-6, max=1.0 - 1e-6)
+    logit = torch.log(base_sigmas / (1.0 - base_sigmas))
+    scale = float(sigmoid_scale)
+    if scale <= 0.0:
+        raise ValueError("sigmoid_scale must be greater than 0 for shifted sigmoid proposal weighting")
+    base_density = torch.exp(-(logit**2) / (2.0 * scale**2)) / (
+        scale * math.sqrt(2.0 * math.pi) * base_sigmas * (1.0 - base_sigmas)
+    )
+    shifted_density = base_density * shifts / (denominator**2)
+    return torch.where(uniform_mask.view(view_shape), torch.ones_like(shifted_density), shifted_density)
+
+
 def compute_loss_weighting_for_anima(
     weighting_scheme: str,
     sigmas: torch.Tensor,
     args: Optional[argparse.Namespace] = None,
     folder_shifts: Optional[Sequence[str]] = None,
     folder_shift_progress: Optional[float] = None,
+    proposal_flow_shift: Optional[Union[float, torch.Tensor]] = None,
 ) -> torch.Tensor:
     """Compute loss weighting for Anima training."""
     sigmas_device = sigmas.device
@@ -271,6 +325,14 @@ def compute_loss_weighting_for_anima(
             F = getattr(args, "discrete_flow_shift", 1.0)
             # 原始 PDF
             q_t = 1.0 / (S_a * math.sqrt(2 * math.pi) * sigmas_clipped * (1.0 - sigmas_clipped)) * torch.exp(- ((l - math.log(F)) ** 2) / (2 * S_a ** 2))
+        elif sampling in ("flux_shift", "krea2_shift") and proposal_flow_shift is not None:
+            q_t = compute_shifted_sigmoid_proposal_density(
+                sigmas_f,
+                getattr(args, "sigmoid_scale", 1.0),
+                proposal_flow_shift,
+                folder_shifts=folder_shifts,
+                folder_shift_progress=folder_shift_progress,
+            )
         else:
             # uniform / none / sigma
             q_t = torch.ones_like(sigmas_clipped)

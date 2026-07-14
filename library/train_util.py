@@ -7505,14 +7505,15 @@ def wavelet_l2_loss(
 
 def ait_wavelet_loss(
     model_pred: torch.Tensor,
-    latents: torch.Tensor,
-    noise: torch.Tensor,
+    target: torch.Tensor,
     args=None,
 ):
-    latents = _match_latent_dims(latents, model_pred, "latents")
-    noise = _match_latent_dims(noise, model_pred, "noise")
-    z_pred = noise.float() - model_pred.float()
-    loss = (haar_dwt_2d(z_pred) - haar_dwt_2d(latents.float())) ** 2
+    target = _match_latent_dims(target, model_pred, "target")
+    # For the base flow target (noise - latents), this is mathematically
+    # equivalent to reconstructing the clean latent. Comparing against the
+    # finalized target also preserves Model Guidance, Differential Guidance,
+    # and CIOP target adjustments.
+    loss = (haar_dwt_2d(model_pred.float()) - haar_dwt_2d(target.float())) ** 2
     return loss * getattr(args, "wavelet_loss_weight", 1.0)
 
 
@@ -7559,9 +7560,7 @@ def conditional_loss(
         elif reduction == "sum":
             loss = torch.sum(loss)
     elif loss_type == "wavelet":
-        if latents is None or noise is None:
-            raise ValueError("AIT Wavelet loss requires latents and noise.")
-        loss = ait_wavelet_loss(model_pred, latents, noise, args)
+        loss = ait_wavelet_loss(model_pred, target, args)
         if reduction == "mean":
             loss = torch.mean(loss)
         elif reduction == "sum":
