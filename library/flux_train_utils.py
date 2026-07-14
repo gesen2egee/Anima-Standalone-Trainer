@@ -5,7 +5,7 @@ import numpy as np
 import toml
 import json
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 from accelerate import Accelerator, PartialState
@@ -587,7 +587,17 @@ def compute_spectrally_guided_sigmas(latents: torch.Tensor, device, kappa_min: f
 
 
 def get_noisy_model_input_and_timesteps(
-    args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype, alpha_masks: Optional[torch.Tensor] = None, folder_shifts: Optional[List[str]] = None, batch_timesteps: Optional[torch.Tensor] = None, folder_shift_progress: Optional[float] = None
+    args,
+    noise_scheduler,
+    latents: torch.Tensor,
+    noise: torch.Tensor,
+    device,
+    dtype,
+    alpha_masks: Optional[torch.Tensor] = None,
+    folder_shifts: Optional[List[str]] = None,
+    batch_timesteps: Optional[torch.Tensor] = None,
+    folder_shift_progress: Optional[float] = None,
+    automask_shift_values: Optional[Sequence[float]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
@@ -638,18 +648,24 @@ def get_noisy_model_input_and_timesteps(
             has_global_folder_shift = normalized_folder_shifts is None or any(
                 value == "global" for value in normalized_folder_shifts
             )
-            if alpha_masks is None and has_global_folder_shift:
-                raise ValueError("autoshift timestep sampling requires alpha masks; enable latent caching with Automask")
-            if alpha_masks is not None:
+            if alpha_masks is None and automask_shift_values is None and has_global_folder_shift:
+                raise ValueError("autoshift timestep sampling requires alpha masks or precomputed Automask shifts")
+            if automask_shift_values is not None:
+                shift = torch.as_tensor(automask_shift_values, device=device, dtype=dtype).reshape(-1)
+                if shift.numel() != bsz:
+                    raise ValueError(
+                        f"precomputed Automask shifts must match batch size: {shift.numel()} != {bsz}"
+                    )
+            elif alpha_masks is not None:
                 if args.timestep_sampling == "autoshift_wavelet":
                     shift = compute_autoshift_wavelet_flow_shift(latents, alpha_masks)
                 else:
                     shift = compute_autoshift_mask_flow_shift(alpha_masks, latents.device)
             else:
                 shift = torch.ones(bsz, device=device, dtype=dtype)
-            # Automask already provides a per-sample shift from pixel ratio or
-            # frequency. Regress that shift itself toward 1.0 during training.
-            if alpha_masks is not None:
+            # Automask binary values (or the continuous fallback) regress toward
+            # 1.0 during training when Shift Curriculum is enabled.
+            if automask_shift_values is not None or alpha_masks is not None:
                 shift = train_util.apply_shift_curriculum(shift, folder_shift_progress)
             elif folder_shifts is not None:
                 # Without Automask, retain the folder HIGH/LOW fallback behavior.

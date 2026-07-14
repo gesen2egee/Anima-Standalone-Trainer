@@ -273,6 +273,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             folder_shifts=batch.get("folder_shifts", None),
             batch_timesteps=batch.get("timesteps", None),
             folder_shift_progress=batch.get("folder_shift_progress", None),
+            automask_shift_values=batch.get("automask_shift_values", None),
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 

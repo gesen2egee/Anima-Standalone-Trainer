@@ -532,9 +532,11 @@ def train(args):
                 # Get noisy model input and timesteps
                 noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
                     args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype,
+                    alpha_masks=batch.get("alpha_masks", None),
                     folder_shifts=batch.get("folder_shifts", None),
                     batch_timesteps=batch.get("timesteps", None),
                     folder_shift_progress=batch.get("folder_shift_progress", None),
+                    automask_shift_values=batch.get("automask_shift_values", None),
                 )
                 noisy_model_input_4d = noisy_model_input
                 timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32

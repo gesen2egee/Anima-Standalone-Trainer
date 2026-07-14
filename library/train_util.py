@@ -95,6 +95,7 @@ HIGH_VRAM = False
 AUTOMASK_SETTINGS = AutomaskSettings()
 AUTOMASK_REMOVER = None
 AUTOMASK_REMOVER_MODEL = None
+AUTOMASK_SHIFT_MODE: Optional[str] = None
 
 # checkpointファイル名
 EPOCH_STATE_NAME = "{}-{:06d}-state"
@@ -122,6 +123,8 @@ def get_automask_settings_for_caching() -> AutomaskSettings:
 
 
 def configure_automask_from_args(args: argparse.Namespace):
+    global AUTOMASK_SHIFT_MODE
+    AUTOMASK_SHIFT_MODE = getattr(args, "timestep_sampling", None)
     settings = AutomaskSettings(
         enabled=bool(
             getattr(args, "automask", False)
@@ -259,6 +262,16 @@ def apply_shift_curriculum(values: torch.Tensor, progress: Optional[float]) -> t
         return values
     progress = max(0.0, min(1.0, float(progress)))
     return 1.0 + (values - 1.0) * (1.0 - progress)
+
+
+def build_binary_shift_values(scores: Dict[str, float]) -> Dict[str, float]:
+    """Split dataset scores into the nearest and farthest halves."""
+    ordered = sorted(scores.items(), key=lambda item: (float(item[1]), str(item[0])))
+    split_index = (len(ordered) + 1) // 2
+    return {
+        image_key: 0.5 if index < split_index else 1.5
+        for index, (image_key, _) in enumerate(ordered)
+    }
 
 
 def apply_flow_shift(values: torch.Tensor, shifts: torch.Tensor) -> torch.Tensor:
@@ -1064,6 +1077,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
         self.image_data: Dict[str, ImageInfo] = {}
         self.image_to_subset: Dict[str, Union[DreamBoothSubset, FineTuningSubset]] = {}
+        self.automask_binary_shift_mode: Optional[str] = None
+        self.automask_binary_shift_values: Dict[str, float] = {}
 
         self.replacements = {}
 
@@ -1142,12 +1157,84 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_max_train_steps(self, max_train_steps):
         self.max_train_steps = max_train_steps
+        self.prepare_automask_binary_shift_values()
 
     def get_folder_shift_progress(self) -> Optional[float]:
         if not self.folder_shift_curriculum or self.max_train_steps <= 0:
             return None
         denominator = max(int(self.max_train_steps) - 1, 1)
         return max(0.0, min(1.0, float(self.current_step) / float(denominator)))
+
+    def prepare_automask_binary_shift_values(self) -> None:
+        mode = AUTOMASK_SHIFT_MODE
+        if mode not in ("autoshift", "autoshift_wavelet"):
+            self.automask_binary_shift_mode = None
+            self.automask_binary_shift_values = {}
+            return
+        if self.automask_binary_shift_mode == mode and self.automask_binary_shift_values:
+            return
+
+        from library.flux_train_utils import compute_autoshift_mask_flow_shift, compute_autoshift_wavelet_flow_shift
+
+        scores: Dict[str, float] = {}
+        for image_key, info in self.image_data.items():
+            latents = info.latents
+            alpha_mask = info.alpha_mask
+            if info.latents_npz is not None and self.latents_caching_strategy is not None:
+                try:
+                    latents, _, _, _, alpha_mask = self.latents_caching_strategy.load_latents_from_disk(
+                        info.latents_npz, info.bucket_reso
+                    )
+                except Exception as e:
+                    logger.warning(f"failed to load Automask cache for binary shift: {info.absolute_path}: {e}")
+                    continue
+
+            if alpha_mask is None:
+                continue
+            alpha_mask = torch.as_tensor(alpha_mask, dtype=torch.float32)
+            while alpha_mask.ndim > 2 and alpha_mask.shape[0] == 1:
+                alpha_mask = alpha_mask.squeeze(0)
+
+            try:
+                if mode == "autoshift":
+                    shift = compute_autoshift_mask_flow_shift(alpha_mask.unsqueeze(0), torch.device("cpu"))[0]
+                else:
+                    if latents is None:
+                        continue
+                    latents = torch.as_tensor(latents, dtype=torch.float32)
+                    if latents.ndim == 3:
+                        latents = latents.unsqueeze(0)
+                    elif latents.ndim == 5:
+                        if latents.shape[0] == 1:
+                            latents = latents.squeeze(0)
+                        if latents.ndim == 5 and latents.shape[2] == 1:
+                            latents = latents.squeeze(2)
+                    if latents.ndim == 4 and latents.shape[1] == 1 and latents.shape[0] > 1:
+                        latents = latents.squeeze(1)
+                    if latents.ndim == 3:
+                        latents = latents.unsqueeze(0)
+                    shift = compute_autoshift_wavelet_flow_shift(latents, alpha_mask.unsqueeze(0))[0]
+                scores[image_key] = float(shift)
+            except Exception as e:
+                logger.warning(f"failed to calculate Automask binary shift for {info.absolute_path}: {e}")
+
+        if len(scores) != len(self.image_data):
+            logger.warning(
+                f"Automask binary shift requires scores for all samples; got {len(scores)}/{len(self.image_data)}, "
+                "falling back to continuous Automask shifts."
+            )
+            self.automask_binary_shift_mode = None
+            self.automask_binary_shift_values = {}
+            return
+
+        self.automask_binary_shift_mode = mode
+        self.automask_binary_shift_values = build_binary_shift_values(scores)
+        near_count = sum(value == 0.5 for value in self.automask_binary_shift_values.values())
+        far_count = sum(value == 1.5 for value in self.automask_binary_shift_values.values())
+        logger.info(
+            f"Automask binary shifts prepared for {len(scores)} samples ({mode}): "
+            f"near={near_count} shift=0.5, far={far_count} shift=1.5"
+        )
 
     def set_tag_frequency(self, dir_name, captions):
         frequency_for_dir = self.tag_frequency.get(dir_name, {})
@@ -2079,6 +2166,7 @@ class BaseDataset(torch.utils.data.Dataset):
         masked_images = []
 
         folder_shifts = []
+        automask_shift_values = []
         for image_key in bucket[image_index : image_index + bucket_batch_size]:
             image_info = self.image_data[image_key]
             subset = self.image_to_subset[image_key]
@@ -2092,6 +2180,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
             custom_attributes.append(subset.custom_attributes)
             folder_shifts.append(getattr(subset, "folder_shift", "global"))
+            if self.automask_binary_shift_values:
+                automask_shift_values.append(self.automask_binary_shift_values[image_key])
 
             # in case of fine tuning, is_reg is always False
             loss_weights.append(self.prior_loss_weight if image_info.is_reg else 1.0)
@@ -2305,6 +2395,8 @@ class BaseDataset(torch.utils.data.Dataset):
         example = {}
         example["custom_attributes"] = custom_attributes
         example["folder_shifts"] = folder_shifts  # may be list of empty dict
+        if self.automask_binary_shift_values:
+            example["automask_shift_values"] = automask_shift_values
         example["folder_shift_progress"] = self.get_folder_shift_progress()
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)

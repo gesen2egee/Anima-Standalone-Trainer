@@ -330,9 +330,11 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         # get noisy model input and timesteps
         noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype,
+            alpha_masks=batch.get("alpha_masks", None),
             folder_shifts=batch.get("folder_shifts", None),
             batch_timesteps=batch.get("timesteps", None),
             folder_shift_progress=batch.get("folder_shift_progress", None),
+            automask_shift_values=batch.get("automask_shift_values", None),
         )
         self.current_noise = noise
         self.current_noisy_latents = noisy_model_input
