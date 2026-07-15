@@ -195,6 +195,10 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             args.fp8_scaled,
             loading_device,
         )
+        bypass_weights = None
+        if args.krea2_bypass:
+            logger.info("Krea 2 bypass enabled; merging TextFusion adapter before training and sampling")
+            bypass_weights = [krea2_utils.load_krea2_bypass_lora(args.krea2_bypass_lora)]
         model = krea2_utils.load_krea2_dit(
             args.pretrained_model_name_or_path,
             device=accelerator.device,
@@ -203,6 +207,8 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             loading_device=loading_device,
             attn_mode=attn_mode,
             split_attn=args.split_attn,
+            lora_weights=bypass_weights,
+            lora_multipliers=[1.0] if bypass_weights else None,
         )
         if self.is_swapping_blocks:
             model.enable_block_swap(args.blocks_to_swap, accelerator.device)
@@ -744,6 +750,17 @@ def setup_parser() -> argparse.ArgumentParser:
         "--fp8_scaled",
         action="store_true",
         help="Load Krea 2 main blocks using dynamic scaled FP8",
+    )
+    parser.add_argument(
+        "--krea2_bypass",
+        action="store_true",
+        help="Merge the Krea 2 TextFusion refusal-reduction adapter into the base DiT before training and sampling",
+    )
+    parser.add_argument(
+        "--krea2_bypass_lora",
+        type=str,
+        default=krea2_utils.DEFAULT_KREA2_BYPASS_LORA_PATH,
+        help="Krea 2 TextFusion refusal-reduction LoRA path",
     )
     parser.add_argument(
         "--unsloth_offload_checkpointing",

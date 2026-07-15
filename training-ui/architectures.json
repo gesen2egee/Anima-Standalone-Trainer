@@ -151,6 +151,87 @@
       },
       "all_in_one": false,
       "fsdp_transformer_cls": "SingleStreamBlock"
+    },
+    "krea2_bypass": {
+      "display_name": "Krea 2 Bypass",
+      "supports_full_finetune": false,
+      "network_modules": ["networks.lora_krea2", "networks.lora_anima", "networks.loha", "networks.lokr", "networks.cdka", "networks.krona"],
+      "scripts": {
+        "train": "krea2_train_network.py",
+        "train_network": "krea2_train_network.py",
+        "generate": "krea2_generate_image.py"
+      },
+      "global_paths": {
+        "krea2_dit_path": {
+          "label": "Krea 2 DiT Model Path",
+          "placeholder": "D:\\Krea2\\diffusion_model.safetensors",
+          "cli_flag": "pretrained_model_name_or_path",
+          "gen_flag": "dit"
+        },
+        "krea2_text_encoder_path": {
+          "label": "Krea 2 Qwen3-VL Text Encoder Path",
+          "placeholder": "D:\\Krea2\\qwen3-vl-4b.safetensors",
+          "cli_flag": "krea2_text_encoder",
+          "gen_flag": "text_encoder"
+        },
+        "krea2_vae_path": {
+          "label": "Krea 2 VAE Path",
+          "placeholder": "D:\\Krea2\\qwen_image_vae.safetensors",
+          "cli_flag": "vae",
+          "gen_flag": "vae"
+        }
+      },
+      "gen_params": {
+        "steps": {"label": "Sampling Steps", "type": "number", "default": 28, "step": 1, "cli_flag": "steps"},
+        "guidance_scale": {"label": "Guidance Scale", "type": "number", "default": 5.5, "step": 0.1, "cli_flag": "guidance_scale"},
+        "width": {"label": "Width", "type": "number", "default": 1024, "step": 16, "cli_flag": "width"},
+        "height": {"label": "Height", "type": "number", "default": 1024, "step": 16, "cli_flag": "height"},
+        "y1": {"label": "Timestep Shift Min", "type": "number", "default": 0.5, "step": 0.05, "cli_flag": "y1"},
+        "y2": {"label": "Timestep Shift Max", "type": "number", "default": 1.15, "step": 0.05, "cli_flag": "y2"}
+      },
+      "training_section": "krea2_arguments",
+      "job_defaults": {
+        "training_arguments": {
+          "mixed_precision": "bf16",
+          "save_precision": "bf16",
+          "full_bf16": false,
+          "full_fp16": false,
+          "blocks_to_swap": 20,
+          "cache_latents": true,
+          "cache_latents_to_disk": true,
+          "cache_text_encoder_outputs_to_disk": false
+        },
+        "network_arguments": {
+          "network_module": "networks.cdka",
+          "network_train_unet_only": true,
+          "network_args": [
+            "exclude_patterns=[\".*\"]",
+            "include_patterns=[\".*(attn\\\\.(wv|wo)|self_attn\\\\.(v_proj|o_proj))\"]",
+            "allora=True"
+          ]
+        },
+        "krea2_arguments": {
+          "fp8_base": true,
+          "fp8_scaled": true,
+          "krea2_bypass": true,
+          "krea2_dynamic_text_encoder": true,
+          "krea2_dynamic_text_encoder_cpu": false,
+          "krea2_text_encoder_layer_offload": true,
+          "krea2_text_encoder_offload_percent": 1.0,
+          "timestep_sampling": "autoshift",
+          "discrete_flow_shift": 2.5,
+          "sigmoid_scale": 1.0,
+          "krea2_max_token_length": 512
+        }
+      },
+      "dataset_defaults": {
+        "min_bucket_reso": 256,
+        "max_bucket_reso": 768,
+        "resolution": 512,
+        "fad_timestep": false
+      },
+      "all_in_one": false,
+      "fsdp_transformer_cls": "SingleStreamBlock"
     }
   },
   "default_architecture": "anima"

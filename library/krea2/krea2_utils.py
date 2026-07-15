@@ -1,9 +1,11 @@
 """Shared loaders / helpers for the Krea 2 (K2) integration."""
 
 import logging
+import os
 from typing import Optional, Union
 
 import torch
+from safetensors.torch import load_file
 
 from library.krea2.krea2_encoder import (
     QWEN3_VL_4B_INSTRUCT_REPO_ID,
@@ -17,6 +19,39 @@ from library.lora_utils import load_safetensors_with_lora_and_fp8
 from library.safetensors_utils import load_safetensors
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_KREA2_BYPASS_LORA_PATH = (
+    r"D:\SDXL\ComfyUI_windows_portable\ComfyUI\models\loras\krea2\Krea2_TextFusion_Refusal_Reduction.safetensors"
+)
+
+
+def load_krea2_bypass_lora(path: str = DEFAULT_KREA2_BYPASS_LORA_PATH) -> dict[str, torch.Tensor]:
+    """Load the TextFusion bypass adapter and normalize AI Toolkit A/B keys for merging."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Krea 2 bypass LoRA not found: {path}")
+
+    source = load_file(path, device="cpu")
+    normalized: dict[str, torch.Tensor] = {}
+    for key, tensor in source.items():
+        if key.endswith(".lora_A.weight"):
+            key = key[: -len(".lora_A.weight")] + ".lora_down.weight"
+        elif key.endswith(".lora_B.weight"):
+            key = key[: -len(".lora_B.weight")] + ".lora_up.weight"
+        normalized[key] = tensor
+
+    down_modules = {key[: -len(".lora_down.weight")] for key in normalized if key.endswith(".lora_down.weight")}
+    up_modules = {key[: -len(".lora_up.weight")] for key in normalized if key.endswith(".lora_up.weight")}
+    if not down_modules or down_modules != up_modules:
+        missing_up = sorted(down_modules - up_modules)
+        missing_down = sorted(up_modules - down_modules)
+        raise ValueError(
+            "Invalid Krea 2 bypass LoRA: A/B pairs are incomplete "
+            f"(missing up={missing_up}, missing down={missing_down})"
+        )
+
+    logger.info("Loaded Krea 2 bypass LoRA from %s (%d modules)", path, len(down_modules))
+    return normalized
 
 
 # Dynamic fp8 quantization scope for the DiT: the per-block (SingleStreamBlock) attention

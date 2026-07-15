@@ -116,8 +116,8 @@ test("Krea 2 controls expose real token, Flow Shift, and Text Encoder behavior",
   assert.doesNotMatch(html, /value="lumina"/i);
   assert.match(html, /id="group-t5-max-tokens"/);
   assert.match(html, /id="krea2-dynamic-text-encoder-warning"/);
-  assert.match(appJs, /group-t5-max-tokens"\)\?\.classList\.toggle\("hidden", architecture === "krea2"\)/);
-  assert.match(appJs, /architecture === "krea2" \? "Qwen3-VL Max Tokens"/);
+  assert.match(appJs, /group-t5-max-tokens"\)\?\.classList\.toggle\("hidden", isKrea2Architecture\(architecture\)\)/);
+  assert.match(appJs, /isKrea2Architecture\(architecture\) \? "Qwen3-VL Max Tokens"/);
   assert.match(appJs, /\.\.\.\(!isKrea2 && \{[\s\S]*qwen3_max_token_length:[\s\S]*t5_max_token_length:/);
   assert.match(serverJs, /stripKrea2ShadowedAnimaArgs\(merged\.anima_arguments\)/);
   assert.match(appJs, /filterNetworkModuleOptions\(\$\("cfg-network-module"\), architecture\)/);
@@ -127,4 +127,8 @@ test("Krea 2 controls expose real token, Flow Shift, and Text Encoder behavior",
   assert.doesNotMatch(kreaTrainer, /args\.network_train_unet_only = True/);
   assert.match(kreaEncoder, /def set_gradient_enabled\(self, enabled: bool\)/);
   assert.doesNotMatch(kreaUtils, /@torch\.no_grad\(\)\s*\ndef get_krea2_prompt_embeds/);
+  assert.match(html, /option value="krea2_bypass">Krea 2 Bypass/);
+  assert.match(appJs, /krea2_bypass: modelArchitecture === "krea2_bypass"/);
+  assert.match(serverJs, /args\.push\('--krea2_bypass'\)/);
+  assert.match(kreaTrainer, /load_krea2_bypass_lora\(args\.krea2_bypass_lora\)/);
 });

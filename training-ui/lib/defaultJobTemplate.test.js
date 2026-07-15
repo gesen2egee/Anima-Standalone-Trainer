@@ -77,9 +77,9 @@ test("new job modal defaults to the template network module", () => {
   assert.match(newJobBlock[0], /\$\("new-job-network-module"\)\.value = "networks\.cdka"/);
 });
 
-test("architecture registry exposes only Anima and Krea 2 presets", () => {
+test("architecture registry exposes Anima, Krea 2, and Krea 2 Bypass presets", () => {
   const registry = JSON.parse(read("architectures.json"));
-  assert.deepStrictEqual(Object.keys(registry.architectures), ["anima", "krea2"]);
+  assert.deepStrictEqual(Object.keys(registry.architectures), ["anima", "krea2", "krea2_bypass"]);
 
   const anima = registry.architectures.anima;
   assert.strictEqual(anima.job_defaults.anima_arguments.timestep_sampling, "autoshift");
@@ -92,4 +92,10 @@ test("architecture registry exposes only Anima and Krea 2 presets", () => {
   assert.strictEqual(krea2.job_defaults.training_arguments.blocks_to_swap, 20);
   assert.strictEqual(krea2.dataset_defaults.resolution, 512);
   assert.match(krea2.job_defaults.network_arguments.network_args.join(" "), /self_attn/);
+
+  const bypass = registry.architectures.krea2_bypass;
+  assert.strictEqual(bypass.job_defaults.krea2_arguments.krea2_bypass, true);
+  assert.strictEqual(bypass.scripts.train_network, krea2.scripts.train_network);
+  assert.strictEqual(bypass.scripts.generate, krea2.scripts.generate);
+  assert.strictEqual(bypass.global_paths.krea2_dit_path.cli_flag, krea2.global_paths.krea2_dit_path.cli_flag);
 });

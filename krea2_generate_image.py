@@ -129,6 +129,8 @@ def parse_args():
     parser.add_argument("--attn_mode", default="torch", choices=["torch", "flash", "sageattn", "xformers"])
     parser.add_argument("--split_attn", action="store_true")
     parser.add_argument("--fp8_scaled", action="store_true")
+    parser.add_argument("--krea2_bypass", action="store_true")
+    parser.add_argument("--krea2_bypass_lora", default=krea2_utils.DEFAULT_KREA2_BYPASS_LORA_PATH)
     parser.add_argument("--blocks_to_swap", type=int, default=0)
     parser.add_argument("--lora_weight", nargs="*", default=None)
     parser.add_argument("--lora_multiplier", nargs="*", type=float, default=None)
@@ -163,11 +165,15 @@ def load_pipeline(args, load_encoder=True):
         raise ValueError(
             f"{args.network_module} must be merged before FP8 quantization; disable --fp8_scaled for this adapter"
         )
-    lora_weights = [loaded_adapters[index] for index in loadtime_adapter_indices] or None
+    lora_weights = [loaded_adapters[index] for index in loadtime_adapter_indices]
     lora_multipliers = [
         adapter_multipliers[index] if index < len(adapter_multipliers) else 1.0
         for index in loadtime_adapter_indices
     ]
+    if args.krea2_bypass:
+        logger.info("Krea 2 bypass enabled; merging TextFusion adapter before inference")
+        lora_weights.insert(0, krea2_utils.load_krea2_bypass_lora(args.krea2_bypass_lora))
+        lora_multipliers.insert(0, 1.0)
     dit = krea2_utils.load_krea2_dit(
         args.dit,
         device=device,
@@ -176,8 +182,8 @@ def load_pipeline(args, load_encoder=True):
         loading_device="cpu" if args.blocks_to_swap else device,
         attn_mode=args.attn_mode,
         split_attn=args.split_attn,
-        lora_weights=lora_weights,
-        lora_multipliers=lora_multipliers,
+        lora_weights=lora_weights or None,
+        lora_multipliers=lora_multipliers or None,
     ).eval().requires_grad_(False)
 
     if posthoc_adapter_indices:

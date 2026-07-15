@@ -97,12 +97,20 @@ function recordQueueEvent(type, details = {}) {
 // Load architecture registry
 const ARCH_REGISTRY = JSON.parse(fs.readFileSync(ARCHITECTURES_PATH, 'utf8'));
 
+function isKrea2Architecture(architectureId) {
+    return architectureId === 'krea2' || architectureId === 'krea2_bypass';
+}
+
 // Resolve architecture from a job config's network_module
 function getArchForJob(jobConfig) {
     const explicitArchitecture = jobConfig?.ui_arguments?.architecture || jobConfig?.model_architecture;
     if (explicitArchitecture && ARCH_REGISTRY.architectures[explicitArchitecture]) {
         const explicit = ARCH_REGISTRY.architectures[explicitArchitecture];
         return { id: explicitArchitecture, ...explicit };
+    }
+    if (jobConfig?.krea2_arguments?.krea2_bypass) {
+        const bypass = ARCH_REGISTRY.architectures.krea2_bypass;
+        return { id: 'krea2_bypass', ...bypass };
     }
     // An explicit Krea2 section takes precedence over shared network names
     // (lora_anima, LoKR, CDKA, and KRONA can all target Krea2 now).
@@ -142,7 +150,7 @@ function applyArchitectureJobDefaults(config, architectureId) {
     for (const [section, defaults] of Object.entries(architecture.job_defaults)) {
         config[section] = { ...(config[section] || {}), ...defaults };
     }
-    if (architectureId === 'krea2') stripKrea2ShadowedAnimaArgs(config.anima_arguments);
+    if (isKrea2Architecture(architectureId)) stripKrea2ShadowedAnimaArgs(config.anima_arguments);
 }
 
 function stripKrea2ShadowedAnimaArgs(animaArgs) {
@@ -279,9 +287,9 @@ function escapeRegExp(value) {
 }
 
 function buildArchitectureJobName(baseName, architectureId, existingNames = []) {
-    const suffix = architectureId === 'krea2' ? 'KREA 2' : 'ANIMA';
+    const suffix = architectureId === 'krea2_bypass' ? 'KREA 2 BYPASS' : architectureId === 'krea2' ? 'KREA 2' : 'ANIMA';
     const cleanBase = sanitizeName(String(baseName || 'my_job'))
-        .replace(/(?:_v\d+)?\s+(?:ANIMA|KREA\s*2)$/i, '')
+        .replace(/(?:_v\d+)?\s+(?:ANIMA|KREA\s*2(?:\s+BYPASS)?)$/i, '')
         .replace(/_v\d+$/i, '')
         .trim() || 'my_job';
     const pattern = new RegExp(`^${escapeRegExp(cleanBase)}(?:_v(\\d+))?(?:\\s+(?:ANIMA|KREA\\s*2))?$`, 'i');
@@ -1076,7 +1084,7 @@ function buildTrainingConfig(jobName, jobPath) {
         output_dir: outputDir,
         logging_dir: loggingDir
     };
-    if (arch.id === 'krea2') {
+    if (isKrea2Architecture(arch.id)) {
         delete merged.training_arguments.cpu_offload_checkpointing;
         delete merged.training_arguments.unsloth_offload_checkpointing;
         merged.training_arguments.torch_compile = false;
@@ -1159,7 +1167,7 @@ function buildTrainingConfig(jobName, jobPath) {
     if (jobConfig.anima_arguments) {
         merged.anima_arguments = { ...jobConfig.anima_arguments };
         normalizeAnimaArgs(merged);
-        if (arch.id === 'krea2') stripKrea2ShadowedAnimaArgs(merged.anima_arguments);
+        if (isKrea2Architecture(arch.id)) stripKrea2ShadowedAnimaArgs(merged.anima_arguments);
     }
 
     // Krea 2 uses the same shared DiT argument parser but has its own cache/token settings.
@@ -2510,7 +2518,10 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             req.body.network_weights = findLatestPeftPath(jobName);
         }
 
-        if (genArch.id === 'krea2') {
+        if (isKrea2Architecture(genArch.id)) {
+            if (genArch.id === 'krea2_bypass') {
+                args.push('--krea2_bypass');
+            }
             const blocksToSwap = Number(req.body.blocks_to_swap ?? tArgs.blocks_to_swap ?? 0);
             if (Number.isInteger(blocksToSwap) && blocksToSwap > 0) {
                 args.push(`--blocks_to_swap=${blocksToSwap}`);
