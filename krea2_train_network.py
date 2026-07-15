@@ -255,7 +255,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return [self.is_train_text_encoder(args)] * len(text_encoders)
 
     def is_text_encoder_not_needed_for_training(self, args):
-        return bool(args.cache_text_encoder_outputs)
+        # The UI can inject arbitrary prompts while training. Keep the cached
+        # encoder on CPU so those one-off prompts can still be encoded.
+        return bool(args.cache_text_encoder_outputs and not getattr(args, "runtime_control_file", None))
 
     @staticmethod
     def _needs_unconditional_conditioning(args) -> bool:
@@ -634,7 +636,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                 def get_condition(text):
                     # Text Encoder adapters must be sampled live; frozen/deleted
                     # encoders use the CPU cache prepared before training.
-                    if live_text_encoder is not None and self.is_train_text_encoder(args):
+                    if live_text_encoder is not None and (
+                        self.is_train_text_encoder(args) or getattr(self, "_runtime_sample_active", False)
+                    ):
                         hidden, mask = krea2_utils.get_krea2_prompt_embeds(live_text_encoder, [text])
                         return krea2_sampling.gather_valid_text(hidden, mask.bool())
                     return self._sample_prompt_conds.get(text)
@@ -666,6 +670,8 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                     steps=prompt_dict.get("sample_steps", 28),
                     cfg_scale=guidance_scale,
                     seed=seed,
+                    y1=float(prompt_dict.get("y1", 0.5)),
+                    y2=float(prompt_dict.get("y2", 1.15)),
                     mu=float(prompt_dict["flow_shift"]) if "flow_shift" in prompt_dict else None,
                 )
                 suffix = f"e{epoch:06d}" if epoch is not None else f"{global_step:06d}"

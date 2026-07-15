@@ -740,6 +740,30 @@ function findLatestPeftPath(jobName) {
     return candidates[0]?.path || '';
 }
 
+function writeRuntimeGenerationPrompt(jobName, body = {}) {
+    const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+    if (!clean(body.prompt)) return null;
+    const seed = body.seed_mode === 'random'
+        ? Math.floor(Math.random() * 2147483646) + 1
+        : Number.parseInt(body.seed, 10) || 1;
+    const width = Number.parseInt(body.width, 10) || 1024;
+    const height = Number.parseInt(body.height, 10) || 1024;
+    const steps = Number.parseInt(body.steps, 10) || 28;
+    const scale = Number.parseFloat(body.guidance_scale) || 5.5;
+    const flowShift = Number.parseFloat(body.flow_shift);
+    const y1 = Number.parseFloat(body.y1);
+    const y2 = Number.parseFloat(body.y2);
+    const negative = clean(body.negative_prompt);
+    const line = `${clean(body.prompt)} --w ${width} --h ${height} --s ${steps} --d ${seed} --l ${scale}`
+        + (negative ? ` --n ${negative}` : '')
+        + (Number.isFinite(flowShift) ? ` --fs ${flowShift}` : '')
+        + (Number.isFinite(y1) ? ` --y1 ${y1}` : '')
+        + (Number.isFinite(y2) ? ` --y2 ${y2}` : '');
+    const promptPath = path.join(getJobPath(jobName), 'runtime_generation_prompt.txt');
+    fs.writeFileSync(promptPath, `${line}\n`, 'utf8');
+    return { promptPath, seed };
+}
+
 const queueCoordinator = createQueueCoordinator({
     isEnabled: () => queueAutoRunning,
     getRunningJob: () => getRunningTrainingJobNameFresh(),
@@ -2379,7 +2403,25 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             if (!fs.existsSync(getRuntimeControlPath(jobName))) {
                 return res.status(409).json({ error: 'Restart training once to enable safe-step sampling' });
             }
-            updateRuntimeControl(jobName, { sample_requested: true });
+            const runtimePrompt = writeRuntimeGenerationPrompt(jobName, req.body || {});
+            if (!runtimePrompt) {
+                return res.status(400).json({ error: 'A positive prompt is required for an inserted training sample' });
+            }
+            const outputDir = path.resolve(getJobPath(jobName), 'output');
+            const requestedWeights = stripQuotes(req.body?.network_weights || '');
+            const resolvedWeights = requestedWeights ? path.resolve(requestedWeights) : '';
+            if (resolvedWeights && !resolvedWeights.startsWith(`${outputDir}${path.sep}`)) {
+                return res.status(400).json({ error: 'Training-time PEFT must be one of this job output saves' });
+            }
+            if (resolvedWeights && !fs.existsSync(resolvedWeights)) {
+                return res.status(400).json({ error: 'The selected training PEFT save no longer exists' });
+            }
+            updateRuntimeControl(jobName, {
+                sample_requested: true,
+                sample_prompts: runtimePrompt.promptPath,
+                network_weights: resolvedWeights,
+                network_multiplier: Number.parseFloat(req.body?.network_mul) || 1.0,
+            });
             broadcastStatus(jobName, 'sample-pending');
             return res.json({
                 success: true,
@@ -2409,20 +2451,9 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         let promptsPath = path.join(jobPath, 'sample_prompts.txt');
 
         if (typeof req.body.prompt === 'string' && req.body.prompt.trim()) {
-            const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
-            const seed = req.body.seed_mode === 'random'
-                ? Math.floor(Math.random() * 2147483646) + 1
-                : Number.parseInt(req.body.seed, 10) || 1;
-            const width = Number.parseInt(req.body.width, 10) || 1024;
-            const height = Number.parseInt(req.body.height, 10) || 1024;
-            const steps = Number.parseInt(req.body.steps, 10) || 28;
-            const scale = Number.parseFloat(req.body.guidance_scale) || 5.5;
-            const negative = clean(req.body.negative_prompt);
-            const line = `${clean(req.body.prompt)} --w ${width} --h ${height} --s ${steps} --d ${seed} --l ${scale}`
-                + (negative ? ` --n ${negative}` : '');
-            promptsPath = path.join(jobPath, 'runtime_generation_prompt.txt');
-            fs.writeFileSync(promptsPath, `${line}\n`, 'utf8');
-            req.body.seed = seed;
+            const runtimePrompt = writeRuntimeGenerationPrompt(jobName, req.body);
+            promptsPath = runtimePrompt.promptPath;
+            req.body.seed = runtimePrompt.seed;
         }
 
         if (!fs.existsSync(promptsPath) || fs.readFileSync(promptsPath, 'utf8').trim().length === 0) {

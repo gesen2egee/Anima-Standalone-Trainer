@@ -231,7 +231,9 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet):
         text_encoders = text_encoder if isinstance(text_encoder, list) else [text_encoder]  # compatibility
-        te = self.get_models_for_text_encoding(args, accelerator, text_encoders)
+        te = text_encoders if getattr(self, "_runtime_sample_active", False) else self.get_models_for_text_encoding(
+            args, accelerator, text_encoders
+        )
         qwen3_te = te[0] if te is not None else None
 
         text_encoding_strategy = strategy_base.TextEncodingStrategy.get_strategy()

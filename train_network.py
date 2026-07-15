@@ -249,14 +249,30 @@ class NetworkTrainer:
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizers[0], text_encoder, unet)
 
     def sample_images_immediately(
-        self, accelerator, args, global_step, device, vae, tokenizers, text_encoder, unet
+        self, accelerator, args, global_step, device, vae, tokenizers, text_encoder, unet, network, runtime_control
     ):
         """Run exactly one scheduled-sample pass at the next safe optimizer step."""
         original_every_steps = args.sample_every_n_steps
         original_every_epochs = args.sample_every_n_epochs
+        original_sample_prompts = args.sample_prompts
+        unwrapped_network = accelerator.unwrap_model(network)
+        selected_weights = runtime_control.get("network_weights")
+        original_multiplier = getattr(unwrapped_network, "multiplier", 1.0)
+        current_network_state = None
         try:
             args.sample_every_n_steps = 1
             args.sample_every_n_epochs = None
+            if runtime_control.get("sample_prompts"):
+                args.sample_prompts = runtime_control["sample_prompts"]
+                self._runtime_sample_active = True
+            if accelerator.is_main_process and selected_weights and os.path.isfile(selected_weights):
+                logger.info("Temporarily sampling PEFT weights: %s", selected_weights)
+                current_network_state = {
+                    key: value.detach().cpu().clone() for key, value in unwrapped_network.state_dict().items()
+                }
+                unwrapped_network.load_weights(selected_weights)
+                if hasattr(unwrapped_network, "set_multiplier"):
+                    unwrapped_network.set_multiplier(float(runtime_control.get("network_multiplier", 1.0)))
             self.sample_images(
                 accelerator,
                 args,
@@ -269,6 +285,12 @@ class NetworkTrainer:
                 unet,
             )
         finally:
+            if current_network_state is not None:
+                unwrapped_network.load_state_dict(current_network_state, strict=True)
+                if hasattr(unwrapped_network, "set_multiplier"):
+                    unwrapped_network.set_multiplier(original_multiplier)
+            self._runtime_sample_active = False
+            args.sample_prompts = original_sample_prompts
             args.sample_every_n_steps = original_every_steps
             args.sample_every_n_epochs = original_every_epochs
 
@@ -1738,6 +1760,8 @@ class NetworkTrainer:
                             tokenizers,
                             text_encoder,
                             unet,
+                            network,
+                            runtime_control,
                         )
                     else:
                         self.sample_images(

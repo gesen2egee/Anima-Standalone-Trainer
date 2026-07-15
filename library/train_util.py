@@ -7774,6 +7774,16 @@ def line_to_prompt_dict(line: str) -> dict:
                 prompt_dict["flow_shift"] = m.group(1)
                 continue
 
+            m = re.match(r"y1 ([\d\.]+)", parg, re.IGNORECASE)
+            if m:
+                prompt_dict["y1"] = float(m.group(1))
+                continue
+
+            m = re.match(r"y2 ([\d\.]+)", parg, re.IGNORECASE)
+            if m:
+                prompt_dict["y2"] = float(m.group(1))
+                continue
+
             m = re.match(r"am ([\d\.\-,]+)", parg, re.IGNORECASE)
             if m:  # additional network multiplier(s) — comma-separated list, same as gen_img.py
                 prompt_dict["additional_network_multiplier"] = [float(v) for v in m.group(1).split(",")]

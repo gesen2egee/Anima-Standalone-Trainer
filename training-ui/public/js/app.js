@@ -3757,15 +3757,24 @@ async function loadCheckpoints() {
   const pageSelect = $("generation-peft-select");
   const currentVal = select.value;
   const currentPageVal = pageSelect.value;
-  [select, pageSelect].forEach((target) => {
-    target.innerHTML = '<option value="">Base Model (No LoRA)</option>';
-    files.forEach((f) => {
+  select.innerHTML = '<option value="">Base Model (No LoRA)</option>';
+  files.forEach((f) => {
+    const opt = document.createElement("option");
+    opt.value = f.path;
+    opt.textContent = `${f.name} (${new Date(f.mtime).toLocaleString()})`;
+    select.appendChild(opt);
+  });
+  pageSelect.innerHTML = "";
+  files.forEach((f, index) => {
       const opt = document.createElement("option");
       opt.value = f.path;
-      opt.textContent = `${f.name} (${new Date(f.mtime).toLocaleString()})`;
-      target.appendChild(opt);
-    });
+      opt.textContent = `${index === 0 ? "最新｜" : ""}${f.name} (${new Date(f.mtime).toLocaleString()})`;
+      pageSelect.appendChild(opt);
   });
+  const currentWeightsOption = document.createElement("option");
+  currentWeightsOption.value = "";
+  currentWeightsOption.textContent = "目前訓練權重／Base Model";
+  pageSelect.appendChild(currentWeightsOption);
   // Restore selection if exists
   const data = localStorage.getItem(`prompt_transient_${currentJob}`);
   let savedLora = null;

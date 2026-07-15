@@ -1478,7 +1478,7 @@
                                 <div class="form-group">
                                     <label>PEFT／Checkpoint</label>
                                     <div class="generation-peft-row">
-                                        <select id="generation-peft-select"><option value="">Base Model</option></select>
+                                        <select id="generation-peft-select"><option value="">目前訓練權重／Base Model</option></select>
                                         <button id="generation-refresh-peft" class="btn btn-secondary" title="重新整理">🔄</button>
                                     </div>
                                 </div>
@@ -1487,7 +1487,7 @@
                                     <input id="generation-peft-multiplier" type="number" value="1" step="0.1">
                                 </div>
                                 <button id="generation-run" class="btn btn-primary generation-run-button">產生樣本</button>
-                                <small>訓練中會在下一個完整步驟使用目前權重與訓練 Prompts 採樣，不會中斷或額外存檔；此頁參數用於非訓練時產生樣本。</small>
+                                <small>此頁是獨立測圖路徑：訓練中會在下一個完整步驟插入本頁 Prompt 與參數，可暫時套用選定的中間 PEFT，完成後還原訓練權重；不影響 sample_prompts.txt 的定時採樣。</small>
                             </div>
                         </div>
                     </div>
