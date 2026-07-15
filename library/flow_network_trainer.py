@@ -2,11 +2,12 @@
 
 import argparse
 import math
+from contextlib import contextmanager
 from typing import Optional, Sequence, Union
 
 import torch
 
-from library import anima_train_utils, cdc_fm, qwen_image_autoencoder_kl, sd3_train_utils, train_util
+from library import anima_train_utils, cdc_fm, qwen_image_autoencoder_kl, sd3_train_utils, self_flow, train_util
 
 
 def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None:
@@ -30,6 +31,20 @@ def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None
     parser.add_argument("--cdc_cache_dir", type=str, default="tasks/cdc_cache")
     parser.add_argument("--cdc_cache_memory_entries", type=int, default=32)
     parser.add_argument("--cdc_force_recache", action="store_true")
+    parser.add_argument("--use_self_flow", action="store_true", help="enable Self-Flow dual-timestep self-distillation")
+    parser.add_argument("--self_flow_mask_ratio", type=float, default=0.25)
+    parser.add_argument("--self_flow_representation_weight", type=float, default=0.8)
+    parser.add_argument("--self_flow_ema_decay", type=float, default=0.9999)
+    parser.add_argument("--self_flow_student_layer", type=int, default=8)
+    parser.add_argument("--self_flow_teacher_layer", type=int, default=20)
+    parser.add_argument("--self_flow_projection_dim", type=int, default=768)
+    parser.add_argument("--self_flow_projection_lr", type=float, default=None)
+    parser.add_argument(
+        "--self_flow_save_ema",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="save EMA adapter parameters in inference checkpoints",
+    )
 
 
 class FlowNetworkTrainerMixin:
@@ -39,9 +54,15 @@ class FlowNetworkTrainerMixin:
         super().__init__(*args, **kwargs)
         self.global_step = 0
         self.cdc_geometry_cache = None
+        self.self_flow_ema = None
+        self.current_self_flow_representation_loss = None
 
     def step_logging(self, accelerator, logs, global_step, epoch):
         self.global_step = global_step
+        if self.current_self_flow_representation_loss is not None:
+            logs["self_flow/representation_loss"] = float(
+                self.current_self_flow_representation_loss.detach().float().item()
+            )
         super().step_logging(accelerator, logs, global_step, epoch)
 
     @staticmethod
@@ -60,6 +81,34 @@ class FlowNetworkTrainerMixin:
             raise ValueError("model_guidance_end_step must be greater than or equal to 0")
         if not 0.0 <= args.model_guidance_zero_init_threshold <= 1.0:
             raise ValueError("model_guidance_zero_init_threshold must be between 0.0 and 1.0")
+        if getattr(args, "use_self_flow", False):
+            if not args.network_train_unet_only or args.network_train_text_encoder_only:
+                raise ValueError("Self-Flow network training requires --network_train_unet_only")
+            if getattr(args, "use_cdc_fm", False):
+                raise ValueError("Self-Flow and CDC-FM alter the flow path and cannot be enabled together")
+            if not 0.0 < args.self_flow_mask_ratio <= 0.5:
+                raise ValueError("self_flow_mask_ratio must be in (0, 0.5]")
+            if args.self_flow_representation_weight < 0.0:
+                raise ValueError("self_flow_representation_weight must be greater than or equal to 0")
+            if not 0.0 <= args.self_flow_ema_decay < 1.0:
+                raise ValueError("self_flow_ema_decay must be in [0, 1)")
+            if args.self_flow_student_layer < 0 or args.self_flow_teacher_layer < 0:
+                raise ValueError("Self-Flow layer indices must be greater than or equal to 0")
+            if args.self_flow_student_layer >= args.self_flow_teacher_layer:
+                raise ValueError("Self-Flow student layer must be shallower than teacher layer")
+            if args.self_flow_projection_dim < 1:
+                raise ValueError("self_flow_projection_dim must be greater than 0")
+            if args.self_flow_projection_lr is not None and args.self_flow_projection_lr <= 0.0:
+                raise ValueError("self_flow_projection_lr must be greater than 0")
+            if args.network_dropout not in (None, 0.0):
+                raise ValueError("Self-Flow does not support network_dropout because the EMA teacher must be deterministic")
+            if getattr(args, "ip_noise_gamma", 0.0):
+                raise ValueError("Self-Flow does not support ip_noise_gamma because it changes the dual-timestep path")
+            for network_arg in args.network_args or []:
+                if network_arg.startswith(("rank_dropout=", "module_dropout=")):
+                    value = float(network_arg.split("=", 1)[1])
+                    if value != 0.0:
+                        raise ValueError("Self-Flow does not support rank_dropout or module_dropout")
         if getattr(args, "use_cdc_fm", False):
             if getattr(args, "knn_noise_k", 0) > 0:
                 raise ValueError("CDC-FM and KNN noise are mutually exclusive; set knn_noise_k to 0")
@@ -108,7 +157,74 @@ class FlowNetworkTrainerMixin:
         return train_util.apply_immiscible_image_scale(args, latents)
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
+        if getattr(args, "use_self_flow", False) and self.current_self_flow_representation_loss is not None:
+            loss = loss + args.self_flow_representation_weight * self.current_self_flow_representation_loss
         return loss
+
+    def post_process_network(self, args, accelerator, network, text_encoders, unet):
+        super().post_process_network(args, accelerator, network, text_encoders, unet)
+        if not getattr(args, "use_self_flow", False):
+            return
+        feature_dim = getattr(unet, "model_channels", None)
+        if feature_dim is None and hasattr(unet, "config"):
+            feature_dim = getattr(unet.config, "features", None)
+        if feature_dim is None:
+            raise ValueError("Self-Flow could not determine the DiT feature dimension")
+        block_count = len(getattr(unet, "blocks", ()))
+        if args.self_flow_teacher_layer >= block_count:
+            raise ValueError(
+                f"self_flow_teacher_layer={args.self_flow_teacher_layer} exceeds the {block_count}-block model"
+            )
+        projector = self_flow.ProjectionHead(feature_dim, args.self_flow_projection_dim)
+        projector.to(device=accelerator.device)
+        network.add_module(self_flow.PROJECTOR_MODULE_NAME, projector)
+
+    def on_network_weights_loaded(self, args, accelerator, network, text_encoders, unet):
+        super().on_network_weights_loaded(args, accelerator, network, text_encoders, unet)
+        if not getattr(args, "use_self_flow", False):
+            return
+        named_parameters = self_flow.dit_adapter_named_parameters(network)
+        self.self_flow_ema = self_flow.AdapterEMA(named_parameters, args.self_flow_ema_decay)
+        accelerator.register_for_checkpointing(self.self_flow_ema)
+
+    def get_additional_optimizer_params(self, args, network):
+        groups, descriptions = super().get_additional_optimizer_params(args, network)
+        if not getattr(args, "use_self_flow", False):
+            return groups, descriptions
+        projector = getattr(network, self_flow.PROJECTOR_MODULE_NAME)
+        lr = args.self_flow_projection_lr
+        if lr is None:
+            lr = args.unet_lr if args.unet_lr is not None else args.learning_rate
+        return list(groups) + [{"params": projector.parameters(), "lr": lr}], list(descriptions) + ["self-flow projector"]
+
+    def on_optimizer_step(self, args, accelerator, network):
+        super().on_optimizer_step(args, accelerator, network)
+        if getattr(args, "use_self_flow", False):
+            self.self_flow_ema.update()
+
+    def network_save_context(self, args, network):
+        if not getattr(args, "use_self_flow", False):
+            return super().network_save_context(args, network)
+        return self_flow.adapter_output_context(network, self.self_flow_ema, args.self_flow_save_ema)
+
+    @contextmanager
+    def self_flow_teacher_context(self, network, model=None):
+        """Use deterministic EMA adapter weights for the no-grad teacher pass."""
+
+        if self.self_flow_ema is None:
+            raise RuntimeError("Self-Flow EMA was not initialized")
+        was_training = network.training
+        model_was_training = model.training if model is not None else None
+        network.eval()
+        if model is not None:
+            model.eval()
+        try:
+            with self.self_flow_ema.apply():
+                yield
+        finally:
+            if model is not None:
+                model.train(model_was_training)
+            network.train(was_training)
 
     @staticmethod
     def sample_ciop_perturbations(args, reference: torch.Tensor, is_train: bool):
@@ -220,3 +336,11 @@ class FlowNetworkTrainerMixin:
         metadata["ss_cdc_gamma"] = getattr(args, "cdc_gamma", 0.0)
         metadata["ss_cdc_bandwidth_rescale"] = getattr(args, "cdc_bandwidth_rescale", 0.0)
         metadata["ss_cdc_min_bucket_size"] = getattr(args, "cdc_min_bucket_size", 0)
+        metadata["ss_use_self_flow"] = getattr(args, "use_self_flow", False)
+        metadata["ss_self_flow_mask_ratio"] = getattr(args, "self_flow_mask_ratio", 0.0)
+        metadata["ss_self_flow_representation_weight"] = getattr(args, "self_flow_representation_weight", 0.0)
+        metadata["ss_self_flow_ema_decay"] = getattr(args, "self_flow_ema_decay", 0.0)
+        metadata["ss_self_flow_student_layer"] = getattr(args, "self_flow_student_layer", 0)
+        metadata["ss_self_flow_teacher_layer"] = getattr(args, "self_flow_teacher_layer", 0)
+        metadata["ss_self_flow_projection_dim"] = getattr(args, "self_flow_projection_dim", 0)
+        metadata["ss_self_flow_save_ema"] = getattr(args, "self_flow_save_ema", False)

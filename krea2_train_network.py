@@ -9,7 +9,7 @@ import torch
 from accelerate import Accelerator
 
 import train_network
-from library import anima_train_utils, flow_network_trainer, flux_train_utils, qwen_image_autoencoder_kl, train_util
+from library import anima_train_utils, flow_network_trainer, flux_train_utils, qwen_image_autoencoder_kl, self_flow, train_util
 from library.device_utils import clean_memory_on_device
 from library.krea2 import krea2_sampling, krea2_utils
 from library.strategy_krea2 import (
@@ -426,6 +426,38 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             automask_shift_values=batch.get("automask_shift_values"),
         )
         t = sigmas.reshape(sigmas.shape[0], -1)[:, 0].to(dtype=torch.float32)
+        self.current_self_flow_representation_loss = None
+        self_flow_teacher_input = None
+        model_timesteps = (timesteps / 1000.0).to(device=accelerator.device)
+        if is_train and getattr(args, "use_self_flow", False):
+            _, _, second_sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+                args,
+                noise_scheduler,
+                latents,
+                noise,
+                accelerator.device,
+                weight_dtype,
+                batch.get("alpha_masks"),
+                folder_shifts=batch.get("folder_shifts"),
+                batch_timesteps=None,
+                folder_shift_progress=batch.get("folder_shift_progress"),
+                automask_shift_values=batch.get("automask_shift_values"),
+            )
+            patch = unet.config.patch
+            token_height = latents.shape[-2] // patch
+            token_width = latents.shape[-1] // patch
+            token_mask = self_flow.sample_dual_timestep_mask(
+                latents.shape[0], token_height, token_width, args.self_flow_mask_ratio, latents.device
+            )
+            token_sigmas = self_flow.mix_token_timesteps(sigmas, second_sigmas, token_mask)
+            latent_sigmas = self_flow.expand_token_grid(token_sigmas, patch).to(dtype=latents.dtype)
+            noisy = (1.0 - latent_sigmas) * latents + latent_sigmas * noise
+            teacher_sigmas = torch.minimum(
+                sigmas.reshape(sigmas.shape[0]), second_sigmas.reshape(second_sigmas.shape[0])
+            )
+            teacher_latent_sigmas = teacher_sigmas[:, None, None, None].to(dtype=latents.dtype)
+            self_flow_teacher_input = (1.0 - teacher_latent_sigmas) * latents + teacher_latent_sigmas * noise
+            model_timesteps = token_sigmas.flatten(1).to(dtype=torch.float32)
         cdc_result = self.apply_cdc_flow_path(args, batch, latents, noise, sigmas, is_train)
         cdc_target = None
         if cdc_result is not None:
@@ -445,20 +477,60 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             noisy.requires_grad_(True)
             prompt_embeds.requires_grad_(True)
 
-        def forward_model(model_input, context, context_mask):
+        def forward_model(
+            model_input,
+            context,
+            context_mask,
+            timestep_values,
+            conditioning_timestep=None,
+            return_hidden_at=None,
+        ):
             img, pos, mask = krea2_sampling.prepare(
                 model_input, context.shape[1], unet.config.patch, context_mask
             )
             return unet(
                 img=img.to(dtype=weight_dtype),
                 context=context,
-                t=(timesteps / 1000.0).to(device=accelerator.device),
+                t=timestep_values,
                 pos=pos,
                 mask=mask,
+                conditioning_t=conditioning_timestep,
+                return_hidden_at=return_hidden_at,
             )
 
+        if self_flow_teacher_input is not None:
+            if self.is_swapping_blocks:
+                unet.prepare_block_swap_before_forward()
+            with self.self_flow_teacher_context(accelerator.unwrap_model(network), unet):
+                with torch.no_grad(), accelerator.autocast():
+                    _, teacher_hidden = forward_model(
+                        self_flow_teacher_input,
+                        prompt_embeds,
+                        attn_mask,
+                        teacher_sigmas.to(dtype=torch.float32),
+                        conditioning_timestep=teacher_sigmas.to(dtype=torch.float32),
+                        return_hidden_at=args.self_flow_teacher_layer,
+                    )
+            if self.is_swapping_blocks:
+                unet.prepare_block_swap_before_forward()
         with torch.set_grad_enabled(is_train), accelerator.autocast():
-            pred = forward_model(noisy, prompt_embeds, attn_mask)
+            model_output = forward_model(
+                noisy,
+                prompt_embeds,
+                attn_mask,
+                model_timesteps,
+                conditioning_timestep=t,
+                return_hidden_at=args.self_flow_student_layer if self_flow_teacher_input is not None else None,
+            )
+        if self_flow_teacher_input is not None:
+            pred, student_hidden = model_output
+            projector = getattr(accelerator.unwrap_model(network), self_flow.PROJECTOR_MODULE_NAME)
+            with accelerator.autocast():
+                self.current_self_flow_representation_loss = self_flow.representation_loss(
+                    projector, student_hidden, teacher_hidden
+                )
+        else:
+            pred = model_output
 
         pred = self._unpatchify_prediction(pred, noisy, unet.config.patch, unet.config.channels)
 
@@ -479,7 +551,13 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             if self.is_swapping_blocks:
                 unet.prepare_block_swap_before_forward()
             with torch.no_grad(), accelerator.autocast():
-                pred_uncond = forward_model(noisy, unconditional_context, unconditional_mask)
+                pred_uncond = forward_model(
+                    noisy,
+                    unconditional_context,
+                    unconditional_mask,
+                    model_timesteps,
+                    conditioning_timestep=t,
+                )
             pred_uncond = self._unpatchify_prediction(
                 pred_uncond, noisy, unet.config.patch, unet.config.channels
             )

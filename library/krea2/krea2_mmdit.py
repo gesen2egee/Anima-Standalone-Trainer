@@ -49,8 +49,11 @@ def temb(
 ) -> Tensor:
     half = dim // 2
     freqs = torch.exp(-math.log(period) * torch.arange(half, dtype=torch.float32, device=device) / half)
-    # t: (B,) -> args: (B, 1, half), so the embedding broadcasts as a per-sample vec.
-    args = (t.float() * tfactor)[:, None, None] * freqs
+    if t.ndim == 1:
+        t = t[:, None]
+    if t.ndim != 2:
+        raise ValueError(f"Krea 2 timestep input must be [B] or [B, tokens], got {tuple(t.shape)}")
+    args = (t.float() * tfactor)[..., None] * freqs
     sin, cos = torch.sin(args), torch.cos(args)
     return torch.cat((cos, sin), dim=-1).to(dtype=dtype)
 
@@ -81,8 +84,8 @@ class SimpleModulation(torch.nn.Module):
 
     # vec (b d)
     def forward(self, vec: Tensor):
-        out = vec + rearrange(self.lin, "two d -> 1 two d")
-        scale, shift = out.chunk(self.multiplier, dim=1)
+        out = vec.unsqueeze(-2) + rearrange(self.lin, "two d -> 1 1 two d")
+        scale, shift = out.unbind(dim=-2)
         return scale, shift
 
 
@@ -423,6 +426,8 @@ class SingleStreamDiT(nn.Module):
         t: Tensor,
         pos: Tensor,
         mask: Tensor | None = None,
+        conditioning_t: Tensor | None = None,
+        return_hidden_at: int | None = None,
     ) -> Tensor:
         img = self.first(img)
         t = self.tmlp(temb(t, self.config.tdim, device=img.device, dtype=img.dtype))
@@ -432,6 +437,22 @@ class SingleStreamDiT(nn.Module):
         # The text-only key-padding mask is therefore the tail beyond the image tokens.
         imglen = img.shape[1]
         txtmask = mask[:, imglen:]  # (B, txt_len) bool
+
+        if t.shape[1] not in (1, imglen):
+            raise ValueError(f"Krea 2 received {t.shape[1]} timesteps for {imglen} image tokens")
+        if t.shape[1] == imglen:
+            if conditioning_t is None:
+                conditioning_t = t.mean(dim=1)
+            else:
+                conditioning_t = self.tmlp(
+                    temb(conditioning_t, self.config.tdim, device=img.device, dtype=img.dtype)
+                ).squeeze(1)
+            text_t = conditioning_t[:, None, :].expand(-1, context.shape[1], -1)
+            combined_t = torch.cat((t, text_t), dim=1)
+            text_tvec = self.tproj(conditioning_t)[:, None, :].expand(-1, context.shape[1], -1)
+            tvec = torch.cat((tvec, text_tvec), dim=1)
+        else:
+            combined_t = t
 
         # Text fusion is a self-attention over text tokens only (img_len=0). The per-layer
         # blocks see every token (no mask); the refiner masks padding via txtmask.
@@ -451,6 +472,9 @@ class SingleStreamDiT(nn.Module):
             combined = F.pad(combined, (0, 0, 0, padlen))
             pos = F.pad(pos, (0, 0, 0, padlen))
             txtmask = F.pad(txtmask, (0, padlen), value=False)
+            if tvec.shape[1] != 1:
+                tvec = F.pad(tvec, (0, 0, 0, padlen))
+                combined_t = F.pad(combined_t, (0, 0, 0, padlen))
 
         # Main blocks: bidirectional attention over [image (img_len, all valid) + text (padded)].
         # Image-first ordering keeps each sample's valid tokens a contiguous prefix, which the
@@ -459,6 +483,7 @@ class SingleStreamDiT(nn.Module):
 
         freqs = self.posemb(pos)
 
+        selected_hidden = None
         for index, block in enumerate(self.blocks):
             if self.blocks_to_swap:
                 self.offloader.wait_for_block(index)
@@ -468,10 +493,16 @@ class SingleStreamDiT(nn.Module):
             else:
                 combined = block(combined, tvec, freqs, attn_params)
 
+            if return_hidden_at == index:
+                selected_hidden = combined[:, :imglen, :]
+
             if self.blocks_to_swap:
                 self.offloader.submit_move_blocks(self.blocks, index)
 
-        final = self.last(combined, t)
+        final = self.last(combined, combined_t)
         output = final[:, :imglen, :]  # image tokens are the leading slice now
-
+        if return_hidden_at is not None:
+            if selected_hidden is None:
+                raise ValueError(f"Requested hidden layer {return_hidden_at}, but model has {len(self.blocks)} blocks")
+            return output, selected_hidden
         return output

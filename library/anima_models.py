@@ -565,8 +565,9 @@ class Timesteps(nn.Module):
         self.num_channels = num_channels
 
     def forward(self, timesteps_B_T: torch.Tensor) -> torch.Tensor:
-        assert timesteps_B_T.ndim == 2, f"Expected 2D input, got {timesteps_B_T.ndim}"
+        assert timesteps_B_T.ndim >= 2, f"Expected at least 2D input, got {timesteps_B_T.ndim}"
         in_dtype = timesteps_B_T.dtype
+        timestep_shape = timesteps_B_T.shape
         timesteps = timesteps_B_T.flatten().float()
         half_dim = self.num_channels // 2
         exponent = -math.log(10000) * torch.arange(half_dim, dtype=torch.float32, device=timesteps.device)
@@ -579,7 +580,7 @@ class Timesteps(nn.Module):
         cos_emb = torch.cos(emb)
         emb = torch.cat([cos_emb, sin_emb], dim=-1)
 
-        return rearrange(emb.to(dtype=in_dtype), "(b t) d -> b t d", b=timesteps_B_T.shape[0], t=timesteps_B_T.shape[1])
+        return emb.to(dtype=in_dtype).reshape(*timestep_shape, self.num_channels)
 
 
 class TimestepEmbedding(nn.Module):
@@ -738,6 +739,16 @@ def _modulate_adaln(
     return out.chunk(n_chunks, dim=-1)
 
 
+def _broadcast_timestep_modulation(value: torch.Tensor) -> torch.Tensor:
+    """Broadcast frame-level modulation or preserve a per-spatial-token grid."""
+
+    if value.ndim == 3:
+        return value[:, :, None, None, :]
+    if value.ndim == 5:
+        return value
+    raise ValueError(f"Expected timestep modulation with 3 or 5 dimensions, got {value.ndim}")
+
+
 # Final Layer
 class FinalLayer(nn.Module):
     """Final layer with AdaLN modulation + unpatchify."""
@@ -793,7 +804,7 @@ class FinalLayer(nn.Module):
 
         if self.use_adaln_lora:
             assert adaln_lora_B_T_3D is not None
-            lora_addend = adaln_lora_B_T_3D[:, :, : 2 * self.hidden_size]
+            lora_addend = adaln_lora_B_T_3D[..., : 2 * self.hidden_size]
             if do_fp32:
                 lora_addend = lora_addend.float()
         else:
@@ -803,8 +814,8 @@ class FinalLayer(nn.Module):
             self.adaln_modulation, emb_B_T_D, lora_addend, n_chunks=2, do_fp32=do_fp32
         )
 
-        shift_B_T_1_1_D = rearrange(shift_B_T_D, "b t d -> b t 1 1 d")
-        scale_B_T_1_1_D = rearrange(scale_B_T_D, "b t d -> b t 1 1 d")
+        shift_B_T_1_1_D = _broadcast_timestep_modulation(shift_B_T_D)
+        scale_B_T_1_1_D = _broadcast_timestep_modulation(scale_B_T_D)
 
         x_B_T_H_W_D = self.layer_norm(x_B_T_H_W_D) * (1 + scale_B_T_1_1_D) + shift_B_T_1_1_D
         x_B_T_H_W_O = self.linear(x_B_T_H_W_D)
@@ -945,18 +956,17 @@ class Block(nn.Module):
             self.adaln_modulation_mlp, emb_B_T_D, lora_addend, n_chunks=3, do_fp32=do_fp32
         )
 
-        # Reshape for broadcasting: (B, T, D) -> (B, T, 1, 1, D)
-        shift_self_attn_B_T_1_1_D = rearrange(shift_self_attn_B_T_D, "b t d -> b t 1 1 d")
-        scale_self_attn_B_T_1_1_D = rearrange(scale_self_attn_B_T_D, "b t d -> b t 1 1 d")
-        gate_self_attn_B_T_1_1_D = rearrange(gate_self_attn_B_T_D, "b t d -> b t 1 1 d")
+        shift_self_attn_B_T_1_1_D = _broadcast_timestep_modulation(shift_self_attn_B_T_D)
+        scale_self_attn_B_T_1_1_D = _broadcast_timestep_modulation(scale_self_attn_B_T_D)
+        gate_self_attn_B_T_1_1_D = _broadcast_timestep_modulation(gate_self_attn_B_T_D)
 
-        shift_cross_attn_B_T_1_1_D = rearrange(shift_cross_attn_B_T_D, "b t d -> b t 1 1 d")
-        scale_cross_attn_B_T_1_1_D = rearrange(scale_cross_attn_B_T_D, "b t d -> b t 1 1 d")
-        gate_cross_attn_B_T_1_1_D = rearrange(gate_cross_attn_B_T_D, "b t d -> b t 1 1 d")
+        shift_cross_attn_B_T_1_1_D = _broadcast_timestep_modulation(shift_cross_attn_B_T_D)
+        scale_cross_attn_B_T_1_1_D = _broadcast_timestep_modulation(scale_cross_attn_B_T_D)
+        gate_cross_attn_B_T_1_1_D = _broadcast_timestep_modulation(gate_cross_attn_B_T_D)
 
-        shift_mlp_B_T_1_1_D = rearrange(shift_mlp_B_T_D, "b t d -> b t 1 1 d")
-        scale_mlp_B_T_1_1_D = rearrange(scale_mlp_B_T_D, "b t d -> b t 1 1 d")
-        gate_mlp_B_T_1_1_D = rearrange(gate_mlp_B_T_D, "b t d -> b t 1 1 d")
+        shift_mlp_B_T_1_1_D = _broadcast_timestep_modulation(shift_mlp_B_T_D)
+        scale_mlp_B_T_1_1_D = _broadcast_timestep_modulation(scale_mlp_B_T_D)
+        gate_mlp_B_T_1_1_D = _broadcast_timestep_modulation(gate_mlp_B_T_D)
 
         B, T, H, W, D = x_B_T_H_W_D.shape
 
@@ -1350,6 +1360,7 @@ class Anima(nn.Module):
         source_attention_mask: Optional[torch.Tensor] = None,
         t5_input_ids: Optional[torch.Tensor] = None,
         t5_attn_mask: Optional[torch.Tensor] = None,
+        return_hidden_at: Optional[int] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -1395,17 +1406,25 @@ class Anima(nn.Module):
         # Determine whether to use float32 for block computations based on input dtype (use float32 for better stability when input is float16)
         use_fp32 = x_B_T_H_W_D.dtype == torch.float16
 
+        selected_hidden = None
         for block_idx, block in enumerate(self.blocks):
             if self.blocks_to_swap:
                 self.offloader.wait_for_block(block_idx)
 
             x_B_T_H_W_D = block(x_B_T_H_W_D, t_embedding_B_T_D, crossattn_emb, attn_params, use_fp32, **block_kwargs)
 
+            if return_hidden_at == block_idx:
+                selected_hidden = x_B_T_H_W_D
+
             if self.blocks_to_swap:
                 self.offloader.submit_move_blocks(self.blocks, block_idx)
 
         x_B_T_H_W_O = self.final_layer(x_B_T_H_W_D, t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D, use_fp32=use_fp32)
         x_B_C_Tt_Hp_Wp = self.unpatchify(x_B_T_H_W_O)
+        if return_hidden_at is not None:
+            if selected_hidden is None:
+                raise ValueError(f"Requested hidden layer {return_hidden_at}, but model has {len(self.blocks)} blocks")
+            return x_B_C_Tt_Hp_Wp, selected_hidden
         return x_B_C_Tt_Hp_Wp
 
     def forward(

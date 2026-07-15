@@ -551,6 +551,43 @@
                             </div>
                         </div>
 
+                        <h4 style="margin-top: 24px;">Self-Flow</h4>
+                        <small>ANIMA 與 KREA 2 的 Dual-Timestep 自監督 Flow Matching。僅支援 DiT adapter，與 CDC-FM、adapter dropout 互斥。</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-use-self-flow"> Enable Self-Flow</label>
+                            </div>
+                            <div class="form-group">
+                                <label>Mask Ratio</label>
+                                <input type="number" id="cfg-self-flow-mask-ratio" value="0.25" min="0.01" max="0.5" step="0.01">
+                            </div>
+                            <div class="form-group">
+                                <label>Representation Weight</label>
+                                <input type="number" id="cfg-self-flow-representation-weight" value="0.8" min="0" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label>EMA Decay</label>
+                                <input type="number" id="cfg-self-flow-ema-decay" value="0.9999" min="0" max="0.999999" step="0.0001">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Student Layer</label>
+                                <input type="number" id="cfg-self-flow-student-layer" value="8" min="0" max="27" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Teacher Layer</label>
+                                <input type="number" id="cfg-self-flow-teacher-layer" value="20" min="1" max="27" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Projection Dim</label>
+                                <input type="number" id="cfg-self-flow-projection-dim" value="768" min="1" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-self-flow-save-ema" checked> Save EMA Adapter</label>
+                            </div>
+                        </div>
+
                         <h4 style="margin-top: 24px;">Masking</h4>
                         <small>Alpha and generated mask controls. These affect dataset subsets and latent caching.</small>
                         <div class="form-row" style="margin-top: 12px;">
@@ -913,6 +950,7 @@
                                     <option value="networks.lora_anima">LoRA (Anima)</option>
                                     <option value="networks.lora_krea2">LoRA (Krea 2)</option>
                                     <option value="networks.lora">LoRA (Standard)</option>
+                                    <option value="networks.loha">LoHa</option>
                                     <option value="networks.lokr">LOKR (LOKR.PY)</option>
                                     <option value="networks.cdka">CDKA（學習力強）</option>
                                     <option value="networks.krona">KRONA（抗過擬合強）</option>
@@ -1557,6 +1595,7 @@ custom_cli_args = ""</textarea>
                     <option value="networks.lora_anima">LoRA (Anima)</option>
                     <option value="networks.lora_krea2">LoRA (Krea 2)</option>
                     <option value="networks.lora">LoRA (Standard)</option>
+                    <option value="networks.loha">LoHa</option>
                     <option value="networks.lokr">LOKR（LOKR.PY）</option>
                     <option value="networks.krona">KRONA（抗過擬合強）</option>
                     <option value="networks.cdka">CDKA（學習力強）</option>

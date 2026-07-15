@@ -1349,7 +1349,7 @@ app.post('/api/jobs', (req, res) => {
         }
         const supportedNetworkModules = [
             'networks.lora_anima', 'networks.lora_krea2',
-            'networks.lora', 'networks.lokr', 'networks.cdka', 'networks.krona'
+            'networks.lora', 'networks.loha', 'networks.lokr', 'networks.cdka', 'networks.krona'
         ];
         if (network_module && supportedNetworkModules.includes(network_module)) {
             config.network_arguments = config.network_arguments || {};

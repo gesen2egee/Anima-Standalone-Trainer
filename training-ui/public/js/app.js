@@ -94,8 +94,8 @@ function getArchitectureArguments(config, architecture) {
 function getArchitectureNetworkModules(architecture) {
   return archRegistry?.architectures?.[architecture]?.network_modules || (
     architecture === "krea2"
-      ? ["networks.lora_krea2", "networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"]
-      : ["networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"]
+      ? ["networks.lora_krea2", "networks.lora_anima", "networks.loha", "networks.lokr", "networks.cdka", "networks.krona"]
+      : ["networks.lora_anima", "networks.loha", "networks.lokr", "networks.cdka", "networks.krona"]
   );
 }
 
@@ -2061,6 +2061,14 @@ function populateConfig(config) {
   $("cfg-cdc-bandwidth-rescale").value = t.cdc_bandwidth_rescale ?? 1.0;
   $("cfg-cdc-min-bucket-size").value = t.cdc_min_bucket_size ?? 8;
   $("cfg-cdc-force-recache").checked = t.cdc_force_recache ?? false;
+  $("cfg-use-self-flow").checked = t.use_self_flow ?? false;
+  $("cfg-self-flow-mask-ratio").value = t.self_flow_mask_ratio ?? 0.25;
+  $("cfg-self-flow-representation-weight").value = t.self_flow_representation_weight ?? 0.8;
+  $("cfg-self-flow-ema-decay").value = t.self_flow_ema_decay ?? 0.9999;
+  $("cfg-self-flow-student-layer").value = t.self_flow_student_layer ?? 8;
+  $("cfg-self-flow-teacher-layer").value = t.self_flow_teacher_layer ?? 20;
+  $("cfg-self-flow-projection-dim").value = t.self_flow_projection_dim ?? 768;
+  $("cfg-self-flow-save-ema").checked = t.self_flow_save_ema ?? true;
   $("cfg-loss-type").value = t.loss_type || "l2";
   $("cfg-pnp-loss-weight").value = t.pnp_loss_weight ?? "";
   $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;
@@ -2474,6 +2482,7 @@ function gatherConfig() {
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
   const useCdcFm = $("cfg-use-cdc-fm").checked;
+  const useSelfFlow = $("cfg-use-self-flow").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2557,6 +2566,14 @@ function gatherConfig() {
       cdc_bandwidth_rescale: safeFloat($("cfg-cdc-bandwidth-rescale").value, 1.0),
       cdc_min_bucket_size: safeInt($("cfg-cdc-min-bucket-size").value, 8),
       cdc_force_recache: $("cfg-cdc-force-recache").checked,
+      use_self_flow: useSelfFlow,
+      self_flow_mask_ratio: safeFloat($("cfg-self-flow-mask-ratio").value, 0.25),
+      self_flow_representation_weight: safeFloat($("cfg-self-flow-representation-weight").value, 0.8),
+      self_flow_ema_decay: safeFloat($("cfg-self-flow-ema-decay").value, 0.9999),
+      self_flow_student_layer: safeInt($("cfg-self-flow-student-layer").value, 8),
+      self_flow_teacher_layer: safeInt($("cfg-self-flow-teacher-layer").value, 20),
+      self_flow_projection_dim: safeInt($("cfg-self-flow-projection-dim").value, 768),
+      self_flow_save_ema: $("cfg-self-flow-save-ema").checked,
       loss_type: $("cfg-loss-type").value,
       pnp_loss_weight: $("cfg-pnp-loss-weight").value !== "" ? safeFloat($("cfg-pnp-loss-weight").value) : 0.0,
       cwmi_lambda: safeFloat($("cfg-cwmi-lambda").value),
@@ -2699,8 +2716,8 @@ function gatherConfig() {
           network_module: $("cfg-network-module").value,
           network_dim: safeInt($("cfg-network-dim").value),
           network_alpha: safeInt($("cfg-network-alpha").value),
-          network_train_unet_only: $("cfg-unet-only").checked,
-          ...(safeFloat($("cfg-network-dropout").value) > 0 && {
+          network_train_unet_only: useSelfFlow || $("cfg-unet-only").checked,
+          ...(!useSelfFlow && safeFloat($("cfg-network-dropout").value) > 0 && {
             network_dropout: safeFloat($("cfg-network-dropout").value),
           }),
           ...($("cfg-network-args").value.trim() && {
@@ -5806,9 +5823,16 @@ async function init() {
   // an exact geometry correction from that source. They cannot share a path.
   $("cfg-use-cdc-fm").addEventListener("change", (event) => {
     if (!event.target.checked) return;
+    $("cfg-use-self-flow").checked = false;
     $("cfg-knn-noise-k").value = 0;
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
+  });
+  $("cfg-use-self-flow").addEventListener("change", (event) => {
+    if (!event.target.checked) return;
+    $("cfg-use-cdc-fm").checked = false;
+    $("cfg-unet-only").checked = true;
+    $("cfg-network-dropout").value = 0;
   });
   $("cfg-knn-noise-k").addEventListener("input", (event) => {
     if (safeInt(event.target.value, 0) > 0) {

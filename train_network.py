@@ -9,6 +9,7 @@ import sys
 import random
 import time
 import json
+from contextlib import nullcontext
 from multiprocessing import Value
 import numpy as np
 
@@ -251,6 +252,22 @@ class NetworkTrainer:
 
     def post_process_network(self, args, accelerator, network, text_encoders, unet):
         pass
+
+    def on_network_weights_loaded(self, args, accelerator, network, text_encoders, unet):
+        """Hook invoked after optional adapter weights have been restored."""
+        pass
+
+    def get_additional_optimizer_params(self, args, network):
+        """Return architecture-owned optimizer groups and their descriptions."""
+        return [], []
+
+    def on_optimizer_step(self, args, accelerator, network):
+        """Hook invoked after a synchronized, non-skipped optimizer update."""
+        pass
+
+    def network_save_context(self, args, network):
+        """Context used while writing an inference adapter checkpoint."""
+        return nullcontext()
 
     def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device) -> Any:
         noise_scheduler = DDPMScheduler(
@@ -819,6 +836,8 @@ class NetworkTrainer:
             info = network.load_weights(args.network_weights)
             accelerator.print(f"load network weights from {args.network_weights}: {info}")
 
+        self.on_network_weights_loaded(args, accelerator, network, text_encoders, unet)
+
         if args.gradient_checkpointing:
             if args.cpu_offload_checkpointing:
                 unet.enable_gradient_checkpointing(cpu_offload=True)
@@ -859,6 +878,12 @@ class NetworkTrainer:
         except TypeError as e:
             trainable_params = network.prepare_optimizer_params(text_encoder_lr, args.unet_lr)
             lr_descriptions = None
+
+        additional_params, additional_descriptions = self.get_additional_optimizer_params(args, network)
+        if additional_params:
+            trainable_params = list(trainable_params) + list(additional_params)
+            if lr_descriptions is not None:
+                lr_descriptions = list(lr_descriptions) + list(additional_descriptions)
 
         # if len(trainable_params) == 0:
         #     accelerator.print("no trainable parameters found / 学習可能なパラメータが見つかりませんでした")
@@ -1423,7 +1448,8 @@ class NetworkTrainer:
             sai_metadata = self.get_sai_model_spec(args)
             metadata_to_save.update(sai_metadata)
 
-            unwrapped_nw.save_weights(ckpt_file, save_dtype, metadata_to_save)
+            with self.network_save_context(args, unwrapped_nw):
+                unwrapped_nw.save_weights(ckpt_file, save_dtype, metadata_to_save)
             if args.huggingface_repo_id is not None:
                 huggingface_util.upload(args, ckpt_file, "/" + ckpt_name, force_sync_upload=force_sync_upload)
 
@@ -1588,6 +1614,11 @@ class NetworkTrainer:
                             network.update_norms()
 
                     optimizer.step()
+                    if (
+                        accelerator.sync_gradients
+                        and not getattr(accelerator, "optimizer_step_was_skipped", False)
+                    ):
+                        self.on_optimizer_step(args, accelerator, accelerator.unwrap_model(network))
                     lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
 

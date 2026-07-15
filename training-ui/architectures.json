@@ -2,7 +2,7 @@
   "architectures": {
     "anima": {
       "display_name": "Anima",
-      "network_modules": ["networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"],
+      "network_modules": ["networks.lora_anima", "networks.loha", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "anima_train.py",
         "train_network": "anima_train_network.py",
@@ -75,7 +75,7 @@
     "krea2": {
       "display_name": "Krea 2",
       "supports_full_finetune": false,
-      "network_modules": ["networks.lora_krea2", "networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"],
+      "network_modules": ["networks.lora_krea2", "networks.lora_anima", "networks.loha", "networks.lokr", "networks.cdka", "networks.krona"],
       "scripts": {
         "train": "krea2_train_network.py",
         "train_network": "krea2_train_network.py",

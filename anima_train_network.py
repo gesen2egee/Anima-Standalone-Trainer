@@ -17,6 +17,7 @@ from library import (
     flow_network_trainer,
     flux_train_utils,
     qwen_image_autoencoder_kl,
+    self_flow,
     strategy_anima,
     strategy_base,
     train_util,
@@ -162,7 +163,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return strategy_anima.AnimaTextEncodingStrategy()
 
     def post_process_network(self, args, accelerator, network, text_encoders, unet):
-        pass
+        super().post_process_network(args, accelerator, network, text_encoders, unet)
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
         if args.cache_text_encoder_outputs:
@@ -279,6 +280,39 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
+        self.current_self_flow_representation_loss = None
+        self_flow_teacher_input = None
+        model_timesteps = timesteps
+        if is_train and getattr(args, "use_self_flow", False):
+            _, _, second_sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+                args,
+                noise_scheduler,
+                latents,
+                noise,
+                accelerator.device,
+                weight_dtype,
+                batch.get("alpha_masks"),
+                folder_shifts=batch.get("folder_shifts", None),
+                batch_timesteps=None,
+                folder_shift_progress=batch.get("folder_shift_progress", None),
+                automask_shift_values=batch.get("automask_shift_values", None),
+            )
+            patch = anima.patch_spatial
+            token_height = latents.shape[-2] // patch
+            token_width = latents.shape[-1] // patch
+            token_mask = self_flow.sample_dual_timestep_mask(
+                latents.shape[0], token_height, token_width, args.self_flow_mask_ratio, latents.device
+            )
+            token_sigmas = self_flow.mix_token_timesteps(sigmas, second_sigmas, token_mask)
+            latent_sigmas = self_flow.expand_token_grid(token_sigmas, patch).to(dtype=latents.dtype)
+            noisy_model_input = (1.0 - latent_sigmas) * latents + latent_sigmas * noise
+            teacher_sigmas = torch.minimum(
+                sigmas.reshape(sigmas.shape[0]), second_sigmas.reshape(second_sigmas.shape[0])
+            )
+            teacher_latent_sigmas = teacher_sigmas[:, None, None, None].to(dtype=latents.dtype)
+            self_flow_teacher_input = (1.0 - teacher_latent_sigmas) * latents + teacher_latent_sigmas * noise
+            model_timesteps = token_sigmas.to(dtype=torch.float32)
+
         cdc_result = self.apply_cdc_flow_path(args, batch, latents, noise, sigmas, is_train)
         cdc_target = None
         if cdc_result is not None:
@@ -318,16 +352,44 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
         # Call model
         noisy_model_input = noisy_model_input.unsqueeze(2)  # 4D to 5D, [B, C, H, W] -> [B, C, 1, H, W]
+        if self_flow_teacher_input is not None:
+            teacher_input = self_flow_teacher_input.unsqueeze(2)
+            if self.is_swapping_blocks:
+                anima.prepare_block_swap_before_forward()
+            with self.self_flow_teacher_context(accelerator.unwrap_model(network), anima):
+                with torch.no_grad(), accelerator.autocast():
+                    _, teacher_hidden = anima(
+                        teacher_input,
+                        teacher_sigmas.to(dtype=torch.float32),
+                        prompt_embeds,
+                        padding_mask=padding_mask,
+                        target_input_ids=t5_input_ids,
+                        target_attention_mask=t5_attn_mask,
+                        source_attention_mask=attn_mask,
+                        return_hidden_at=args.self_flow_teacher_layer,
+                    )
+            if self.is_swapping_blocks:
+                anima.prepare_block_swap_before_forward()
         with torch.set_grad_enabled(is_train), accelerator.autocast():
-            model_pred = anima(
+            model_output = anima(
                 noisy_model_input,
-                timesteps,
+                model_timesteps,
                 prompt_embeds,
                 padding_mask=padding_mask,
                 target_input_ids=t5_input_ids,
                 target_attention_mask=t5_attn_mask,
                 source_attention_mask=attn_mask,
+                return_hidden_at=args.self_flow_student_layer if self_flow_teacher_input is not None else None,
             )
+        if self_flow_teacher_input is not None:
+            model_pred, student_hidden = model_output
+            projector = getattr(accelerator.unwrap_model(network), self_flow.PROJECTOR_MODULE_NAME)
+            with accelerator.autocast():
+                self.current_self_flow_representation_loss = self_flow.representation_loss(
+                    projector, student_hidden, teacher_hidden
+                )
+        else:
+            model_pred = model_output
         model_pred = model_pred.squeeze(2)  # 5D to 4D, [B, C, 1, H, W] -> [B, C, H, W]
 
         model_pred_uncond = None
@@ -341,10 +403,12 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             t5_attn_mask_uncond[:, 0] = 1
 
             # unconditional forward pass
+            if self.is_swapping_blocks:
+                anima.prepare_block_swap_before_forward()
             with torch.no_grad(), accelerator.autocast():
                 model_pred_uncond = anima(
                     noisy_model_input,
-                    timesteps,
+                    model_timesteps,
                     prompt_embeds_uncond,
                     padding_mask=padding_mask,
                     target_input_ids=t5_input_ids_uncond,
