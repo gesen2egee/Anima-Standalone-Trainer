@@ -2783,13 +2783,15 @@ function gatherDataset() {
               fad_timestep: s.fad_timestep,
               folder_shift: s.folder_shift || "global",
             };
-            if (s.is_reg) subset.is_reg = true;
+            subset.is_reg = s.is_reg === true;
             if ($("cfg-automask").checked) {
               subset.alpha_mask = true;
             } else if (alphaMaskTouched) {
-              if ($("cfg-alpha-mask").checked) subset.alpha_mask = true;
+              subset.alpha_mask = $("cfg-alpha-mask").checked;
             } else if (s.alpha_mask) {
               subset.alpha_mask = true;
+            } else {
+              subset.alpha_mask = false;
             }
             return subset;
           }),

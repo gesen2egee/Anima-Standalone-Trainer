@@ -4,7 +4,7 @@ from library import anima_models
 from library.custom_train_functions import apply_masked_loss
 
 
-def test_apply_masked_loss_accepts_5d_anima_loss_with_alpha_mask():
+def test_apply_masked_loss_normalizes_5d_anima_loss_by_mask_mean():
     loss = torch.ones(2, 3, 1, 4, 4)
     alpha = torch.zeros(2, 4, 4)
     alpha[:, 1:3, 1:3] = 1.0
@@ -13,7 +13,9 @@ def test_apply_masked_loss_accepts_5d_anima_loss_with_alpha_mask():
 
     assert masked.shape == loss.shape
     assert torch.equal(masked[:, :, :, 0, 0], torch.zeros_like(masked[:, :, :, 0, 0]))
-    assert torch.equal(masked[:, :, :, 1, 1], torch.ones_like(masked[:, :, :, 1, 1]))
+    # The active region covers 4 / 16 pixels, so its weight is normalized to 4.
+    assert torch.equal(masked[:, :, :, 1, 1], torch.full_like(masked[:, :, :, 1, 1], 4.0))
+    assert torch.allclose(masked.mean(dim=(1, 2, 3, 4)), torch.ones(loss.shape[0]))
 
 
 def test_adaln_fp32_helper_returns_fp32_for_stock_linear():

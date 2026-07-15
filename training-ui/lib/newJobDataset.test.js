@@ -5,6 +5,7 @@ const path = require("path");
 const test = require("node:test");
 
 const { buildNewJobSubsets } = require("./newJobDataset");
+const { mergeDatasetConfigPreservingUnknown } = require("./datasetConfigMerge");
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "anima-new-job-dataset-"));
@@ -99,4 +100,46 @@ test("single folder keeps current folder when it has direct images", () => {
 
   assert.strictEqual(subsets.length, 1);
   assert.strictEqual(subsets[0].image_dir, root);
+});
+
+test("dataset UI updates preserve unsupported TOML fields", () => {
+  const existing = {
+    custom_root: "keep-root",
+    general: { enable_bucket: true, custom_general: 7 },
+    datasets: [{
+      resolution: [768, 768],
+      batch_size: 1,
+      custom_dataset: "keep-dataset",
+      subsets: [
+        { image_dir: "D:/images/a", num_repeats: 1, caption_suffix: "quality", custom_subset: 9, is_reg: true },
+        { image_dir: "D:/images/remove", num_repeats: 1, custom_subset: "removed" },
+      ],
+    }],
+  };
+  const fromUi = {
+    general: { enable_bucket: false },
+    datasets: [{
+      resolution: [768, 768],
+      batch_size: 2,
+      subsets: [{
+        image_dir: "D:/images/a",
+        num_repeats: 4,
+        is_reg: false,
+        alpha_mask: false,
+      }],
+    }],
+  };
+
+  const merged = mergeDatasetConfigPreservingUnknown(existing, fromUi);
+
+  assert.strictEqual(merged.custom_root, "keep-root");
+  assert.strictEqual(merged.general.custom_general, 7);
+  assert.strictEqual(merged.general.enable_bucket, false);
+  assert.strictEqual(merged.datasets[0].custom_dataset, "keep-dataset");
+  assert.strictEqual(merged.datasets[0].batch_size, 2);
+  assert.strictEqual(merged.datasets[0].subsets.length, 1);
+  assert.strictEqual(merged.datasets[0].subsets[0].caption_suffix, "quality");
+  assert.strictEqual(merged.datasets[0].subsets[0].custom_subset, 9);
+  assert.strictEqual(merged.datasets[0].subsets[0].num_repeats, 4);
+  assert.strictEqual(merged.datasets[0].subsets[0].is_reg, false);
 });

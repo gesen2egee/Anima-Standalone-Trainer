@@ -12,6 +12,7 @@ const { findAutoResumeSource } = require('./lib/autoResume');
 const { calculateJobProgress } = require('./lib/jobProgress');
 const { isSuccessfulTrainingExit } = require('./lib/trainingExit');
 const { buildNewJobSubsets } = require('./lib/newJobDataset');
+const { mergeDatasetConfigPreservingUnknown } = require('./lib/datasetConfigMerge');
 const { buildNewJobSamplePrompts } = require('./lib/newJobSamples');
 const { acquireServerInstance } = require('./lib/serverInstance');
 const {
@@ -1510,7 +1511,12 @@ app.put('/api/jobs/:name', (req, res) => {
             fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
         }
         if (req.body.dataset) {
-            fs.writeFileSync(path.join(jobPath, 'dataset.toml'), TOML.stringify(req.body.dataset), 'utf8');
+            const datasetPath = path.join(jobPath, 'dataset.toml');
+            const existingDataset = fs.existsSync(datasetPath)
+                ? TOML.parse(fs.readFileSync(datasetPath, 'utf8'))
+                : {};
+            const mergedDataset = mergeDatasetConfigPreservingUnknown(existingDataset, req.body.dataset);
+            fs.writeFileSync(datasetPath, TOML.stringify(mergedDataset), 'utf8');
         }
 
         res.json({ success: true });
