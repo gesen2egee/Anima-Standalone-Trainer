@@ -2436,6 +2436,7 @@ class BaseDataset(torch.utils.data.Dataset):
         example["crop_top_lefts"] = torch.stack([torch.LongTensor(x) for x in crop_top_lefts])
         example["target_sizes_hw"] = torch.stack([torch.LongTensor(x) for x in target_sizes_hw])
         example["flippeds"] = flippeds
+        example["cdc_keys"] = [self.image_data[key].absolute_path for key in bucket[image_index : image_index + bucket_batch_size]]
 
         example["network_multipliers"] = torch.FloatTensor([self.network_multiplier] * len(captions))
         if self.debug_dataset:

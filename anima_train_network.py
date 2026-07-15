@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 
 class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_network.NetworkTrainer):
+    cdc_architecture_name = "anima"
+
     def __init__(self):
         super().__init__()
         self.sample_prompts_te_outputs = None
@@ -277,6 +279,11 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
+        cdc_result = self.apply_cdc_flow_path(args, batch, latents, noise, sigmas, is_train)
+        cdc_target = None
+        if cdc_result is not None:
+            noisy_model_input, cdc_target = cdc_result
+
         ciop = self.sample_ciop_perturbations(args, latents, is_train)
         if ciop is not None:
             noisy_model_input = noisy_model_input + ciop[0]
@@ -357,6 +364,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             ciop_output=ciop[1] if ciop is not None else None,
             folder_shifts=batch.get("folder_shifts", None),
             folder_shift_progress=batch.get("folder_shift_progress", None),
+            base_target=cdc_target,
         )
 
         return model_pred, target, timesteps, weighting

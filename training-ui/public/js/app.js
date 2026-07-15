@@ -2050,6 +2050,17 @@ function populateConfig(config) {
   $("cfg-blocks-to-swap").value = t.blocks_to_swap ?? 0;
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
+  $("cfg-use-cdc-fm").checked = t.use_cdc_fm ?? false;
+  if ($("cfg-use-cdc-fm").checked) {
+    $("cfg-knn-noise-k").value = 0;
+  }
+  $("cfg-cdc-k-neighbors").value = t.cdc_k_neighbors ?? 64;
+  $("cfg-cdc-k-bandwidth").value = t.cdc_k_bandwidth ?? 8;
+  $("cfg-cdc-dim").value = t.cdc_dim ?? 8;
+  $("cfg-cdc-gamma").value = t.cdc_gamma ?? 1.0;
+  $("cfg-cdc-bandwidth-rescale").value = t.cdc_bandwidth_rescale ?? 1.0;
+  $("cfg-cdc-min-bucket-size").value = t.cdc_min_bucket_size ?? 8;
+  $("cfg-cdc-force-recache").checked = t.cdc_force_recache ?? false;
   $("cfg-loss-type").value = t.loss_type || "l2";
   $("cfg-pnp-loss-weight").value = t.pnp_loss_weight ?? "";
   $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;
@@ -2077,6 +2088,10 @@ function populateConfig(config) {
     t.persistent_data_loader_workers ?? true;
   $("cfg-cache-latents").checked = t.cache_latents ?? true;
   $("cfg-cache-latents-to-disk").checked = t.cache_latents_to_disk ?? true;
+  if ($("cfg-use-cdc-fm").checked) {
+    $("cfg-cache-latents").checked = true;
+    $("cfg-cache-latents-to-disk").checked = true;
+  }
   $("cfg-vae-batch").value = t.vae_batch_size ?? 1;
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
@@ -2458,6 +2473,7 @@ function gatherConfig() {
   );
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
+  const useCdcFm = $("cfg-use-cdc-fm").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2531,8 +2547,16 @@ function gatherConfig() {
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
-      knn_noise_k: safeInt($("cfg-knn-noise-k").value),
+      knn_noise_k: useCdcFm ? 0 : safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
+      use_cdc_fm: useCdcFm,
+      cdc_k_neighbors: safeInt($("cfg-cdc-k-neighbors").value, 64),
+      cdc_k_bandwidth: safeInt($("cfg-cdc-k-bandwidth").value, 8),
+      cdc_dim: safeInt($("cfg-cdc-dim").value, 8),
+      cdc_gamma: safeFloat($("cfg-cdc-gamma").value, 1.0),
+      cdc_bandwidth_rescale: safeFloat($("cfg-cdc-bandwidth-rescale").value, 1.0),
+      cdc_min_bucket_size: safeInt($("cfg-cdc-min-bucket-size").value, 8),
+      cdc_force_recache: $("cfg-cdc-force-recache").checked,
       loss_type: $("cfg-loss-type").value,
       pnp_loss_weight: $("cfg-pnp-loss-weight").value !== "" ? safeFloat($("cfg-pnp-loss-weight").value) : 0.0,
       cwmi_lambda: safeFloat($("cfg-cwmi-lambda").value),
@@ -2559,8 +2583,8 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
-      cache_latents: $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked,
-      cache_latents_to_disk: $("cfg-cache-latents-to-disk").checked,
+      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked,
+      cache_latents_to_disk: useCdcFm || $("cfg-cache-latents-to-disk").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
@@ -5778,6 +5802,19 @@ async function init() {
     updateActivationOffloadUI,
   );
   $("cfg-loss-type").addEventListener("change", updateLossTypeUI);
+  // KNN noise changes the Gaussian source distribution, while CDC-FM builds
+  // an exact geometry correction from that source. They cannot share a path.
+  $("cfg-use-cdc-fm").addEventListener("change", (event) => {
+    if (!event.target.checked) return;
+    $("cfg-knn-noise-k").value = 0;
+    $("cfg-cache-latents").checked = true;
+    $("cfg-cache-latents-to-disk").checked = true;
+  });
+  $("cfg-knn-noise-k").addEventListener("input", (event) => {
+    if (safeInt(event.target.value, 0) > 0) {
+      $("cfg-use-cdc-fm").checked = false;
+    }
+  });
   // Discard Button
   $("btn-discard").addEventListener("click", discardChanges);
   // Mutual exclusivity for Flash/Sage Attention

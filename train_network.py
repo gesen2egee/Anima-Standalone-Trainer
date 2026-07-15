@@ -588,6 +588,10 @@ class NetworkTrainer:
     def cast_unet(self, args):
         return True  # default for other than HunyuanImage
 
+    def prepare_after_latents_cached(self, args, train_dataset_group, accelerator):
+        """Architecture hook for training-only preprocessing after latent caching."""
+        return None
+
     def train(self, args):
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
@@ -721,6 +725,8 @@ class NetworkTrainer:
             clean_memory_on_device(accelerator.device)
 
             accelerator.wait_for_everyone()
+
+        self.prepare_after_latents_cached(args, train_dataset_group, accelerator)
 
         # 必要ならテキストエンコーダーの出力をキャッシュする: Text Encoderはcpuまたはgpuへ移される
         # cache text encoder outputs if needed: Text Encoder is moved to cpu or gpu

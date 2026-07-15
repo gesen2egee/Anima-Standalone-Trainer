@@ -506,10 +506,48 @@
                             <div class="form-group">
                                 <label>KNN Noise K</label>
                                 <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
+                                <small>設為 0 才能啟用 CDC-FM。</small>
                             </div>
                             <div class="form-group">
                                 <label>CEP Noise</label>
                                 <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
+                            </div>
+                        </div>
+
+                        <h4 style="margin-top: 24px;">CDC-FM Geometry</h4>
+                        <small>ANIMA 與 KREA 2 的 Geometry-aware Flow Matching；與 KNN Noise 互斥，並需要 Latent Disk Cache。</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-use-cdc-fm"> Enable CDC-FM</label>
+                            </div>
+                            <div class="form-group">
+                                <label>Neighbors</label>
+                                <input type="number" id="cfg-cdc-k-neighbors" value="64" min="2" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Bandwidth K</label>
+                                <input type="number" id="cfg-cdc-k-bandwidth" value="8" min="1" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label>CDC Rank</label>
+                                <input type="number" id="cfg-cdc-dim" value="8" min="1" step="1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Gamma</label>
+                                <input type="number" id="cfg-cdc-gamma" value="1.0" min="0.01" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label>Bandwidth Scale</label>
+                                <input type="number" id="cfg-cdc-bandwidth-rescale" value="1.0" min="0.01" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label>Minimum Bucket</label>
+                                <input type="number" id="cfg-cdc-min-bucket-size" value="8" min="3" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-cdc-force-recache"> Force CDC Recache</label>
                             </div>
                         </div>
 

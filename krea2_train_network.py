@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_network.NetworkTrainer):
     """Architecture adapter that keeps the shared optimizer/dataset/checkpoint loop."""
 
+    cdc_architecture_name = "krea2"
+
     def __init__(self):
         super().__init__()
         self.is_swapping_blocks = False
@@ -398,6 +400,10 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             automask_shift_values=batch.get("automask_shift_values"),
         )
         t = sigmas.reshape(sigmas.shape[0], -1)[:, 0].to(dtype=torch.float32)
+        cdc_result = self.apply_cdc_flow_path(args, batch, latents, noise, sigmas, is_train)
+        cdc_target = None
+        if cdc_result is not None:
+            noisy, cdc_target = cdc_result
         self.current_noise = noise
         self.current_sigmas = sigmas
 
@@ -471,6 +477,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             )
             if args.timestep_sampling == "krea2_shift"
             else None,
+            base_target=cdc_target,
         )
         return pred, target, timesteps, weighting
 

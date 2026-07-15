@@ -6,7 +6,7 @@ from typing import Optional, Sequence, Union
 
 import torch
 
-from library import anima_train_utils, qwen_image_autoencoder_kl, sd3_train_utils, train_util
+from library import anima_train_utils, cdc_fm, qwen_image_autoencoder_kl, sd3_train_utils, train_util
 
 
 def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None:
@@ -20,6 +20,16 @@ def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None
     parser.add_argument("--model_guidance_end_step", type=int, default=0)
     parser.add_argument("--ciop_noise_magnitude", type=float, default=0.1)
     parser.add_argument("--ciop_noise_type", choices=["gaussian", "uniform"], default="gaussian")
+    parser.add_argument("--use_cdc_fm", action="store_true", help="enable Carré du champ flow matching")
+    parser.add_argument("--cdc_k_neighbors", type=int, default=64)
+    parser.add_argument("--cdc_k_bandwidth", type=int, default=8)
+    parser.add_argument("--cdc_dim", type=int, default=8)
+    parser.add_argument("--cdc_gamma", type=float, default=1.0)
+    parser.add_argument("--cdc_bandwidth_rescale", type=float, default=1.0)
+    parser.add_argument("--cdc_min_bucket_size", type=int, default=8)
+    parser.add_argument("--cdc_cache_dir", type=str, default="tasks/cdc_cache")
+    parser.add_argument("--cdc_cache_memory_entries", type=int, default=32)
+    parser.add_argument("--cdc_force_recache", action="store_true")
 
 
 class FlowNetworkTrainerMixin:
@@ -28,6 +38,7 @@ class FlowNetworkTrainerMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.global_step = 0
+        self.cdc_geometry_cache = None
 
     def step_logging(self, accelerator, logs, global_step, epoch):
         self.global_step = global_step
@@ -49,6 +60,42 @@ class FlowNetworkTrainerMixin:
             raise ValueError("model_guidance_end_step must be greater than or equal to 0")
         if not 0.0 <= args.model_guidance_zero_init_threshold <= 1.0:
             raise ValueError("model_guidance_zero_init_threshold must be between 0.0 and 1.0")
+        if getattr(args, "use_cdc_fm", False):
+            if getattr(args, "knn_noise_k", 0) > 0:
+                raise ValueError("CDC-FM and KNN noise are mutually exclusive; set knn_noise_k to 0")
+            if not args.cache_latents or not args.cache_latents_to_disk:
+                raise ValueError("CDC-FM requires --cache_latents and --cache_latents_to_disk")
+            if args.cdc_k_neighbors < 2:
+                raise ValueError("cdc_k_neighbors must be greater than or equal to 2")
+            if args.cdc_k_bandwidth < 1:
+                raise ValueError("cdc_k_bandwidth must be greater than or equal to 1")
+            if args.cdc_dim < 1:
+                raise ValueError("cdc_dim must be greater than or equal to 1")
+            if args.cdc_gamma <= 0.0:
+                raise ValueError("cdc_gamma must be greater than 0")
+            if args.cdc_bandwidth_rescale <= 0.0:
+                raise ValueError("cdc_bandwidth_rescale must be greater than 0")
+            if args.cdc_min_bucket_size < 3:
+                raise ValueError("cdc_min_bucket_size must be greater than or equal to 3")
+            if args.cdc_cache_memory_entries < 1:
+                raise ValueError("cdc_cache_memory_entries must be greater than or equal to 1")
+
+    def prepare_after_latents_cached(self, args, train_dataset_group, accelerator) -> None:
+        if not getattr(args, "use_cdc_fm", False):
+            return
+        architecture = getattr(self, "cdc_architecture_name", self.__class__.__name__.lower())
+        self.cdc_geometry_cache = cdc_fm.prepare_cdc_cache(args, train_dataset_group, accelerator, architecture)
+
+    def apply_cdc_flow_path(self, args, batch, latents, noise, sigmas, is_train):
+        if not is_train or not getattr(args, "use_cdc_fm", False):
+            return None
+        if self.cdc_geometry_cache is None:
+            raise RuntimeError("CDC-FM is enabled but its geometry cache was not prepared")
+        keys = batch.get("cdc_keys")
+        if keys is None:
+            raise RuntimeError("CDC-FM training batch does not contain cdc_keys")
+        correction = self.cdc_geometry_cache.correction(noise, keys, batch.get("flippeds"))
+        return cdc_fm.apply_cdc_flow_path(latents, noise, sigmas, correction)
 
     def get_noise_scheduler(self, args: argparse.Namespace, device: torch.device):
         return sd3_train_utils.FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=args.discrete_flow_shift)
@@ -129,9 +176,10 @@ class FlowNetworkTrainerMixin:
         folder_shifts: Optional[Sequence[str]] = None,
         folder_shift_progress: Optional[float] = None,
         proposal_flow_shift: Optional[Union[float, torch.Tensor]] = None,
+        base_target: Optional[torch.Tensor] = None,
     ):
         target = self.apply_model_guidance_target(
-            args, noise - latents, model_pred, model_pred_uncond, timestep_fractions
+            args, noise - latents if base_target is None else base_target, model_pred, model_pred_uncond, timestep_fractions
         )
         if ciop_output is not None:
             target = target + ciop_output
@@ -165,3 +213,10 @@ class FlowNetworkTrainerMixin:
         metadata["ss_ciop_noise_type"] = args.ciop_noise_type
         metadata["ss_knn_noise_k"] = getattr(args, "knn_noise_k", 0)
         metadata["ss_immiscible_image_scale"] = getattr(args, "immiscible_image_scale", 1.0)
+        metadata["ss_use_cdc_fm"] = getattr(args, "use_cdc_fm", False)
+        metadata["ss_cdc_k_neighbors"] = getattr(args, "cdc_k_neighbors", 0)
+        metadata["ss_cdc_k_bandwidth"] = getattr(args, "cdc_k_bandwidth", 0)
+        metadata["ss_cdc_dim"] = getattr(args, "cdc_dim", 0)
+        metadata["ss_cdc_gamma"] = getattr(args, "cdc_gamma", 0.0)
+        metadata["ss_cdc_bandwidth_rescale"] = getattr(args, "cdc_bandwidth_rescale", 0.0)
+        metadata["ss_cdc_min_bucket_size"] = getattr(args, "cdc_min_bucket_size", 0)
