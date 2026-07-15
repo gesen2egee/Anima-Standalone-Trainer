@@ -25,7 +25,11 @@ function acquireServerInstance({
     lockPath,
     port,
     pid = process.pid,
-    isPidAlive = defaultIsPidAlive
+    isPidAlive = defaultIsPidAlive,
+    takeoverExisting = false,
+    isExpectedInstance = () => false,
+    terminateExisting = () => false,
+    scriptPath = null
 }) {
     if (!lockPath) throw new Error('lockPath is required');
 
@@ -35,6 +39,7 @@ function acquireServerInstance({
         instanceId,
         pid,
         port,
+        scriptPath,
         startedAt: new Date().toISOString()
     };
 
@@ -64,6 +69,13 @@ function acquireServerInstance({
             if (err.code !== 'EEXIST') throw err;
             const existing = readLock(lockPath);
             if (existing?.pid && isPidAlive(existing.pid)) {
+                if (takeoverExisting && isExpectedInstance(existing)) {
+                    terminateExisting(existing);
+                    if (!isPidAlive(existing.pid)) {
+                        fs.rmSync(lockPath, { force: true });
+                        continue;
+                    }
+                }
                 return { acquired: false, existing, release() {} };
             }
             fs.rmSync(lockPath, { force: true });

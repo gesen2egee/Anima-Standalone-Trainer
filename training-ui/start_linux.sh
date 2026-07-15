@@ -11,8 +11,8 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Start the application
-npm start
+# Start through Python so Node can exit if its launcher disappears.
+../venv/bin/python launcher.py
 
 echo ""
 echo "Application exited (check for errors above)."

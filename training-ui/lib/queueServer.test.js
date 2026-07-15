@@ -59,10 +59,12 @@ test("queue execution intent is persisted and reconciled after restart", () => {
   assert.match(serverJs, /recovered-stale-active/);
 });
 
-test("server refuses a second instance instead of drifting to another port", () => {
+test("server replaces a previous Node instance but never drifts to another port", () => {
   const serverJs = read("server.js");
 
   assert.match(serverJs, /acquireServerInstance/);
+  assert.match(serverJs, /stopPreviousNodeOnPort/);
+  assert.match(serverJs, /takeoverExisting:\s*true/);
   assert.match(serverJs, /Refusing to start a second Training UI instance/);
   assert.doesNotMatch(serverJs, /findAvailablePort/);
   assert.doesNotMatch(serverJs, /using \$\{port\} instead/);

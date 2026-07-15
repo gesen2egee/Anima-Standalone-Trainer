@@ -16,6 +16,12 @@ const { mergeDatasetConfigPreservingUnknown } = require('./lib/datasetConfigMerg
 const { buildNewJobSamplePrompts } = require('./lib/newJobSamples');
 const { acquireServerInstance } = require('./lib/serverInstance');
 const {
+    isExpectedNodeServer,
+    monitorParentProcess,
+    stopPreviousNodeOnPort,
+    terminateProcessTree
+} = require('./lib/serverLifecycle');
+const {
     inspectDatasetImageFolders,
     listSdScriptsImages,
     normalizeCaptionExtension,
@@ -48,10 +54,18 @@ const QUEUE_STATE_PATH = path.join(__dirname, 'queue_state.json');
 const TRAINING_PROCESS_STATE_PATH = path.join(__dirname, 'training_process_state.json');
 const SERVER_INSTANCE_LOCK_PATH = path.join(__dirname, 'server_instance.json');
 const QUEUE_EVENT_LOG_PATH = path.join(__dirname, 'queue_events.log');
+const SERVER_SCRIPT_PATH = path.join(__dirname, 'server.js');
 
 let serverInstanceHandle = acquireServerInstance({
     lockPath: SERVER_INSTANCE_LOCK_PATH,
-    port: DEFAULT_PORT
+    port: DEFAULT_PORT,
+    scriptPath: SERVER_SCRIPT_PATH,
+    takeoverExisting: true,
+    isExpectedInstance: existing => isExpectedNodeServer(existing.pid, SERVER_SCRIPT_PATH),
+    terminateExisting: existing => {
+        console.warn(`[Startup] Closing previous Training UI Node process (PID ${existing.pid}).`);
+        return terminateProcessTree(existing.pid);
+    }
 });
 if (!serverInstanceHandle.acquired) {
     const existing = serverInstanceHandle.existing || {};
@@ -2002,9 +2016,14 @@ app.put('/api/jobs/:name/prompts', (req, res) => {
 
 let persistentGenProcess = null; // { process, port, jobName }
 const GEN_SERVER_PORT = 5000; // Fixed port for now
+let pythonParentMonitor = null;
 
 // Kill all running jobs when the Node server itself exits
 function killAllJobs() {
+    if (pythonParentMonitor) {
+        clearInterval(pythonParentMonitor);
+        pythonParentMonitor = null;
+    }
     queueCoordinator.cancel();
     if (queueReconcileTimer) clearInterval(queueReconcileTimer);
     for (const [, job] of runningJobs) {
@@ -3364,9 +3383,19 @@ function checkPort(port) {
 
 (async () => {
     if (!await checkPort(DEFAULT_PORT)) {
-        serverInstanceHandle.release();
-        console.error(`\nERROR: Port ${DEFAULT_PORT} is already in use. Refusing to start a second Training UI instance.`);
-        process.exit(1);
+        const takeover = stopPreviousNodeOnPort({
+            port: DEFAULT_PORT,
+            serverScriptPath: SERVER_SCRIPT_PATH
+        });
+        if (takeover.stopped) {
+            console.warn(`[Startup] Port ${DEFAULT_PORT} was held by previous Node PID ${takeover.pid}; it has been closed.`);
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if (!await checkPort(DEFAULT_PORT)) {
+            serverInstanceHandle.release();
+            console.error(`\nERROR: Port ${DEFAULT_PORT} is already in use by another application. Refusing to start a second Training UI instance.`);
+            process.exit(1);
+        }
     }
 
     activePort = DEFAULT_PORT;
@@ -3388,6 +3417,13 @@ function checkPort(port) {
         } catch (e) {
             console.warn('Could not open browser automatically.');
         }
+
+        pythonParentMonitor = monitorParentProcess(process.env.ANIMA_PYTHON_PID, pythonPid => {
+            console.warn(`[Lifecycle] Python launcher PID ${pythonPid} is gone; closing Training UI Node process.`);
+            killAllJobs();
+            server.close(() => process.exit(0));
+            setTimeout(() => process.exit(0), 1000).unref();
+        });
     });
 })();
 

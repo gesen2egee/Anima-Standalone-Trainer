@@ -67,7 +67,7 @@ if errorlevel 1 (
 
 echo 正在啟動 UI...
 set "RUN_STATUS=0"
-call npm start
+"%ROOT%venv\Scripts\python.exe" "%ROOT%training-ui\launcher.py"
 if errorlevel 1 set "RUN_STATUS=1"
 popd
 

@@ -43,3 +43,23 @@ test('an old owner cannot remove a newer instance lock', () => {
 
     assert.strictEqual(fs.existsSync(lockPath), true);
 });
+
+test('a verified previous instance is terminated and its lock is replaced', () => {
+    const lockPath = makeLockPath();
+    fs.writeFileSync(lockPath, JSON.stringify({ instanceId: 'old', pid: 101, port: 3000 }), 'utf8');
+    let alive = true;
+
+    const instance = acquireServerInstance({
+        lockPath,
+        port: 3000,
+        pid: 202,
+        takeoverExisting: true,
+        isPidAlive: () => alive,
+        isExpectedInstance: existing => existing.pid === 101,
+        terminateExisting: () => { alive = false; return true; }
+    });
+
+    assert.strictEqual(instance.acquired, true);
+    assert.strictEqual(JSON.parse(fs.readFileSync(lockPath, 'utf8')).pid, 202);
+    instance.release();
+});

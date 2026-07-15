@@ -30,7 +30,7 @@ if errorlevel 1 (
 
 echo Starting Anima Training UI...
 set "RUN_STATUS=0"
-call npm start
+"..\venv\Scripts\python.exe" "launcher.py"
 if errorlevel 1 set "RUN_STATUS=1"
 echo.
 echo Application exited (check for errors above).
