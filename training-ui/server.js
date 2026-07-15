@@ -689,6 +689,35 @@ function setQueueAutoRunning(enabled, error = null) {
     trainingQueue.setAutoRunning(queueAutoRunning, { error });
 }
 
+function getRuntimeControlPath(jobName) {
+    return path.join(getJobPath(jobName), 'runtime_control.json');
+}
+
+function updateRuntimeControl(jobName, patch) {
+    const controlPath = getRuntimeControlPath(jobName);
+    let current = {};
+    try {
+        if (fs.existsSync(controlPath)) current = JSON.parse(fs.readFileSync(controlPath, 'utf8')) || {};
+    } catch (_) {
+        current = {};
+    }
+    const next = { ...current, ...patch, requested_at: Date.now() };
+    const tempPath = `${controlPath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(next, null, 2), 'utf8');
+    fs.renameSync(tempPath, controlPath);
+    return next;
+}
+
+function findLatestPeftPath(jobName) {
+    const outputDir = path.join(getJobPath(jobName), 'output');
+    if (!fs.existsSync(outputDir)) return '';
+    const candidates = fs.readdirSync(outputDir)
+        .filter(name => name.endsWith('.safetensors'))
+        .map(name => ({ path: path.join(outputDir, name), mtime: fs.statSync(path.join(outputDir, name)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+    return candidates[0]?.path || '';
+}
+
 const queueCoordinator = createQueueCoordinator({
     isEnabled: () => queueAutoRunning,
     getRunningJob: () => getRunningTrainingJobNameFresh(),
@@ -749,15 +778,34 @@ function getRunningTrainingJobName() {
 }
 
 function stopTrainingJob(jobName) {
+    const options = arguments[1] || {};
     const job = getTrainingProcessInfo(jobName);
     if (!job) return null;
 
     const memoryJob = runningJobs.get(jobName);
-    if (memoryJob) memoryJob.stopRequested = true;
-    job.stopRequested = true;
+    const pauseForGeneration = options.pauseForGeneration === true;
+    if (memoryJob) {
+        memoryJob.stopRequested = !pauseForGeneration;
+        memoryJob.pauseForGeneration = pauseForGeneration;
+        if (options.pendingGeneration) memoryJob.pendingGeneration = options.pendingGeneration;
+    }
+    job.stopRequested = !pauseForGeneration;
     broadcastStatus(jobName, 'stopping');
 
-    if (job.pid) {
+    const controlPath = getRuntimeControlPath(jobName);
+    if (fs.existsSync(controlPath)) {
+        updateRuntimeControl(jobName, { stop_requested: true });
+        // A step can legitimately take several minutes. Keep a long fallback
+        // only for crashed/legacy trainers that never acknowledge the command.
+        if (job.pid) {
+            setTimeout(() => {
+                if (isPidAlive(job.pid) && getTrainingProcessInfo(jobName)) {
+                    killProcess(job.pid, 0).catch(() => {});
+                }
+            }, 15 * 60 * 1000);
+        }
+    } else if (job.pid) {
+        // Training launched before runtime controls were available.
         killProcess(job.pid, 8000)
             .then(() => clearTrainingProcessState(jobName))
             .catch(() => {});
@@ -2303,7 +2351,26 @@ app.get('/api/jobs/:name/checkpoints', (req, res) => {
 app.post('/api/jobs/:name/generate', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
-        if (runningJobs.has(jobName)) {
+        const activeJob = runningJobs.get(jobName);
+        if (activeJob?.type === 'training') {
+            if (!fs.existsSync(getRuntimeControlPath(jobName))) {
+                return res.status(409).json({ error: 'Restart training once to enable pause, generate, and resume' });
+            }
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
+            stopTrainingJob(jobName, {
+                pauseForGeneration: true,
+                pendingGeneration: {
+                    payload: req.body || {},
+                    baseUrl,
+                    fromQueue: activeJob.fromQueue === true,
+                },
+            });
+            return res.json({ success: true, queued: true, message: 'Will generate after the next safe training step' });
+        }
+        if (!activeJob && await isJobTrainingFresh(jobName)) {
+            return res.status(409).json({ error: 'Training is external to this server session; restart it once before deferred generation' });
+        }
+        if (activeJob) {
             return res.status(400).json({ error: 'Job is running. Stop it first.' });
         }
 
@@ -2318,7 +2385,24 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         const mergedConfig = buildTrainingConfig(jobName, jobPath);
 
         const outputDir = path.join(jobPath, 'output');
-        const promptsPath = path.join(jobPath, 'sample_prompts.txt');
+        let promptsPath = path.join(jobPath, 'sample_prompts.txt');
+
+        if (typeof req.body.prompt === 'string' && req.body.prompt.trim()) {
+            const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+            const seed = req.body.seed_mode === 'random'
+                ? Math.floor(Math.random() * 2147483646) + 1
+                : Number.parseInt(req.body.seed, 10) || 1;
+            const width = Number.parseInt(req.body.width, 10) || 1024;
+            const height = Number.parseInt(req.body.height, 10) || 1024;
+            const steps = Number.parseInt(req.body.steps, 10) || 28;
+            const scale = Number.parseFloat(req.body.guidance_scale) || 5.5;
+            const negative = clean(req.body.negative_prompt);
+            const line = `${clean(req.body.prompt)} --w ${width} --h ${height} --s ${steps} --d ${seed} --l ${scale}`
+                + (negative ? ` --n ${negative}` : '');
+            promptsPath = path.join(jobPath, 'runtime_generation_prompt.txt');
+            fs.writeFileSync(promptsPath, `${line}\n`, 'utf8');
+            req.body.seed = seed;
+        }
 
         if (!fs.existsSync(promptsPath) || fs.readFileSync(promptsPath, 'utf8').trim().length === 0) {
             return res.status(400).json({ error: 'No sample prompts found. Add prompts in the Prompts tab.' });
@@ -2383,7 +2467,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             `--from_file="${promptsPath}"`,
             `--save_path="${outputDir}"`,
             '--output_type=images',
-            `--seed=${tArgs.seed ?? 42}`
+            `--seed=${req.body.seed ?? tArgs.seed ?? 42}`
         );
 
         // Add architecture-specific gen params from registry defaults + job overrides
@@ -2401,6 +2485,10 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             args.push('--attn_mode=flash');
         } else if (req.body.sage_attn) {
             args.push('--attn_mode=sageattn');
+        }
+
+        if (!req.body.network_weights && req.body.use_latest_peft === true) {
+            req.body.network_weights = findLatestPeftPath(jobName);
         }
 
         if (genArch.id === 'krea2') {
@@ -2432,7 +2520,7 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
         if (persistentGenProcess) {
-            killPersistentGen();
+            await killPersistentGenAndWait();
         }
 
         const oneShotEnvVars = [
@@ -2465,8 +2553,30 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             oneShotLogStream.write(msg);
             oneShotLogStream.end();
             broadcastLog(jobName, msg);
+            const generationJob = runningJobs.get(jobName);
+            const shouldResumeTraining = req.body._resume_training_after === true
+                && generationJob?.suppressAutoResume !== true;
             runningJobs.delete(jobName);
             broadcastStatus(jobName, 'idle');
+            if (shouldResumeTraining) {
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                setTimeout(async () => {
+                    try {
+                        const response = await fetch(`${baseUrl}/api/jobs/${encodeURIComponent(jobName)}/train/start`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                fromQueue: req.body._resume_from_queue === true,
+                                resume_latest_state: true,
+                            }),
+                        });
+                        if (!response.ok) throw new Error(await response.text());
+                    } catch (error) {
+                        console.error(`[Gen] Failed to resume training for ${jobName}: ${error.message}`);
+                        broadcastStatus(jobName, 'failed');
+                    }
+                }, 750);
+            }
         });
 
         runningJobs.set(jobName, {
@@ -2504,6 +2614,17 @@ async function startQueuedJob(jobName) {
     }
     recordQueueEvent('start-succeeded', { jobName, pid: body.pid });
     return body;
+}
+
+async function killPersistentGenAndWait() {
+    if (!persistentGenProcess) return;
+    const target = persistentGenProcess;
+    try {
+        await fetch(`http://localhost:${target.port}/stop`, { method: 'POST' }).catch(() => {});
+        if (target.process?.pid) await killProcess(target.process.pid, 2000);
+    } finally {
+        if (persistentGenProcess === target) persistentGenProcess = null;
+    }
 }
 
 async function runNextQueuedJob() {
@@ -2628,14 +2749,35 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             trainingQueue.enqueue(jobName);
         }
 
+        // Release every generation process before loading the training model.
+        const activeGeneration = runningJobs.get(jobName);
+        if (activeGeneration?.type === 'generation') {
+            activeGeneration.suppressAutoResume = true;
+            if (activeGeneration.pid) await killProcess(activeGeneration.pid, 2000);
+            if (runningJobs.get(jobName) === activeGeneration) runningJobs.delete(jobName);
+        }
+
         // Auto-kill persistent gen server to free VRAM
         if (persistentGenProcess) {
             console.log("Stopping persistent generation server before training...");
-            killPersistentGen();
+            await killPersistentGenAndWait();
         }
 
         // Build merged config and write to temp file
         const mergedConfig = buildTrainingConfig(jobName, jobPath);
+        const runtimeControlPath = getRuntimeControlPath(jobName);
+        mergedConfig.training_arguments = mergedConfig.training_arguments || {};
+        mergedConfig.training_arguments.runtime_control_file = runtimeControlPath;
+        if (req.body?.resume_latest_state === true) {
+            const resumeSource = findAutoResumeSource(
+                path.join(jobPath, 'output'),
+                mergedConfig.training_arguments.output_name || 'last',
+                { allowCheckpoint: false }
+            );
+            if (resumeSource?.type === 'state') {
+                mergedConfig.training_arguments.resume = resumeSource.path;
+            }
+        }
 
         // Convert Windows paths to WSL paths when running under WSL
         if (isWSL) {
@@ -2669,8 +2811,9 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         const completionSignalPath = path.join(outputDir, 'completed.signal');
         try {
             fs.rmSync(completionSignalPath, { force: true });
+            fs.writeFileSync(runtimeControlPath, '{}', 'utf8');
         } catch (err) {
-            return res.status(500).json({ error: `Failed to clear completion signal: ${err.message}` });
+            return res.status(500).json({ error: `Failed to initialize training runtime files: ${err.message}` });
         }
 
         const launch = buildTrainingLaunchCommand(jobName, jobPath, mergedConfig, mergedConfigPath);
@@ -2711,7 +2854,9 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         logStream.on('error', (err) => console.error(`[Train/LogFile] ${err.message}`));
 
         proc.on('close', (code) => {
-            const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
+            const closingJob = runningJobs.get(jobName);
+            const stoppedByRequest = closingJob?.stopRequested === true;
+            const pendingGeneration = closingJob?.pauseForGeneration ? closingJob.pendingGeneration : null;
 
             // The signal file is the strongest completion indication, while the
             // exit/log fallback handles wrappers such as Accelerate/PowerShell
@@ -2738,6 +2883,32 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             runningJobs.delete(jobName);
             clearTrainingProcessState(jobName);
             invalidateDetectedTrainingProcesses();
+            if (pendingGeneration) {
+                broadcastStatus(jobName, 'generating');
+                setTimeout(async () => {
+                    try {
+                        const response = await fetch(
+                            `${pendingGeneration.baseUrl}/api/jobs/${encodeURIComponent(jobName)}/generate`,
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    ...pendingGeneration.payload,
+                                    network_weights: '',
+                                    use_latest_peft: true,
+                                    _resume_training_after: true,
+                                    _resume_from_queue: pendingGeneration.fromQueue,
+                                }),
+                            }
+                        );
+                        if (!response.ok) throw new Error(await response.text());
+                    } catch (error) {
+                        console.error(`[Train] Deferred generation failed for ${jobName}: ${error.message}`);
+                        broadcastStatus(jobName, 'failed');
+                    }
+                }, 750);
+                return;
+            }
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 if (completedSuccessfully) {
@@ -2815,6 +2986,23 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             }
             invalidateDetectedTrainingProcesses();
         }
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/jobs/:name/train/sample-next-step', async (req, res) => {
+    try {
+        const jobName = sanitizeName(req.params.name);
+        if (!(await isJobTrainingFresh(jobName))) {
+            return res.status(400).json({ error: 'Job is not training' });
+        }
+        if (!fs.existsSync(getRuntimeControlPath(jobName))) {
+            return res.status(409).json({ error: 'Restart training once to enable safe-step controls' });
+        }
+        updateRuntimeControl(jobName, { sample_requested: true });
+        broadcastStatus(jobName, 'sample-pending');
+        res.json({ success: true, message: 'Sample queued for the next optimizer step' });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });

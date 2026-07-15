@@ -99,6 +99,7 @@
                         <button id="btn-discard" class="btn btn-danger hidden">Discard</button>
                         <button id="btn-clone" class="btn btn-secondary">Clone</button>
                         <button id="btn-run" class="btn btn-primary">▶ Train</button>
+                        <button id="btn-sample-now" class="btn btn-secondary hidden" title="在下一個安全步驟儲存後立即採樣">🖼 立即採樣</button>
                         <button id="btn-stop" class="btn btn-danger hidden">⏹ Stop</button>
                         <button id="btn-delete" class="btn btn-danger" title="Delete">🗑</button>
                     </div>
@@ -112,6 +113,7 @@
                     <button class="tab" data-tab="network">Network</button>
                     <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
+                    <button class="tab" data-tab="generate">產生樣本</button>
                     <button class="tab" data-tab="samples">Samples</button>
                     <button class="tab" data-tab="console">Console</button>
                     <button class="tab" data-tab="cli">CLI</button>
@@ -1424,6 +1426,68 @@
                         <div class="form-group" id="cfg-profile-microbatch-group" style="display:none; padding-left: 16px;">
                             <label><input type="checkbox" id="cfg-profile-microbatch"> Track Microbatches</label>
                             <small>Also print per-microbatch fwd/bwd times within each step (only available with step profiling enabled).</small>
+                        </div>
+                    </div>
+
+                    <!-- Generation Workspace Tab -->
+                    <div id="tab-generate" class="tab-pane hidden">
+                        <div class="generation-workspace">
+                            <div class="generation-preview-panel">
+                                <div id="generation-preview-empty" class="generation-preview-empty">
+                                    <span>🖼</span>
+                                    <p>產生的最新樣本會顯示在這裡</p>
+                                </div>
+                                <img id="generation-preview-image" class="generation-preview-image hidden" alt="Latest generated sample">
+                                <div id="generation-runtime-status" class="generation-runtime-status">待命</div>
+                            </div>
+
+                            <div class="generation-settings-panel">
+                                <h4>產生樣本</h4>
+                                <div class="form-group">
+                                    <label>正向 Prompt</label>
+                                    <textarea id="generation-positive-prompt" rows="6" placeholder="描述要產生的圖片"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>負向 Prompt</label>
+                                    <textarea id="generation-negative-prompt" rows="3" placeholder="不希望出現的內容"></textarea>
+                                </div>
+                                <div class="form-row generation-parameter-grid">
+                                    <div class="form-group"><label>寬度</label><input id="generation-width" type="number" value="1024" step="16" min="64"></div>
+                                    <div class="form-group"><label>高度</label><input id="generation-height" type="number" value="1024" step="16" min="64"></div>
+                                    <div class="form-group"><label>Steps</label><input id="generation-steps" type="number" value="28" min="1"></div>
+                                    <div class="form-group"><label>Guidance</label><input id="generation-guidance" type="number" value="5.5" step="0.1" min="0"></div>
+                                    <div class="form-group"><label>Flow Shift</label><input id="generation-flow-shift" type="number" value="3" step="0.1"></div>
+                                    <div class="form-group"><label>Krea y1</label><input id="generation-y1" type="number" value="0.5" step="0.05"></div>
+                                    <div class="form-group"><label>Krea y2</label><input id="generation-y2" type="number" value="1.15" step="0.05"></div>
+                                    <div class="form-group"><label>Block Swap</label><input id="generation-blocks-to-swap" type="number" value="0" min="0" step="1"></div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>種子模式</label>
+                                        <select id="generation-seed-mode">
+                                            <option value="fixed">固定</option>
+                                            <option value="random">隨機</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" id="generation-seed-group">
+                                        <label>Seed</label>
+                                        <input id="generation-seed" type="number" value="42" min="1">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>PEFT／Checkpoint</label>
+                                    <div class="generation-peft-row">
+                                        <select id="generation-peft-select"><option value="">Base Model</option></select>
+                                        <button id="generation-refresh-peft" class="btn btn-secondary" title="重新整理">🔄</button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>PEFT 強度</label>
+                                    <input id="generation-peft-multiplier" type="number" value="1" step="0.1">
+                                </div>
+                                <button id="generation-run" class="btn btn-primary generation-run-button">產生樣本</button>
+                                <small>訓練中會在下一個完整步驟先存 checkpoint/state，產生完成後自動從最新 state 繼續。</small>
+                            </div>
                         </div>
                     </div>
 

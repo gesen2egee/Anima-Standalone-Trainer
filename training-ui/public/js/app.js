@@ -1383,11 +1383,19 @@ function connectWS() {
         scheduleSamplesRefresh();
       } else if (msg.type === "status") {
         if (msg.data === "generating") {
+          $("generation-runtime-status").textContent = "產生中";
           scheduleSamplesRefresh(0);
           return; // Ignore generation status for Training button
         }
+        if (msg.data === "sample-pending") {
+          $("generation-runtime-status").textContent = "等待下一個安全步驟採樣";
+        }
         if (msg.data === "completed") scheduleSamplesRefresh(0);
-        updateRunningState(msg.data === "running");
+        if (["completed", "idle"].includes(msg.data)) {
+          $("generation-runtime-status").textContent = "待命";
+          if (msg.data === "idle") scheduleSamplesRefresh(0);
+        }
+        updateRunningState(["running", "sample-pending", "stopping"].includes(msg.data));
         loadJobs();
       }
     } catch (e) { }
@@ -1955,6 +1963,7 @@ async function selectJob(name) {
     loadSamples();
     loadCheckpoints();
     loadPromptTransientSettings();
+    loadGenerationWorkspaceSettings();
   } catch (err) {
     console.error(`Failed to load job "${name}":`, err);
     showToast(`Failed to load job: ${err.message}`, "danger");
@@ -1964,6 +1973,7 @@ async function selectJob(name) {
 function updateRunningState(running) {
   $("btn-run").classList.toggle("hidden", running);
   $("btn-stop").classList.toggle("hidden", !running);
+  $("btn-sample-now").classList.toggle("hidden", !running);
   // Update sidebar dot
   document.querySelectorAll(".job-item").forEach((el) => {
     const name = el.querySelector(".job-name").textContent;
@@ -3717,14 +3727,17 @@ async function loadCheckpoints() {
   const files = await api(`/api/jobs/${currentJob}/checkpoints`);
   if (currentJob !== jobAtStart) return; // job changed while fetching
   const select = $("gen-lora-select");
-  // Save current selection
+  const pageSelect = $("generation-peft-select");
   const currentVal = select.value;
-  select.innerHTML = '<option value="">Base Model (No LoRA)</option>';
-  files.forEach((f) => {
-    const opt = document.createElement("option");
-    opt.value = f.path;
-    opt.textContent = `${f.name} (${new Date(f.mtime).toLocaleString()})`;
-    select.appendChild(opt);
+  const currentPageVal = pageSelect.value;
+  [select, pageSelect].forEach((target) => {
+    target.innerHTML = '<option value="">Base Model (No LoRA)</option>';
+    files.forEach((f) => {
+      const opt = document.createElement("option");
+      opt.value = f.path;
+      opt.textContent = `${f.name} (${new Date(f.mtime).toLocaleString()})`;
+      target.appendChild(opt);
+    });
   });
   // Restore selection if exists
   const data = localStorage.getItem(`prompt_transient_${currentJob}`);
@@ -3740,6 +3753,14 @@ async function loadCheckpoints() {
     Array.from(select.options).some((o) => o.value === valToRestore)
   ) {
     select.value = valToRestore;
+  }
+  let generationSettings = {};
+  try {
+    generationSettings = JSON.parse(localStorage.getItem(`generation_workspace_${currentJob}`) || "{}");
+  } catch (_) { }
+  const pageValue = currentPageVal || generationSettings.peft || files[0]?.path || "";
+  if (Array.from(pageSelect.options).some((option) => option.value === pageValue)) {
+    pageSelect.value = pageValue;
   }
 }
 // Sample State
@@ -3761,6 +3782,18 @@ function scheduleSamplesRefresh(delay = 1200) {
 async function loadSamples(isUpdate = false) {
   if (!currentJob) return;
   const images = await api(`/api/jobs/${currentJob}/samples`);
+  const preview = $("generation-preview-image");
+  const previewEmpty = $("generation-preview-empty");
+  if (images?.length) {
+    const newest = [...images].sort((a, b) => b.mtime - a.mtime)[0];
+    preview.src = `${newest.path}?v=${newest.mtime}`;
+    preview.classList.remove("hidden");
+    previewEmpty.classList.add("hidden");
+  } else {
+    preview.removeAttribute("src");
+    preview.classList.add("hidden");
+    previewEmpty.classList.remove("hidden");
+  }
   const container = $("samples-grid");
   const empty = $("samples-empty");
   if (!images || images.length === 0) {
@@ -5503,6 +5536,89 @@ $("btn-run").addEventListener("click", async () => {
   if (isDirty) await saveJob();
   await runCurrentJobFromTopButton(warningMsg);
 });
+
+$("btn-sample-now").addEventListener("click", async () => {
+  if (!currentJob) return;
+  try {
+    const result = await api(`/api/jobs/${currentJob}/train/sample-next-step`, { method: "POST" });
+    showToast(result.message || "已安排在下一步立即採樣");
+  } catch (error) {
+    showToast(error.message, "danger");
+  }
+});
+
+function loadGenerationWorkspaceSettings() {
+  if (!currentJob) return;
+  let settings = {};
+  try {
+    settings = JSON.parse(localStorage.getItem(`generation_workspace_${currentJob}`) || "{}");
+  } catch (_) { }
+  $("generation-positive-prompt").value = settings.prompt || "";
+  $("generation-negative-prompt").value = settings.negative_prompt || DEFAULT_NEGATIVE_PROMPT;
+  $("generation-width").value = settings.width || 1024;
+  $("generation-height").value = settings.height || 1024;
+  $("generation-steps").value = settings.steps || 28;
+  $("generation-guidance").value = settings.guidance_scale || 5.5;
+  $("generation-flow-shift").value = settings.flow_shift || 3;
+  $("generation-y1").value = settings.y1 ?? 0.5;
+  $("generation-y2").value = settings.y2 ?? 1.15;
+  $("generation-blocks-to-swap").value = settings.blocks_to_swap ?? 0;
+  $("generation-seed-mode").value = settings.seed_mode || "fixed";
+  $("generation-seed").value = settings.seed || 42;
+  $("generation-peft-multiplier").value = settings.network_mul || 1;
+  updateGenerationSeedMode();
+}
+
+function gatherGenerationWorkspaceSettings() {
+  return {
+    prompt: $("generation-positive-prompt").value.trim(),
+    negative_prompt: $("generation-negative-prompt").value.trim(),
+    width: safeInt($("generation-width").value, 1024),
+    height: safeInt($("generation-height").value, 1024),
+    steps: safeInt($("generation-steps").value, 28),
+    guidance_scale: safeFloat($("generation-guidance").value, 5.5),
+    flow_shift: safeFloat($("generation-flow-shift").value, 3),
+    y1: safeFloat($("generation-y1").value, 0.5),
+    y2: safeFloat($("generation-y2").value, 1.15),
+    blocks_to_swap: safeInt($("generation-blocks-to-swap").value, 0),
+    seed_mode: $("generation-seed-mode").value,
+    seed: safeInt($("generation-seed").value, 42),
+    network_weights: $("generation-peft-select").value,
+    peft: $("generation-peft-select").value,
+    network_mul: safeFloat($("generation-peft-multiplier").value, 1),
+    use_latest_peft: !$("generation-peft-select").value,
+  };
+}
+
+function updateGenerationSeedMode() {
+  $("generation-seed-group").classList.toggle("hidden", $("generation-seed-mode").value === "random");
+}
+
+$("generation-seed-mode").addEventListener("change", updateGenerationSeedMode);
+$("generation-refresh-peft").addEventListener("click", loadCheckpoints);
+$("generation-run").addEventListener("click", async () => {
+  if (!currentJob) return;
+  const payload = gatherGenerationWorkspaceSettings();
+  if (!payload.prompt) {
+    showToast("請輸入正向 Prompt", "danger");
+    return;
+  }
+  localStorage.setItem(`generation_workspace_${currentJob}`, JSON.stringify(payload));
+  $("generation-run").disabled = true;
+  $("generation-runtime-status").textContent = "準備產生…";
+  try {
+    const result = await api(`/api/jobs/${currentJob}/generate`, { method: "POST", body: payload });
+    $("generation-runtime-status").textContent = result.queued
+      ? "等待下一個訓練步驟，完成後會自動恢復訓練"
+      : "產生中";
+    showToast(result.message || "Generation started");
+  } catch (error) {
+    $("generation-runtime-status").textContent = `失敗：${error.message}`;
+    showToast(error.message, "danger");
+  } finally {
+    $("generation-run").disabled = false;
+  }
+});
 // Generate
 $("btn-gen-sample").addEventListener("click", async () => {
   if (!currentJob) return;
@@ -5565,9 +5681,8 @@ $("btn-stop").addEventListener("click", () => {
     `Stop training for "${currentJob}"?`,
     async () => {
       await api("/api/queue/stop", { method: "POST" });
-      updateRunningState(false);
       await loadJobs();
-      showToast("Training stopped");
+      showToast("已要求安全停止，將在下一個完整步驟儲存 state");
     },
   );
 });

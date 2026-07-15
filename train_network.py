@@ -22,7 +22,7 @@ from library.device_utils import init_ipex, clean_memory_on_device
 
 init_ipex()
 
-from accelerate.utils import set_seed
+from accelerate.utils import broadcast_object_list, set_seed
 from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
@@ -247,6 +247,49 @@ class NetworkTrainer:
 
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizers, text_encoder, unet):
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizers[0], text_encoder, unet)
+
+    def sample_images_immediately(
+        self, accelerator, args, global_step, device, vae, tokenizers, text_encoder, unet
+    ):
+        """Run exactly one scheduled-sample pass at the next safe optimizer step."""
+        original_every_steps = args.sample_every_n_steps
+        original_every_epochs = args.sample_every_n_epochs
+        try:
+            args.sample_every_n_steps = 1
+            args.sample_every_n_epochs = None
+            self.sample_images(
+                accelerator,
+                args,
+                None,
+                max(1, global_step),
+                device,
+                vae,
+                tokenizers,
+                text_encoder,
+                unet,
+            )
+        finally:
+            args.sample_every_n_steps = original_every_steps
+            args.sample_every_n_epochs = original_every_epochs
+
+    @staticmethod
+    def consume_runtime_control(args, accelerator):
+        """Read and acknowledge UI runtime commands on every distributed rank."""
+        commands = [{}]
+        control_path = getattr(args, "runtime_control_file", None)
+        if accelerator.is_main_process and control_path and os.path.isfile(control_path):
+            try:
+                with open(control_path, "r", encoding="utf-8") as file:
+                    loaded = json.load(file)
+                if isinstance(loaded, dict):
+                    commands[0] = loaded
+                with open(control_path, "w", encoding="utf-8") as file:
+                    json.dump({}, file)
+            except (OSError, json.JSONDecodeError) as error:
+                logger.warning("Unable to read runtime control file %s: %s", control_path, error)
+        if accelerator.num_processes > 1:
+            broadcast_object_list(commands)
+        return commands[0]
 
     # region SD/SDXL
 
@@ -1506,6 +1549,7 @@ class NetworkTrainer:
             disable=not accelerator.is_local_main_process,
             desc="steps",
         )
+        graceful_stop_requested = False
 
         validation_steps = (
             min(args.max_validation_steps, len(val_dataloader)) if args.max_validation_steps is not None else len(val_dataloader)
@@ -1651,27 +1695,69 @@ class NetworkTrainer:
                     progress_bar.update(1)
                     global_step += 1
 
-                    optimizer_eval_fn()
-                    self.sample_images(
-                        accelerator, args, None, global_step, accelerator.device, vae, tokenizers, text_encoder, unet
-                    )
-                    progress_bar.unpause()
+                    runtime_control = self.consume_runtime_control(args, accelerator)
+                    sample_requested = runtime_control.get("sample_requested") is True
+                    stop_requested = runtime_control.get("stop_requested") is True
+                    scheduled_save = args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0
 
-                    # 指定ステップごとにモデルを保存
-                    if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
+                    # Checkpoint/state writes happen before any sample at this
+                    # step. A runtime sample or graceful stop always gets a
+                    # recoverable state even when periodic state saving is off.
+                    if scheduled_save or sample_requested or stop_requested:
                         accelerator.wait_for_everyone()
                         if accelerator.is_main_process:
                             ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, global_step)
                             save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch)
 
-                            if args.save_state:
-                                train_util.save_and_remove_state_stepwise(args, accelerator, global_step)
+                            if args.save_state or sample_requested or stop_requested:
+                                original_save_every = args.save_every_n_steps
+                                if original_save_every is None:
+                                    args.save_every_n_steps = 1
+                                try:
+                                    train_util.save_and_remove_state_stepwise(args, accelerator, global_step)
+                                finally:
+                                    args.save_every_n_steps = original_save_every
 
-                            remove_step_no = train_util.get_remove_step_no(args, global_step)
-                            if remove_step_no is not None:
-                                remove_ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, remove_step_no)
-                                remove_model(remove_ckpt_name)
+                            if scheduled_save:
+                                remove_step_no = train_util.get_remove_step_no(args, global_step)
+                                if remove_step_no is not None:
+                                    remove_ckpt_name = train_util.get_step_ckpt_name(
+                                        args, "." + args.save_model_as, remove_step_no
+                                    )
+                                    remove_model(remove_ckpt_name)
+
+                    optimizer_eval_fn()
+                    if sample_requested:
+                        logger.info("Running UI-requested sample at safe step %s", global_step)
+                        self.sample_images_immediately(
+                            accelerator,
+                            args,
+                            global_step,
+                            accelerator.device,
+                            vae,
+                            tokenizers,
+                            text_encoder,
+                            unet,
+                        )
+                    else:
+                        self.sample_images(
+                            accelerator,
+                            args,
+                            None,
+                            global_step,
+                            accelerator.device,
+                            vae,
+                            tokenizers,
+                            text_encoder,
+                            unet,
+                        )
+                    progress_bar.unpause()
                     optimizer_train_fn()
+
+                    if stop_requested:
+                        logger.info("Graceful stop requested; state saved at step %s", global_step)
+                        graceful_stop_requested = True
+                        break
 
                 current_loss = loss.detach().item()
                 loss_recorder.add(epoch=epoch, step=step, loss=current_loss)
@@ -1768,6 +1854,9 @@ class NetworkTrainer:
 
                 if global_step >= args.max_train_steps:
                     break
+
+            if graceful_stop_requested:
+                break
 
             # EPOCH VALIDATION
             should_validate_epoch = (
@@ -1912,6 +2001,12 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="[EXPERIMENTAL] enable offloading of tensors to CPU during checkpointing for U-Net or DiT, if supported"
         " / 勾配チェックポイント時にテンソルをCPUにオフロードする（U-NetまたはDiTのみ、サポートされている場合）",
+    )
+    parser.add_argument(
+        "--runtime_control_file",
+        type=str,
+        default=None,
+        help="JSON command file used by Training UI for safe-step sample/stop requests",
     )
     parser.add_argument(
         "--no_metadata", action="store_true", help="do not save metadata in output model / メタデータを出力先モデルに保存しない"
