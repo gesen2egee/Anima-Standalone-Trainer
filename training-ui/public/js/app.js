@@ -163,6 +163,9 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   const select = $("cfg-model-architecture");
   if (!select) return;
   const architecture = MODEL_ARCHITECTURE_DEFAULTS[select.value] ? select.value : "anima";
+  document.querySelectorAll(".generation-krea-only").forEach((element) => {
+    element.classList.toggle("hidden", !isKrea2Architecture(architecture));
+  });
   const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture];
   const hint = $("cfg-model-architecture-hint");
   if (hint) hint.textContent = defaults.hint;
@@ -5633,7 +5636,7 @@ $("generation-run").addEventListener("click", async () => {
   try {
     const result = await api(`/api/jobs/${currentJob}/generate`, { method: "POST", body: payload });
     $("generation-runtime-status").textContent = result.queued
-      ? "等待下一個訓練步驟，完成後會自動恢復訓練"
+      ? "等待下一個完整步驟採樣，訓練不會中斷"
       : "產生中";
     showToast(result.message || "Generation started");
   } catch (error) {

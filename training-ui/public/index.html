@@ -1458,8 +1458,8 @@
                                     <div class="form-group"><label>Steps</label><input id="generation-steps" type="number" value="28" min="1"></div>
                                     <div class="form-group"><label>Guidance</label><input id="generation-guidance" type="number" value="5.5" step="0.1" min="0"></div>
                                     <div class="form-group"><label>Flow Shift</label><input id="generation-flow-shift" type="number" value="3" step="0.1"></div>
-                                    <div class="form-group"><label>Krea y1</label><input id="generation-y1" type="number" value="0.5" step="0.05"></div>
-                                    <div class="form-group"><label>Krea y2</label><input id="generation-y2" type="number" value="1.15" step="0.05"></div>
+                                    <div class="form-group generation-krea-only"><label>Krea y1</label><input id="generation-y1" type="number" value="0.5" step="0.05"></div>
+                                    <div class="form-group generation-krea-only"><label>Krea y2</label><input id="generation-y2" type="number" value="1.15" step="0.05"></div>
                                     <div class="form-group"><label>Block Swap</label><input id="generation-blocks-to-swap" type="number" value="0" min="0" step="1"></div>
                                 </div>
                                 <div class="form-row">
@@ -1487,7 +1487,7 @@
                                     <input id="generation-peft-multiplier" type="number" value="1" step="0.1">
                                 </div>
                                 <button id="generation-run" class="btn btn-primary generation-run-button">產生樣本</button>
-                                <small>訓練中會在下一個完整步驟先存 checkpoint/state，產生完成後自動從最新 state 繼續。</small>
+                                <small>訓練中會在下一個完整步驟使用目前權重與訓練 Prompts 採樣，不會中斷或額外存檔；此頁參數用於非訓練時產生樣本。</small>
                             </div>
                         </div>
                     </div>

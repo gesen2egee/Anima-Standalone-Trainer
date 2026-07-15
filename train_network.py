@@ -1700,16 +1700,16 @@ class NetworkTrainer:
                     stop_requested = runtime_control.get("stop_requested") is True
                     scheduled_save = args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0
 
-                    # Checkpoint/state writes happen before any sample at this
-                    # step. A runtime sample or graceful stop always gets a
-                    # recoverable state even when periodic state saving is off.
-                    if scheduled_save or sample_requested or stop_requested:
+                    # Scheduled checkpoint/state writes still happen before a
+                    # sample. UI-requested samples themselves do not save or
+                    # interrupt training; only graceful stop forces recovery.
+                    if scheduled_save or stop_requested:
                         accelerator.wait_for_everyone()
                         if accelerator.is_main_process:
                             ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, global_step)
                             save_model(ckpt_name, accelerator.unwrap_model(network), global_step, epoch)
 
-                            if args.save_state or sample_requested or stop_requested:
+                            if args.save_state or stop_requested:
                                 original_save_every = args.save_every_n_steps
                                 if original_save_every is None:
                                     args.save_every_n_steps = 1

@@ -800,18 +800,14 @@ function getRunningTrainingJobName() {
 }
 
 function stopTrainingJob(jobName) {
-    const options = arguments[1] || {};
     const job = getTrainingProcessInfo(jobName);
     if (!job) return null;
 
     const memoryJob = runningJobs.get(jobName);
-    const pauseForGeneration = options.pauseForGeneration === true;
     if (memoryJob) {
-        memoryJob.stopRequested = !pauseForGeneration;
-        memoryJob.pauseForGeneration = pauseForGeneration;
-        if (options.pendingGeneration) memoryJob.pendingGeneration = options.pendingGeneration;
+        memoryJob.stopRequested = true;
     }
-    job.stopRequested = !pauseForGeneration;
+    job.stopRequested = true;
     broadcastStatus(jobName, 'stopping');
 
     const controlPath = getRuntimeControlPath(jobName);
@@ -2381,21 +2377,19 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
         const activeJob = runningJobs.get(jobName);
         if (activeJob?.type === 'training') {
             if (!fs.existsSync(getRuntimeControlPath(jobName))) {
-                return res.status(409).json({ error: 'Restart training once to enable pause, generate, and resume' });
+                return res.status(409).json({ error: 'Restart training once to enable safe-step sampling' });
             }
-            const baseUrl = `${req.protocol}://${req.get('host')}`;
-            stopTrainingJob(jobName, {
-                pauseForGeneration: true,
-                pendingGeneration: {
-                    payload: req.body || {},
-                    baseUrl,
-                    fromQueue: activeJob.fromQueue === true,
-                },
+            updateRuntimeControl(jobName, { sample_requested: true });
+            broadcastStatus(jobName, 'sample-pending');
+            return res.json({
+                success: true,
+                queued: true,
+                in_training: true,
+                message: 'Training sample queued for the next optimizer step',
             });
-            return res.json({ success: true, queued: true, message: 'Will generate after the next safe training step' });
         }
         if (!activeJob && await isJobTrainingFresh(jobName)) {
-            return res.status(409).json({ error: 'Training is external to this server session; restart it once before deferred generation' });
+            return res.status(409).json({ error: 'Training is external to this server session; restart it once before safe-step sampling' });
         }
         if (activeJob) {
             return res.status(400).json({ error: 'Job is running. Stop it first.' });
@@ -2583,30 +2577,8 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             oneShotLogStream.write(msg);
             oneShotLogStream.end();
             broadcastLog(jobName, msg);
-            const generationJob = runningJobs.get(jobName);
-            const shouldResumeTraining = req.body._resume_training_after === true
-                && generationJob?.suppressAutoResume !== true;
             runningJobs.delete(jobName);
             broadcastStatus(jobName, 'idle');
-            if (shouldResumeTraining) {
-                const baseUrl = `${req.protocol}://${req.get('host')}`;
-                setTimeout(async () => {
-                    try {
-                        const response = await fetch(`${baseUrl}/api/jobs/${encodeURIComponent(jobName)}/train/start`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                fromQueue: req.body._resume_from_queue === true,
-                                resume_latest_state: true,
-                            }),
-                        });
-                        if (!response.ok) throw new Error(await response.text());
-                    } catch (error) {
-                        console.error(`[Gen] Failed to resume training for ${jobName}: ${error.message}`);
-                        broadcastStatus(jobName, 'failed');
-                    }
-                }, 750);
-            }
         });
 
         runningJobs.set(jobName, {
@@ -2886,7 +2858,6 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
         proc.on('close', (code) => {
             const closingJob = runningJobs.get(jobName);
             const stoppedByRequest = closingJob?.stopRequested === true;
-            const pendingGeneration = closingJob?.pauseForGeneration ? closingJob.pendingGeneration : null;
 
             // The signal file is the strongest completion indication, while the
             // exit/log fallback handles wrappers such as Accelerate/PowerShell
@@ -2913,32 +2884,6 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             runningJobs.delete(jobName);
             clearTrainingProcessState(jobName);
             invalidateDetectedTrainingProcesses();
-            if (pendingGeneration) {
-                broadcastStatus(jobName, 'generating');
-                setTimeout(async () => {
-                    try {
-                        const response = await fetch(
-                            `${pendingGeneration.baseUrl}/api/jobs/${encodeURIComponent(jobName)}/generate`,
-                            {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    ...pendingGeneration.payload,
-                                    network_weights: '',
-                                    use_latest_peft: true,
-                                    _resume_training_after: true,
-                                    _resume_from_queue: pendingGeneration.fromQueue,
-                                }),
-                            }
-                        );
-                        if (!response.ok) throw new Error(await response.text());
-                    } catch (error) {
-                        console.error(`[Train] Deferred generation failed for ${jobName}: ${error.message}`);
-                        broadcastStatus(jobName, 'failed');
-                    }
-                }, 750);
-                return;
-            }
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
             if (fromQueue || isQueuedJob) {
                 if (completedSuccessfully) {
