@@ -3,6 +3,8 @@
 import argparse
 import logging
 import math
+import os
+import time
 import torch
 from accelerate import Accelerator
 
@@ -29,6 +31,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         super().__init__()
         self.is_swapping_blocks = False
         self._unconditional_text_encoder_conds = None
+        self._sample_prompt_conds = {}
 
     @staticmethod
     def _unpatchify_prediction(pred: torch.Tensor, reference: torch.Tensor, patch: int, channels: int) -> torch.Tensor:
@@ -262,6 +265,25 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             empty_hidden, empty_mask = krea2_sampling.gather_valid_text(empty_hidden, empty_mask.bool())
         self._unconditional_text_encoder_conds = (empty_hidden.cpu(), empty_mask.cpu())
 
+    def _cache_sample_prompt_conditioning(self, args, text_encoder, accelerator):
+        if not accelerator.is_main_process or not args.sample_prompts or not os.path.isfile(args.sample_prompts):
+            return
+        prompts = train_util.load_prompts(args.sample_prompts)
+        texts = []
+        for prompt_dict in prompts:
+            texts.append(prompt_dict.get("prompt", ""))
+            if float(prompt_dict.get("guidance_scale", prompt_dict.get("scale", 5.5))) > 1.0:
+                texts.append(prompt_dict.get("negative_prompt", ""))
+        texts = list(dict.fromkeys(texts))
+        if not texts:
+            return
+        logger.info("Caching Krea 2 sample prompt conditioning (%d unique prompts)", len(texts))
+        with torch.no_grad():
+            for text in texts:
+                hidden, mask = krea2_utils.get_krea2_prompt_embeds(text_encoder, [text])
+                hidden, mask = krea2_sampling.gather_valid_text(hidden, mask.bool())
+                self._sample_prompt_conds[text] = (hidden.cpu(), mask.cpu())
+
     def cache_text_encoder_outputs_if_needed(
         self, args, accelerator: Accelerator, unet, vae, text_encoders, dataset, weight_dtype
     ):
@@ -275,6 +297,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             else:
                 text_encoders[0].to(accelerator.device)
             self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
+            self._cache_sample_prompt_conditioning(args, text_encoders[0], accelerator)
             dataset.new_cache_text_encoder_outputs(text_encoders, accelerator)
             if getattr(args, "krea2_text_encoder_layer_offload", False):
                 text_encoders[0].disable_layer_offload()
@@ -289,6 +312,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                     accelerator.device, getattr(args, "krea2_text_encoder_offload_percent", 1.0)
                 )
                 self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
+                self._cache_sample_prompt_conditioning(args, text_encoders[0], accelerator)
             elif args.krea2_dynamic_text_encoder_cpu:
                 logger.warning("Krea 2 dynamic caption encoding runs Qwen3-VL on CPU; training will be slower")
                 # The one-time Model Guidance condition is much faster on GPU.
@@ -300,10 +324,12 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                     clean_memory_on_device(accelerator.device)
                 else:
                     text_encoders[0].to("cpu")
+                self._cache_sample_prompt_conditioning(args, text_encoders[0], accelerator)
             else:
                 logger.warning("Krea 2 dynamic caption encoding keeps Qwen3-VL on the training device")
                 text_encoders[0].to(accelerator.device)
                 self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator)
+                self._cache_sample_prompt_conditioning(args, text_encoders[0], accelerator)
 
     def process_batch(
         self,
@@ -482,8 +508,96 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return pred, target, timesteps, weighting
 
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizers, text_encoder, unet):
-        if args.sample_prompts:
-            logger.warning("Krea 2 sample preview is not enabled in the shared adapter yet; training continues without samples")
+        if not args.sample_prompts:
+            return
+        if global_step == 0:
+            if not args.sample_at_first:
+                return
+        elif args.sample_every_n_steps is None and args.sample_every_n_epochs is None:
+            return
+        elif args.sample_every_n_epochs is not None:
+            if epoch is None or epoch % args.sample_every_n_epochs != 0:
+                return
+        elif epoch is not None or global_step % args.sample_every_n_steps != 0:
+            return
+        if not accelerator.is_main_process:
+            accelerator.wait_for_everyone()
+            return
+        if not os.path.isfile(args.sample_prompts):
+            logger.error("No Krea 2 sample prompt file: %s", args.sample_prompts)
+            accelerator.wait_for_everyone()
+            return
+
+        dit = accelerator.unwrap_model(unet)
+        live_text_encoder = None
+        if text_encoder is not None:
+            live_text_encoder = text_encoder[0] if isinstance(text_encoder, (list, tuple)) else text_encoder
+            live_text_encoder = accelerator.unwrap_model(live_text_encoder)
+        prompts = train_util.load_prompts(args.sample_prompts)
+        save_dir = os.path.join(args.output_dir, "sample")
+        os.makedirs(save_dir, exist_ok=True)
+        logger.info("Generating %d Krea 2 sample image(s) at step %d", len(prompts), global_step)
+
+        rng_state = torch.get_rng_state()
+        cuda_rng_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+        dit.switch_block_swap_for_inference()
+        try:
+            for prompt_dict in prompts:
+                prompt = prompt_dict.get("prompt", "")
+                negative_prompt = prompt_dict.get("negative_prompt", "")
+                guidance_scale = float(prompt_dict.get("guidance_scale", prompt_dict.get("scale", 5.5)))
+
+                def get_condition(text):
+                    # Text Encoder adapters must be sampled live; frozen/deleted
+                    # encoders use the CPU cache prepared before training.
+                    if live_text_encoder is not None and self.is_train_text_encoder(args):
+                        hidden, mask = krea2_utils.get_krea2_prompt_embeds(live_text_encoder, [text])
+                        return krea2_sampling.gather_valid_text(hidden, mask.bool())
+                    return self._sample_prompt_conds.get(text)
+
+                condition = get_condition(prompt)
+                negative_condition = get_condition(negative_prompt) if guidance_scale > 1.0 else None
+                if condition is None or (guidance_scale > 1.0 and negative_condition is None):
+                    logger.warning("Missing cached Krea 2 sample conditioning; skipping prompt: %s", prompt)
+                    continue
+                txt, txt_mask = condition
+                if negative_condition is not None:
+                    untxt, untxt_mask = negative_condition
+                else:
+                    untxt = untxt_mask = None
+
+                dit.prepare_block_swap_before_forward()
+                seed = prompt_dict.get("seed", args.seed if args.seed is not None else 0)
+                images = krea2_sampling.sample(
+                    dit,
+                    vae,
+                    txt,
+                    txt_mask,
+                    untxt=untxt,
+                    untxtmask=untxt_mask,
+                    device=accelerator.device,
+                    dtype=torch.bfloat16,
+                    width=prompt_dict.get("width", 1024),
+                    height=prompt_dict.get("height", 1024),
+                    steps=prompt_dict.get("sample_steps", 28),
+                    cfg_scale=guidance_scale,
+                    seed=seed,
+                    mu=float(prompt_dict["flow_shift"]) if "flow_shift" in prompt_dict else None,
+                )
+                suffix = f"e{epoch:06d}" if epoch is not None else f"{global_step:06d}"
+                enum = prompt_dict.get("enum", 0)
+                timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+                for image_index, image in enumerate(images):
+                    seed_suffix = seed + image_index
+                    filename = f"{args.output_name or 'krea2'}_{suffix}_{enum:02d}_{timestamp}_{seed_suffix}.png"
+                    image.save(os.path.join(save_dir, filename))
+        finally:
+            torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+            dit.switch_block_swap_for_training()
+            clean_memory_on_device(accelerator.device)
+            accelerator.wait_for_everyone()
 
     def update_metadata(self, metadata, args):
         self.update_flow_metadata(metadata, args)

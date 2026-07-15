@@ -9,6 +9,7 @@ import random
 from datetime import datetime
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import load_file
 
 from library import qwen_image_autoencoder_kl
@@ -16,6 +17,20 @@ from library.krea2 import krea2_sampling, krea2_utils
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def is_native_krea2_adapter(weights_or_path) -> bool:
+    """Detect the dotted adapter format used by the official Krea 2 Turbo LoRA."""
+    if isinstance(weights_or_path, (str, os.PathLike)):
+        with safe_open(weights_or_path, framework="pt", device="cpu") as file:
+            keys = file.keys()
+    else:
+        keys = weights_or_path.keys()
+    return any(
+        key.startswith("diffusion_model.")
+        and (key.endswith(".lora_down.weight") or key.endswith(".diff_b"))
+        for key in keys
+    )
 
 
 def parse_prompt_line(line: str) -> dict:
@@ -135,12 +150,24 @@ def load_pipeline(args, load_encoder=True):
         disable_mmap=True,
         disable_cache=True,
     ).to(dtype=dtype).eval()
-    generic_lora_module = args.network_module in {"networks.cdka", "networks.krona"}
-    if args.fp8_scaled and args.lora_weight and generic_lora_module:
+    loaded_adapters = [load_file(path) for path in args.lora_weight] if args.lora_weight else []
+    adapter_multipliers = args.lora_multiplier or []
+    native_adapter_flags = [is_native_krea2_adapter(weights) for weights in loaded_adapters]
+    posthoc_adapter_indices = [
+        index
+        for index, is_native in enumerate(native_adapter_flags)
+        if args.network_module in {"networks.cdka", "networks.krona"} and not is_native
+    ]
+    loadtime_adapter_indices = [index for index in range(len(loaded_adapters)) if index not in posthoc_adapter_indices]
+    if args.fp8_scaled and posthoc_adapter_indices:
         raise ValueError(
             f"{args.network_module} must be merged before FP8 quantization; disable --fp8_scaled for this adapter"
         )
-    lora_weights = [load_file(path) for path in args.lora_weight] if args.lora_weight and not generic_lora_module else None
+    lora_weights = [loaded_adapters[index] for index in loadtime_adapter_indices] or None
+    lora_multipliers = [
+        adapter_multipliers[index] if index < len(adapter_multipliers) else 1.0
+        for index in loadtime_adapter_indices
+    ]
     dit = krea2_utils.load_krea2_dit(
         args.dit,
         device=device,
@@ -150,16 +177,16 @@ def load_pipeline(args, load_encoder=True):
         attn_mode=args.attn_mode,
         split_attn=args.split_attn,
         lora_weights=lora_weights,
-        lora_multipliers=args.lora_multiplier,
+        lora_multipliers=lora_multipliers,
     ).eval().requires_grad_(False)
 
-    if args.lora_weight and generic_lora_module:
+    if posthoc_adapter_indices:
         network_module = importlib.import_module(args.network_module)
-        multipliers = args.lora_multiplier or []
-        for index, path in enumerate(args.lora_weight):
-            multiplier = multipliers[index] if index < len(multipliers) else 1.0
+        for index in posthoc_adapter_indices:
+            path = args.lora_weight[index]
+            multiplier = adapter_multipliers[index] if index < len(adapter_multipliers) else 1.0
             network, weights_sd = network_module.create_network_from_weights(
-                multiplier, path, None, [None], dit, for_inference=True
+                multiplier, path, None, [None], dit, loaded_adapters[index], for_inference=True
             )
             merge_device = torch.device("cpu") if args.blocks_to_swap else device
             network.merge_to([None], dit, weights_sd, dtype=dtype, device=merge_device)
@@ -246,6 +273,10 @@ def main():
         network_module = importlib.import_module(args.network_module)
         multipliers = args.lora_multiplier or []
         for index, adapter_path in enumerate(args.lora_weight):
+            if is_native_krea2_adapter(adapter_path):
+                # The official Turbo adapter only targets diffusion_model; do
+                # not send its dotted DiT keys through the text-adapter loader.
+                continue
             multiplier = multipliers[index] if index < len(multipliers) else 1.0
             network, weights_sd = network_module.create_network_from_weights(
                 multiplier, adapter_path, None, [encoder], None, for_inference=True

@@ -1052,7 +1052,7 @@ function buildTrainingConfig(jobName, jobPath) {
     }
 
     // Add sample prompts if file exists and has content
-    if (arch.id !== 'krea2' && fs.existsSync(samplePromptsPath)) {
+    if (fs.existsSync(samplePromptsPath)) {
         const prompts = fs.readFileSync(samplePromptsPath, 'utf8').trim();
         if (prompts.length > 0) {
             const ta = jobConfig.training_arguments || {};

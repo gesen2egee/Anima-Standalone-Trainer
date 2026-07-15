@@ -115,7 +115,7 @@ def load_safetensors_with_lora_and_fp8(
         def weight_hook_func(model_weight_key, model_weight: torch.Tensor, keep_on_calc_device=False):
             nonlocal list_of_lora_weight_keys, lora_weights_list, lora_multipliers, calc_device
 
-            if not model_weight_key.endswith(".weight"):
+            if not model_weight_key.endswith((".weight", ".bias")):
                 return model_weight
 
             original_device = model_weight.device
@@ -123,15 +123,56 @@ def load_safetensors_with_lora_and_fp8(
                 model_weight = model_weight.to(calc_device)  # to make calculation faster
 
             for lora_weight_keys, lora_sd, multiplier in zip(list_of_lora_weight_keys, lora_weights_list, lora_multipliers):
+                model_name = model_weight_key.rsplit(".", 1)[0]
+                dotted_names = [model_name]
+                if model_name.startswith("diffusion_model."):
+                    dotted_names.append(model_name[len("diffusion_model.") :])
+                else:
+                    dotted_names.append("diffusion_model." + model_name)
+
+                # Krea 2's official Turbo adapter stores trained bias deltas as
+                # ``diffusion_model.<module>.diff_b``. Apply these alongside the
+                # LoRA matrices so the adapter is not only partially merged.
+                if model_weight_key.endswith(".bias"):
+                    diff_bias_key = next(
+                        (name + ".diff_b" for name in dotted_names if name + ".diff_b" in lora_weight_keys),
+                        None,
+                    )
+                    if diff_bias_key is not None:
+                        model_weight = model_weight + multiplier * lora_sd[diff_bias_key].to(
+                            device=calc_device, dtype=model_weight.dtype
+                        )
+                        lora_weight_keys.remove(diff_bias_key)
+                    continue
+
                 # check if this weight has LoRA weights
-                lora_name_without_prefix = model_weight_key.rsplit(".", 1)[0]  # remove trailing ".weight"
+                lora_name_without_prefix = model_name
                 found = False
+                down_key = up_key = alpha_key = None
+
+                # Native/diffusers-style adapters retain dots and commonly add
+                # a ``diffusion_model.`` prefix (the official Krea 2 Turbo LoRA
+                # uses this form). Try these before the flattened kohya names.
+                for dotted_name in dotted_names:
+                    candidate_down = dotted_name + ".lora_down.weight"
+                    candidate_up = dotted_name + ".lora_up.weight"
+                    if candidate_down in lora_weight_keys and candidate_up in lora_weight_keys:
+                        down_key = candidate_down
+                        up_key = candidate_up
+                        alpha_key = dotted_name + ".alpha"
+                        found = True
+                        break
+
                 for prefix in ["lora_unet_", ""]:
+                    if found:
+                        break
                     lora_name = prefix + lora_name_without_prefix.replace(".", "_")
-                    down_key = lora_name + ".lora_down.weight"
-                    up_key = lora_name + ".lora_up.weight"
-                    alpha_key = lora_name + ".alpha"
-                    if down_key in lora_weight_keys and up_key in lora_weight_keys:
+                    candidate_down = lora_name + ".lora_down.weight"
+                    candidate_up = lora_name + ".lora_up.weight"
+                    if candidate_down in lora_weight_keys and candidate_up in lora_weight_keys:
+                        down_key = candidate_down
+                        up_key = candidate_up
+                        alpha_key = lora_name + ".alpha"
                         found = True
                         break
 
