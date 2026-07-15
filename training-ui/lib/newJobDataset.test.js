@@ -38,8 +38,8 @@ test("batch import reads only first-level numbered folders into subsets", () => 
       caption_prefix: s.caption_prefix,
     })),
     [
-      { image_dir: "03_bob", num_repeats: 3, caption_prefix: "bob," },
-      { image_dir: "12_alice", num_repeats: 12, caption_prefix: "alice," },
+      { image_dir: "03_bob", num_repeats: 3, caption_prefix: "bob, " },
+      { image_dir: "12_alice", num_repeats: 12, caption_prefix: "alice, " },
     ],
   );
 });

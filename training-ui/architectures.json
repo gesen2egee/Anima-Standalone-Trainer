@@ -38,67 +38,39 @@
         }
       },
       "training_section": "anima_arguments",
+      "job_defaults": {
+        "training_arguments": {
+          "mixed_precision": "bf16",
+          "save_precision": "bf16",
+          "full_bf16": true,
+          "blocks_to_swap": 0,
+          "cache_latents": true,
+          "cache_latents_to_disk": true,
+          "cache_text_encoder_outputs_to_disk": false
+        },
+        "network_arguments": {
+          "network_module": "networks.cdka",
+          "network_train_unet_only": true,
+          "network_args": [
+            "exclude_patterns=[\".*\"]",
+            "network_reg_lrs=.*self_attn.*=5e-5",
+            "include_patterns=[\".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)\"]",
+            "allora=True"
+          ]
+        },
+        "anima_arguments": {
+          "timestep_sampling": "autoshift",
+          "discrete_flow_shift": 1.0
+        }
+      },
+      "dataset_defaults": {
+        "min_bucket_reso": 384,
+        "max_bucket_reso": 1536,
+        "resolution": 768,
+        "fad_timestep": true
+      },
       "all_in_one": false,
       "fsdp_transformer_cls": "Block"
-    },
-    "lumina": {
-      "display_name": "Lumina",
-      "network_modules": ["networks.lora_lumina", "networks.lokr", "networks.cdka", "networks.krona"],
-      "scripts": {
-        "train": "lumina_train.py",
-        "train_network": "lumina_train_network.py",
-        "generate": "lumina_gen.py"
-      },
-      "global_paths": {
-        "lumina_dit_path": {
-          "label": "Lumina DiT Model Path",
-          "placeholder": "C:\\ComfyUI\\models\\checkpoints\\netayumeLumina.safetensors",
-          "cli_flag": "dit_path"
-        },
-        "gemma2_path": {
-          "label": "Gemma 2 Text Encoder Path",
-          "placeholder": "C:\\ComfyUI\\models\\text_encoders\\gemma-2b-it.safetensors",
-          "cli_flag": "gemma2"
-        },
-        "lumina_vae_path": {
-          "label": "Lumina VAE Path",
-          "placeholder": "C:\\ComfyUI\\models\\vae\\lumina_vae.safetensors",
-          "cli_flag": "ae"
-        }
-      },
-      "gen_params": {
-        "discrete_flow_shift": {
-          "label": "Discrete Flow Shift",
-          "type": "number",
-          "default": 6.0,
-          "step": 0.5,
-          "cli_flag": "discrete_flow_shift"
-        },
-        "cfg_trunc_ratio": {
-          "label": "CFG Truncation Ratio",
-          "type": "number",
-          "default": 0.25,
-          "step": 0.05,
-          "cli_flag": "cfg_trunc_ratio"
-        },
-        "renorm_cfg": {
-          "label": "Renorm CFG",
-          "type": "number",
-          "default": 1.0,
-          "step": 0.1,
-          "cli_flag": "renorm_cfg"
-        },
-        "system_prompt": {
-          "label": "System Prompt",
-          "type": "text",
-          "default": "",
-          "cli_flag": "system_prompt"
-        }
-      },
-      "training_section": "lumina_arguments",
-      "all_in_one": true,
-      "fsdp_transformer_cls": "JointTransformerBlock",
-      "all_in_one_source_key": "lumina_dit_path"
     },
     "krea2": {
       "display_name": "Krea 2",
@@ -140,10 +112,23 @@
       "training_section": "krea2_arguments",
       "job_defaults": {
         "training_arguments": {
+          "mixed_precision": "bf16",
+          "save_precision": "bf16",
+          "full_bf16": false,
+          "full_fp16": false,
           "blocks_to_swap": 20,
           "cache_latents": true,
           "cache_latents_to_disk": true,
           "cache_text_encoder_outputs_to_disk": false
+        },
+        "network_arguments": {
+          "network_module": "networks.cdka",
+          "network_train_unet_only": true,
+          "network_args": [
+            "exclude_patterns=[\".*\"]",
+            "include_patterns=[\".*(attn\\\\.(wv|wo)|self_attn\\\\.(v_proj|o_proj))\"]",
+            "allora=True"
+          ]
         },
         "krea2_arguments": {
           "fp8_base": true,
@@ -152,11 +137,17 @@
           "krea2_dynamic_text_encoder_cpu": false,
           "krea2_text_encoder_layer_offload": true,
           "krea2_text_encoder_offload_percent": 1.0,
-          "timestep_sampling": "krea2_shift",
+          "timestep_sampling": "autoshift",
           "discrete_flow_shift": 2.5,
           "sigmoid_scale": 1.0,
           "krea2_max_token_length": 512
         }
+      },
+      "dataset_defaults": {
+        "min_bucket_reso": 256,
+        "max_bucket_reso": 768,
+        "resolution": 512,
+        "fad_timestep": false
       },
       "all_in_one": false,
       "fsdp_transformer_cls": "SingleStreamBlock"

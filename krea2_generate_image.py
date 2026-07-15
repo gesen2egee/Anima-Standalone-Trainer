@@ -235,6 +235,23 @@ def main():
     os.makedirs(args.save_path, exist_ok=True)
     device, dtype = get_runtime_device_dtype()
     encoder = load_text_encoder(args, device, dtype)
+    te_adapter_modules = {
+        "networks.cdka",
+        "networks.krona",
+        "networks.lokr",
+        "networks.lora_krea2",
+        "networks.lora_anima",
+    }
+    if args.lora_weight and args.network_module in te_adapter_modules:
+        network_module = importlib.import_module(args.network_module)
+        multipliers = args.lora_multiplier or []
+        for index, adapter_path in enumerate(args.lora_weight):
+            multiplier = multipliers[index] if index < len(multipliers) else 1.0
+            network, weights_sd = network_module.create_network_from_weights(
+                multiplier, adapter_path, None, [encoder], None, for_inference=True
+            )
+            network.merge_to([encoder], None, weights_sd, dtype=dtype, device=device)
+            del network
     preencode_prompt_specs(args, prompt_specs, encoder, device)
     del encoder
     gc.collect()

@@ -37,6 +37,28 @@ class DifferentialGuidanceTest(unittest.TestCase):
         self.assertIsNone(model_pred.grad)
         self.assertIsNotNone(target.grad)
 
+    def test_logit_normal_weighting_is_non_uniform_and_normalized(self):
+        args = argparse.Namespace(logit_mean=0.0, logit_std=1.0)
+        sigmas = torch.tensor([0.1, 0.3, 0.5, 0.7, 0.9])
+
+        weighting = anima_train_utils.compute_loss_weighting_for_anima("logit_normal", sigmas, args)
+
+        self.assertFalse(torch.allclose(weighting, torch.ones_like(weighting)))
+        self.assertAlmostEqual(weighting.mean().item(), 1.0, places=5)
+        self.assertGreater(weighting[2].item(), weighting[0].item())
+
+    def test_mode_weighting_uses_mode_scale(self):
+        sigmas = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0])
+        low = anima_train_utils.compute_loss_weighting_for_anima(
+            "mode", sigmas, argparse.Namespace(mode_scale=0.1)
+        )
+        high = anima_train_utils.compute_loss_weighting_for_anima(
+            "mode", sigmas, argparse.Namespace(mode_scale=2.0)
+        )
+
+        self.assertGreater(high[2].item() - high[0].item(), low[2].item() - low[0].item())
+        self.assertAlmostEqual(high.mean().item(), 1.0, places=5)
+
 
 if __name__ == "__main__":
     unittest.main()

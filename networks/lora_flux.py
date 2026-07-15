@@ -662,6 +662,7 @@ def create_network(
         reg_lrs=reg_lrs,
         verbose=verbose,
         target_all_linears=kwargs.get("target_all_linears", False),
+        target_all_text_linears=kwargs.get("target_all_text_linears", False),
         exclude_patterns=exclude_patterns,
         include_patterns=include_patterns,
     )
@@ -724,6 +725,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, flux, weigh
         split_qkv=split_qkv,
         train_t5xxl=train_t5xxl,
         target_all_linears=kwargs.get("target_all_linears", False),
+        target_all_text_linears=kwargs.get("target_all_text_linears", False),
     )
     return network, weights_sd
 
@@ -769,6 +771,7 @@ class LoRANetwork(torch.nn.Module):
         reg_lrs: Optional[Dict[str, float]] = None,
         verbose: Optional[bool] = False,
         target_all_linears: bool = False,
+        target_all_text_linears: bool = False,
         exclude_patterns: Optional[List[str]] = None,
         include_patterns: Optional[List[str]] = None,
     ) -> None:
@@ -786,6 +789,7 @@ class LoRANetwork(torch.nn.Module):
         self.split_qkv = split_qkv
         self.train_t5xxl = train_t5xxl
         self.target_all_linears = target_all_linears
+        self.target_all_text_linears = target_all_text_linears
 
         def compile_patterns(patterns: Optional[List[str]], kind: str) -> List[re.Pattern]:
             compiled = []
@@ -844,6 +848,8 @@ class LoRANetwork(torch.nn.Module):
             filter: Optional[str] = None,
             default_dim: Optional[int] = None,
         ) -> List[LoRAModule]:
+            if root_module is None:
+                return [], []
             prefix = (
                 self.LORA_PREFIX_FLUX
                 if is_flux
@@ -990,7 +996,8 @@ class LoRANetwork(torch.nn.Module):
 
             logger.info(f"create LoRA for Text Encoder {index+1}:")
 
-            text_encoder_loras, skipped = create_modules(False, index, text_encoder, LoRANetwork.TEXT_ENCODER_TARGET_REPLACE_MODULE)
+            text_target_modules = None if self.target_all_text_linears else LoRANetwork.TEXT_ENCODER_TARGET_REPLACE_MODULE
+            text_encoder_loras, skipped = create_modules(False, index, text_encoder, text_target_modules)
             logger.info(f"create LoRA for Text Encoder {index+1}: {len(text_encoder_loras)} modules.")
             self.text_encoder_loras.extend(text_encoder_loras)
             skipped_te += skipped

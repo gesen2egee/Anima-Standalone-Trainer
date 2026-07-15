@@ -76,3 +76,20 @@ test("new job modal defaults to the template network module", () => {
   assert.ok(newJobBlock, "new job click handler should exist");
   assert.match(newJobBlock[0], /\$\("new-job-network-module"\)\.value = "networks\.cdka"/);
 });
+
+test("architecture registry exposes only Anima and Krea 2 presets", () => {
+  const registry = JSON.parse(read("architectures.json"));
+  assert.deepStrictEqual(Object.keys(registry.architectures), ["anima", "krea2"]);
+
+  const anima = registry.architectures.anima;
+  assert.strictEqual(anima.job_defaults.anima_arguments.timestep_sampling, "autoshift");
+  assert.strictEqual(anima.dataset_defaults.resolution, 768);
+  assert.strictEqual(anima.job_defaults.network_arguments.network_module, "networks.cdka");
+
+  const krea2 = registry.architectures.krea2;
+  assert.strictEqual(krea2.job_defaults.krea2_arguments.timestep_sampling, "autoshift");
+  assert.strictEqual(krea2.job_defaults.krea2_arguments.discrete_flow_shift, 2.5);
+  assert.strictEqual(krea2.job_defaults.training_arguments.blocks_to_swap, 20);
+  assert.strictEqual(krea2.dataset_defaults.resolution, 512);
+  assert.match(krea2.job_defaults.network_arguments.network_args.join(" "), /self_attn/);
+});

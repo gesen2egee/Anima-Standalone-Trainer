@@ -86,6 +86,17 @@ function parseBatchFolderName(folderName) {
   return { repeats, triggerWords, folder_shift };
 }
 
+function deriveTriggerWordsFromFolderName(folderPath) {
+  const cleanPath = stripQuotes(String(folderPath || '').trim()).replace(/[\\/]+$/, '');
+  const folderName = path.basename(cleanPath);
+  const parsed = parseBatchFolderName(folderName);
+  if (parsed?.triggerWords) return parsed.triggerWords;
+  return folderName
+    .replace(/\{(?:high|low|mid|uniform|suggested\s*(?:high|low))\}/ig, '')
+    .replace(/^\d+_/, '')
+    .trim();
+}
+
 function joinDisplayPath(parent, child) {
   const base = String(parent || '').replace(/[\\\/]+$/, '');
   if (/^[A-Za-z]:[\\\/]/.test(base) || base.startsWith('\\\\')) {
@@ -95,6 +106,7 @@ function joinDisplayPath(parent, child) {
 }
 
 function buildFolderMatch({ imageDir, nativeImageDir, repeats = 1, triggerWords = '', folder_shift = 'global' }) {
+  const resolvedTriggerWords = triggerWords || deriveTriggerWordsFromFolderName(imageDir || nativeImageDir);
   const imagePaths = listSdScriptsImages(nativeImageDir);
   return {
     imageDir,
@@ -102,8 +114,8 @@ function buildFolderMatch({ imageDir, nativeImageDir, repeats = 1, triggerWords 
     imagePaths,
     imageCount: imagePaths.length,
     repeats,
-    triggerWords,
-    captionPrefix: normalizeCaptionPrefix(triggerWords),
+    triggerWords: resolvedTriggerWords,
+    captionPrefix: normalizeCaptionPrefix(resolvedTriggerWords),
     folder_shift,
   };
 }
@@ -241,6 +253,7 @@ async function inspectDatasetImageFolders({
 module.exports = {
   SD_SCRIPT_IMAGE_EXTENSIONS,
   inspectDatasetImageFolders,
+  deriveTriggerWordsFromFolderName,
   isSdScriptsImageName,
   joinDisplayPath,
   listSdScriptsImages,

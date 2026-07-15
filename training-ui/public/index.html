@@ -129,7 +129,6 @@
                             <select id="cfg-model-architecture">
                                 <option value="anima">Anima</option>
                                 <option value="krea2">Krea 2</option>
-                                <option value="lumina">Lumina</option>
                             </select>
                             <small id="cfg-model-architecture-hint">模型路徑、訓練腳本與架構專用設定會依此選擇。</small>
                         </div>
@@ -432,6 +431,7 @@
                         <div id="group-krea2-text-encoder" class="form-group hidden">
                             <label><input type="checkbox" id="cfg-krea2-dynamic-text-encoder"> Krea 2 訓練時即時編碼 Text Encoder（不使用 Cache）</label>
                             <small>模仿 AIT：每個 batch 即時執行 Qwen3-VL。需要指定 Krea2 Text Encoder，速度較慢但不需要建立 TE cache。</small>
+                            <div id="krea2-dynamic-text-encoder-warning" class="inline-warning hidden" style="margin-top: 8px;"></div>
                             <label style="display: block; margin-top: 8px;"><input type="checkbox" id="cfg-krea2-dynamic-text-encoder-cpu"> 將 Text Encoder 保留在 CPU</label>
                             <small>更省 VRAM，但會明顯降低訓練速度。</small>
                             <label style="display: block; margin-top: 8px;"><input type="checkbox" id="cfg-krea2-text-encoder-layer-offload" checked> AIT Layer Offload（推薦）</label>
@@ -464,6 +464,7 @@
                             <div class="form-group">
                                 <label>Flow Shift</label>
                                 <input type="number" id="cfg-flow-shift" value="1.0" step="0.1" min="0">
+                                <small id="cfg-flow-shift-hint">Autoshift 會將此值乘上每張圖片計算出的 Mask Shift。</small>
                             </div>
                             <div class="form-group">
                                 <label>Weighting Scheme</label>
@@ -471,8 +472,8 @@
                                     <option value="uniform">Uniform (Kohya Default)</option>
                                     <option value="none">None</option>
                                     <option value="sigma_sqrt">Sigma Sqrt</option>
-                                    <option value="logit_normal">Logit Normal</option>
-                                    <option value="mode">Mode</option>
+                                    <option value="logit_normal">Logit Normal Loss Profile</option>
+                                    <option value="mode">Mode Mid-Noise Profile</option>
                                     <option value="cosmap">Cosmap</option>
                                     <option value="plora">P-LoRA</option>
                                     <option value="plora_sigmoid">P-LoRA Sigmoid</option>
@@ -485,11 +486,11 @@
                                 <label>Sigmoid Scale</label>
                                 <input type="number" id="cfg-sigmoid-scale" value="1.0" step="0.1" min="0">
                             </div>
-                            <div class="form-group">
-                                <label>Qwen3 Max Tokens</label>
+                            <div class="form-group" id="group-primary-max-tokens">
+                                <label id="cfg-primary-max-token-label">Qwen3 Max Tokens</label>
                                 <input type="number" id="cfg-qwen3-max-token-length" value="512" min="1" step="1">
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" id="group-t5-max-tokens">
                                 <label>T5 Max Tokens</label>
                                 <input type="number" id="cfg-t5-max-token-length" value="512" min="1" step="1">
                             </div>
@@ -872,7 +873,6 @@
                                 <label>Network Module</label>
                                 <select id="cfg-network-module">
                                     <option value="networks.lora_anima">LoRA (Anima)</option>
-                                    <option value="networks.lora_lumina">LoRA (Lumina)</option>
                                     <option value="networks.lora_krea2">LoRA (Krea 2)</option>
                                     <option value="networks.lora">LoRA (Standard)</option>
                                     <option value="networks.lokr">LOKR (LOKR.PY)</option>
@@ -893,8 +893,8 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-unet-only" checked> Train UNet Only</label>
-                                <small>Freeze text encoder. Recommended for most LoRA training.</small>
+                                <label><input type="checkbox" id="cfg-unet-only" checked> <span id="cfg-unet-only-label">Train DiT Only</span></label>
+                                <small id="cfg-unet-only-hint">Freeze text encoder. Recommended for most LoRA training.</small>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
@@ -1484,21 +1484,29 @@ custom_cli_args = ""</textarea>
         <div class="modal-content">
             <h3>Create New Training Job</h3>
             <div class="form-group">
-                <label>Job Name</label>
-                <input type="text" id="new-job-name" placeholder="my_job_v1">
-            </div>
-            <div class="form-group">
-                <label>Output Name</label>
-                <input type="text" id="new-job-output-name" placeholder="my_anima_lora">
-            </div>
-            <div class="form-group">
                 <label>Training Model</label>
                 <select id="new-job-model-architecture">
                     <option value="anima">Anima</option>
                     <option value="krea2">Krea 2</option>
-                    <option value="lumina">Lumina</option>
                 </select>
-                <small>建立任務時指定模型架構，之後仍可在 Training 分頁切換。</small>
+                <small>切換時會套用該架構的效能、解析度及 Network Args preset。</small>
+            </div>
+            <div class="form-group">
+                <label>Dataset Image Folder</label>
+                <div class="path-input-row">
+                    <input type="text" id="new-job-image-dir" placeholder="D:\datasets\15_character_name">
+                    <button type="button" id="btn-new-job-select-image-dir" class="btn btn-secondary" title="Select folder">📂</button>
+                </div>
+                <small id="new-job-image-dir-status" class="folder-inspection-status">No folder selected.</small>
+                <small>會從資料夾名稱取得 Trigger Words，並自動產生含 Architecture 與版本的任務名。</small>
+            </div>
+            <div class="form-group">
+                <label>Job Name</label>
+                <input type="text" id="new-job-name" placeholder="character_name ANIMA">
+            </div>
+            <div class="form-group">
+                <label>Output Name</label>
+                <input type="text" id="new-job-output-name" placeholder="character_name ANIMA">
             </div>
             <div class="form-group">
                 <label>Trigger Words</label>
@@ -1510,20 +1518,11 @@ custom_cli_args = ""</textarea>
                 <select id="new-job-network-module">
                     <option value="networks.lora_anima">LoRA (Anima)</option>
                     <option value="networks.lora_krea2">LoRA (Krea 2)</option>
-                    <option value="networks.lora_lumina">LoRA (Lumina)</option>
                     <option value="networks.lora">LoRA (Standard)</option>
                     <option value="networks.lokr">LOKR（LOKR.PY）</option>
                     <option value="networks.krona">KRONA（抗過擬合強）</option>
                     <option value="networks.cdka">CDKA（學習力強）</option>
                 </select>
-            </div>
-            <div class="form-group">
-                <label>Dataset 1 Image Folder</label>
-                <div class="path-input-row">
-                    <input type="text" id="new-job-image-dir" placeholder="D:\datasets\my_images">
-                    <button type="button" id="btn-new-job-select-image-dir" class="btn btn-secondary" title="Select folder">📂</button>
-                </div>
-                <small id="new-job-image-dir-status" class="folder-inspection-status">No folder selected.</small>
             </div>
             <div class="checkbox-group">
                 <label><input type="checkbox" id="new-job-batch-import"> Batch import first-level folders</label>

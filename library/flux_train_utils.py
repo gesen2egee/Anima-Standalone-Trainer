@@ -313,6 +313,18 @@ def get_lin_function(x1: float = 256, y1: float = 0.5, x2: float = 4096, y2: flo
     return lambda x: m * x + b
 
 
+def get_krea2_resolution_shift_mu(image_seq_len: int, discrete_flow_shift: float = 2.5) -> float:
+    """Return Krea 2 resolution-aware log shift with a backwards-compatible UI multiplier.
+
+    ``2.5`` preserves the original Krea 2 resolution schedule. Other positive
+    values multiply the schedule odds, so the Training UI Flow Shift control is
+    effective without changing existing Krea 2 jobs.
+    """
+    base_mu = get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(image_seq_len)
+    multiplier = max(float(discrete_flow_shift or 2.5), 1e-6) / 2.5
+    return base_mu + math.log(multiplier)
+
+
 def get_schedule(
     num_steps: int,
     image_seq_len: int,
@@ -677,6 +689,8 @@ def get_noisy_model_input_and_timesteps(
                     global_shift=shift,
                     folder_shift_progress=folder_shift_progress,
                 )
+            flow_multiplier = max(float(getattr(args, "discrete_flow_shift", 1.0) or 1.0), 1e-6)
+            shift = shift * flow_multiplier
         else:
             shift = train_util.get_folder_shift_values(
                 folder_shifts,
@@ -707,9 +721,9 @@ def get_noisy_model_input_and_timesteps(
         sigmas = sigmas.sigmoid()
         image_seq_len = (h // 2) * (w // 2)  # latents are packed into 2x2 image tokens
         if args.timestep_sampling == "krea2_shift":
-            # Krea 2 interpolates its dynamic shift through 1280px / 6400 tokens,
-            # while the Flux schedule uses 1024px / 4096 tokens.
-            mu = get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(image_seq_len)
+            # 2.5 keeps the original Krea schedule; the UI value now acts as a
+            # relative multiplier instead of being silently ignored.
+            mu = get_krea2_resolution_shift_mu(image_seq_len, args.discrete_flow_shift)
         else:
             mu = get_lin_function(y1=0.5, y2=1.15)(image_seq_len)
         sigmas = time_shift(mu, 1.0, sigmas)

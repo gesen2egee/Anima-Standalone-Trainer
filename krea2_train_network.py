@@ -67,6 +67,15 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
         self.validate_flow_training_args(args)
+        train_text_encoder = not args.network_train_unet_only or args.network_train_text_encoder_only
+        if train_text_encoder:
+            args.krea2_dynamic_text_encoder = True
+            args.krea2_dynamic_text_encoder_cpu = False
+            if args.krea2_text_encoder_layer_offload:
+                logger.warning(
+                    "Krea 2 Text Encoder adapter training needs backward activations; disabling forward-only TE Layer Offload."
+                )
+                args.krea2_text_encoder_layer_offload = False
         if args.krea2_max_token_length <= 0:
             raise ValueError("krea2_max_token_length must be greater than 0")
         if args.blocks_to_swap is not None and not 0 <= args.blocks_to_swap <= 26:
@@ -118,12 +127,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             raise ValueError(
                 "Krea 2 requires --cache_latents because the shared trainer keeps the Qwen-Image VAE on CPU."
             )
-        if args.network_train_text_encoder_only:
-            raise ValueError("Krea 2 text encoder is frozen; --network_train_text_encoder_only is not supported")
         if args.train_inpainting:
             raise ValueError("Krea 2 supports masked loss, but the Anima inpainting input path is not compatible")
 
-        args.network_train_unet_only = True
         # Krea 2 only supports the safe scaled-FP8 path. Keep the shared
         # fp8_base flag as the compatibility gate, but reject plain FP8 rather
         # than silently running in a different precision than the UI requests.
@@ -232,10 +238,10 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return None if args.cache_text_encoder_outputs else text_encoders
 
     def is_train_text_encoder(self, args):
-        return False
+        return not args.network_train_unet_only or args.network_train_text_encoder_only
 
     def get_text_encoders_train_flags(self, args, text_encoders):
-        return [False] * len(text_encoders)
+        return [self.is_train_text_encoder(args)] * len(text_encoders)
 
     def is_text_encoder_not_needed_for_training(self, args):
         return bool(args.cache_text_encoder_outputs)
@@ -244,8 +250,8 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     def _needs_unconditional_conditioning(args) -> bool:
         return float(getattr(args, "model_guidance_weight", 0.0) or 0.0) > 0.0
 
-    def _encode_empty_prompt_conditioning(self, args, text_encoder, accelerator):
-        if self._unconditional_text_encoder_conds is not None or not self._needs_unconditional_conditioning(args):
+    def _encode_empty_prompt_conditioning(self, args, text_encoder, accelerator, refresh=False):
+        if (self._unconditional_text_encoder_conds is not None and not refresh) or not self._needs_unconditional_conditioning(args):
             return
 
         logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
@@ -257,6 +263,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     def cache_text_encoder_outputs_if_needed(
         self, args, accelerator: Accelerator, unet, vae, text_encoders, dataset, weight_dtype
     ):
+        text_encoders[0].set_gradient_enabled(self.is_train_text_encoder(args))
         if args.cache_text_encoder_outputs:
             logger.info("Caching Krea 2 Qwen3-VL outputs")
             if getattr(args, "krea2_text_encoder_layer_offload", False):
@@ -323,6 +330,10 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if original_masks is not None:
             batch["masks"] = None
         try:
+            if train_text_encoder and self._needs_unconditional_conditioning(args):
+                # The Text Encoder adapter changes every optimizer step. Refresh
+                # Model Guidance conditioning so it never uses stale TE weights.
+                self._encode_empty_prompt_conditioning(args, text_encoders[0], accelerator, refresh=True)
             return super().process_batch(
                 batch,
                 text_encoders,
@@ -453,8 +464,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             folder_shifts=batch.get("folder_shifts"),
             folder_shift_progress=batch.get("folder_shift_progress"),
             proposal_flow_shift=math.exp(
-                flux_train_utils.get_lin_function(x1=256, y1=0.5, x2=6400, y2=1.15)(
-                    (latents.shape[-2] // 2) * (latents.shape[-1] // 2)
+                flux_train_utils.get_krea2_resolution_shift_mu(
+                    (latents.shape[-2] // 2) * (latents.shape[-1] // 2),
+                    args.discrete_flow_shift,
                 )
             )
             if args.timestep_sampling == "krea2_shift"
@@ -543,7 +555,7 @@ def setup_parser() -> argparse.ArgumentParser:
     timestep_action = parser._option_string_actions["--timestep_sampling"]
     if timestep_action.choices is not None and "krea2_shift" not in timestep_action.choices:
         timestep_action.choices = list(timestep_action.choices) + ["krea2_shift"]
-    timestep_action.default = "krea2_shift"
+    timestep_action.default = "autoshift"
     parser._option_string_actions["--discrete_flow_shift"].default = 2.5
     return parser
 

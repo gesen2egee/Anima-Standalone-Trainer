@@ -100,9 +100,9 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--timestep_sampling",
         type=str,
-        default="sigmoid",
+        default="autoshift",
         choices=["sigma", "uniform", "sigmoid", "shift", "autoshift", "autoshift_wavelet", "flux_shift", "plora", "spectrally_guided"],
-        help="Timestep sampling method (default: sigmoid (logit normal))",
+        help="Timestep sampling method (default: autoshift)",
     )
     parser.add_argument(
         "--p_lora_bias",
@@ -297,7 +297,7 @@ def compute_loss_weighting_for_anima(
         if args is None:
             return torch.ones_like(sigmas)
             
-        sampling = getattr(args, "timestep_sampling", "sigmoid")
+        sampling = getattr(args, "timestep_sampling", "autoshift")
         sigmas_f = sigmas.float()
         
         # 安全邊界截斷，避免 logit 計算中的 log(0) 或是除以零
@@ -363,7 +363,25 @@ def compute_loss_weighting_for_anima(
         return w_t.to(device=sigmas_device, dtype=sigmas.dtype)
         
     # 原有的物理加權邏輯 (與採樣完全解耦)
-    if weighting_scheme == "sigma_sqrt":
+    if weighting_scheme == "logit_normal":
+        # Use a bounded logit-space bell curve as an actual loss profile. The
+        # generic sd-scripts option otherwise only changes sigma sampling and
+        # silently becomes uniform for Anima/Krea explicit timestep samplers.
+        sigmas_f = torch.clamp(sigmas.float(), min=1e-6, max=1.0 - 1e-6)
+        logit = torch.log(sigmas_f / (1.0 - sigmas_f))
+        mean = float(getattr(args, "logit_mean", 0.0) if args is not None else 0.0)
+        std = max(float(getattr(args, "logit_std", 1.0) if args is not None else 1.0), 1e-6)
+        weighting = torch.exp(-0.5 * ((logit - mean) / std) ** 2)
+        weighting = weighting / weighting.mean().clamp_min(1e-6)
+        weighting = torch.clamp(weighting, min=0.05, max=10.0)
+    elif weighting_scheme == "mode":
+        # Stable mid-noise emphasis controlled by the existing mode_scale. It
+        # is normalized to keep the overall learning-rate scale unchanged.
+        sigmas_f = torch.clamp(sigmas.float(), min=0.0, max=1.0)
+        mode_scale = max(float(getattr(args, "mode_scale", 1.29) if args is not None else 1.29), 0.0)
+        weighting = 1.0 + mode_scale * torch.sin(math.pi * sigmas_f) ** 2
+        weighting = weighting / weighting.mean().clamp_min(1e-6)
+    elif weighting_scheme == "sigma_sqrt":
         weighting = (sigmas**-2.0).float()
     elif weighting_scheme == "cosmap":
         bot = 1 - 2 * sigmas + 2 * sigmas**2

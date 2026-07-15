@@ -232,7 +232,11 @@ def create_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
-    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+    has_krea_conditioner = any(
+        encoder is not None and encoder.__class__.__name__ == "Qwen3VLConditioner"
+        for encoder in (text_encoders or [])
+    )
+    if (unet is not None and unet.__class__.__name__ == "SingleStreamDiT") or has_krea_conditioner:
         # Keep the public Anima LoRA entry point usable for Krea2 jobs while
         # delegating target discovery to the generic all-Linear adapter.
         from networks import lora_krea2
@@ -346,7 +350,11 @@ def create_network(
 
 
 def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weights_sd=None, for_inference=False, **kwargs):
-    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+    has_krea_conditioner = any(
+        encoder is not None and encoder.__class__.__name__ == "Qwen3VLConditioner"
+        for encoder in (text_encoders or [])
+    )
+    if (unet is not None and unet.__class__.__name__ == "SingleStreamDiT") or has_krea_conditioner:
         from networks import lora_krea2
 
         return lora_krea2.create_network_from_weights(

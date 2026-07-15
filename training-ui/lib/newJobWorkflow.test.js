@@ -22,10 +22,12 @@ test("new job modal exposes trigger words and auto tag action", () => {
   const networkIndex = html.indexOf('id="new-job-network-module"');
   const triggerIndex = html.indexOf('id="new-job-trigger-words"');
   const imageDirIndex = html.indexOf('id="new-job-image-dir"');
+  const architectureIndex = html.indexOf('id="new-job-model-architecture"');
 
   assert.match(html, /id="new-job-trigger-words"/);
   assert.ok(triggerIndex >= 0 && triggerIndex < networkIndex, "trigger words should be above network module");
-  assert.ok(triggerIndex >= 0 && triggerIndex < imageDirIndex, "trigger words should be above image folder");
+  assert.ok(architectureIndex >= 0 && architectureIndex < imageDirIndex, "model architecture should be first");
+  assert.ok(imageDirIndex >= 0 && imageDirIndex < triggerIndex, "image folder should be above trigger words");
   assert.match(html, /id="btn-create-job-auto-tag"/);
   assert.match(html, /Create \+ Auto Tag/);
 });
@@ -54,14 +56,16 @@ test("generated samples contain trigger words and two distinct seeds", () => {
   assert.match(buildNewJobSamplePrompts("  ", () => 42), /^1girl --w 832 --h 1216 --s 28 --d 42 --l 3\.5 --n /);
 });
 
-test("new job trigger words follow job name until manually edited", () => {
+test("new job trigger words and versioned name follow the image folder", () => {
   const appJs = read("public/js/app.js");
 
-  assert.match(appJs, /\$\("new-job-trigger-words"\)\.value = defaultName/);
-  assert.match(appJs, /\$\("new-job-trigger-words"\)\.dataset\.autoValue = defaultName/);
-  assert.match(appJs, /const triggerInput = \$\("new-job-trigger-words"\)/);
-  assert.match(appJs, /triggerInput\.value === triggerInput\.dataset\.autoValue/);
-  assert.match(appJs, /triggerInput\.dataset\.autoValue = triggerInput\.value/);
+  assert.match(appJs, /function deriveTriggerWordsFromImagePath\(imageDir\)/);
+  assert.match(appJs, /function nextArchitectureJobName\(baseName, architecture\)/);
+  assert.match(appJs, /return `\$\{cleanBase\}\$\{versionPart\} \$\{architectureJobSuffix\(architecture\)\}`/);
+  assert.match(appJs, /applyNewJobAutoNaming\(summary\)/);
+  assert.match(appJs, /\|\| triggerInput\?\.value\.trim\(\)/);
+  assert.match(appJs, /setAutoInputValue\(triggerInput, triggerWords\)/);
+  assert.match(appJs, /setAutoInputValue\(\$\("new-job-name"\), jobName\)/);
   assert.match(appJs, /\$\("new-job-trigger-words"\)\.addEventListener\("input"/);
 });
 
@@ -70,6 +74,7 @@ test("new job creation sends trigger words and can auto tag with defaults", () =
 
   assert.match(appJs, /async function createJobFromModal\(\{ autoTag = false \} = \{\}\)/);
   assert.match(appJs, /trigger_words:\s*\$\("new-job-trigger-words"\)\.value\.trim\(\)/);
+  assert.match(appJs, /auto_output_name:\s*\$\("new-job-output-name"\)\.dataset\.autoValue/);
   assert.match(appJs, /\$\("btn-create-job-auto-tag"\)\.addEventListener\("click", \(\) => createJobFromModal\(\{ autoTag: true \}\)\)/);
   assert.match(appJs, /async function runNewJobDefaultTagger\(jobName\)/);
   assert.match(appJs, /\/api\/jobs\/\$\{encodeURIComponent\(jobName\)\}\/tag-captions/);

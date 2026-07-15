@@ -18,22 +18,18 @@ def create_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
-    """Create a LoRA network that targets every Linear in the Krea2 DiT.
-
-    The Krea2 text encoder is frozen and its output is cached, so only the DiT is
-    wrapped. ``lora_flux.LoRANetwork`` already provides the generic Linear walker,
-    optimizer parameter groups, save format, and merge behavior used by Anima.
-    """
+    """Create a LoRA network for Krea 2 DiT and optional Qwen3-VL adapters."""
     return lora_flux.create_network(
         multiplier,
         network_dim,
         network_alpha,
         vae,
-        [None],
+        text_encoders or [None],
         unet,
         neuron_dropout=neuron_dropout,
         train_blocks="all",
         target_all_linears=True,
+        target_all_text_linears=True,
         **kwargs,
     )
 
@@ -49,5 +45,14 @@ def create_network_from_weights(
     **kwargs,
 ):
     return lora_flux.create_network_from_weights(
-        multiplier, file, vae, [None], unet, weights_sd, for_inference, target_all_linears=True, **kwargs
+        multiplier,
+        file,
+        vae,
+        text_encoders or [None],
+        unet,
+        weights_sd,
+        for_inference,
+        target_all_linears=True,
+        target_all_text_linears=True,
+        **kwargs,
     )

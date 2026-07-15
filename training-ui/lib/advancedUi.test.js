@@ -104,3 +104,27 @@ test("HTML ids are unique", () => {
     .map(([id, count]) => `${id} x${count}`);
   assert.deepStrictEqual(duplicates, []);
 });
+
+test("Krea 2 controls expose real token, Flow Shift, and Text Encoder behavior", () => {
+  const html = read("public/index.html");
+  const appJs = read("public/js/app.js");
+  const serverJs = read("server.js");
+  const kreaTrainer = read("../krea2_train_network.py");
+  const kreaEncoder = read("../library/krea2/krea2_encoder.py");
+  const kreaUtils = read("../library/krea2/krea2_utils.py");
+
+  assert.doesNotMatch(html, /value="lumina"/i);
+  assert.match(html, /id="group-t5-max-tokens"/);
+  assert.match(html, /id="krea2-dynamic-text-encoder-warning"/);
+  assert.match(appJs, /group-t5-max-tokens"\)\?\.classList\.toggle\("hidden", architecture === "krea2"\)/);
+  assert.match(appJs, /architecture === "krea2" \? "Qwen3-VL Max Tokens"/);
+  assert.match(appJs, /\.\.\.\(!isKrea2 && \{[\s\S]*qwen3_max_token_length:[\s\S]*t5_max_token_length:/);
+  assert.match(serverJs, /stripKrea2ShadowedAnimaArgs\(merged\.anima_arguments\)/);
+  assert.match(appJs, /filterNetworkModuleOptions\(\$\("cfg-network-module"\), architecture\)/);
+  assert.match(appJs, /krea2DynamicTextEncoder = isKrea2 && \([\s\S]*!\$\("cfg-unet-only"\)\.checked/);
+  assert.match(serverJs, /network_module && !requestedArchitecture\.network_modules\.includes\(network_module\)/);
+  assert.match(kreaTrainer, /def is_train_text_encoder\(self, args\):[\s\S]*return not args\.network_train_unet_only/);
+  assert.doesNotMatch(kreaTrainer, /args\.network_train_unet_only = True/);
+  assert.match(kreaEncoder, /def set_gradient_enabled\(self, enabled: bool\)/);
+  assert.doesNotMatch(kreaUtils, /@torch\.no_grad\(\)\s*\ndef get_krea2_prompt_embeds/);
+});

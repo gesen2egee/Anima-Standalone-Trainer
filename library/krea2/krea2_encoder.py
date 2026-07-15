@@ -359,6 +359,13 @@ class Qwen3VLConditioner(torch.nn.Module):
         self.prompt_template_encode_start_idx = 34
         self.prompt_template_encode_suffix_start_idx = 5
         self._layer_offloader: _Qwen3VLLayerOffloader | None = None
+        self._gradient_enabled = False
+
+    def set_gradient_enabled(self, enabled: bool):
+        """Allow adapter gradients through Qwen3-VL while base weights stay frozen."""
+        self._gradient_enabled = bool(enabled)
+        self.qwen.train(self._gradient_enabled)
+        return self
 
     def enable_layer_offload(self, device: torch.device | str, offload_percent: float = 1.0):
         """Use AIT-style GPU execution with CPU-resident Linear weights."""
@@ -400,7 +407,8 @@ class Qwen3VLConditioner(torch.nn.Module):
             suffix_inputs["attention_mask"].bool(),
         )
 
-        with torch.no_grad():
+        grad_context = torch.enable_grad() if self._gradient_enabled else torch.no_grad()
+        with grad_context:
             inputs = self.tokenizer(
                 text,
                 truncation=True,

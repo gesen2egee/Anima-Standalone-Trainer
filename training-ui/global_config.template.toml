@@ -7,11 +7,6 @@ dit_path = ""
 qwen3_path = ""
 vae_path = ""
 
-# Lumina Paths
-lumina_dit_path = ""
-gemma2_path = ""
-lumina_vae_path = ""
-
 # Krea 2 Paths
 krea2_dit_path = ""
 krea2_text_encoder_path = ""

@@ -8,6 +8,7 @@ const {
   listSdScriptsImages,
   resolveDatasetImageFolders,
   inspectDatasetImageFolders,
+  deriveTriggerWordsFromFolderName,
 } = require("./datasetImageMatch");
 
 function makeTempDir() {
@@ -29,6 +30,11 @@ test("sd-scripts image matching reads only direct supported image files", () => 
   const images = listSdScriptsImages(root).map((file) => path.basename(file));
 
   assert.deepStrictEqual(images, ["a.png", "b.JPG"]);
+});
+
+test("trigger words are derived from numbered image folder names", () => {
+  assert.strictEqual(deriveTriggerWordsFromFolderName("15_vegapunk york"), "vegapunk york");
+  assert.strictEqual(deriveTriggerWordsFromFolderName("7_vegapunk york {Suggested High}"), "vegapunk york");
 });
 
 test("non-batch selection uses current folder before single-child fallback", () => {

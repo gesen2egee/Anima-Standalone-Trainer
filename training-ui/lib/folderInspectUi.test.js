@@ -40,7 +40,7 @@ test("folder selection updates image dir fields and immediately checks captions"
   assert.match(appJs, /updateNewJobImageDirStatus/);
   assert.match(appJs, /selectSubsetImageDir/);
   assert.match(appJs, /updateSubsetImageDirStatus/);
-  assert.doesNotMatch(newJobSelectBlock, /await updateNewJobImageDirStatus\(\)/);
+  assert.match(newJobSelectBlock, /await updateNewJobImageDirStatus\(\)/);
   assert.doesNotMatch(subsetSelectBlock, /await updateSubsetImageDirStatus\(card, subset\)/);
   assert.match(appJs, /missing_caption/);
   assert.match(appJs, /empty_caption/);

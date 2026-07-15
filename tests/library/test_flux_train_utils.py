@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from library.flux_train_utils import (
     compute_autoshift_mask_flow_shift,
     compute_autoshift_wavelet_flow_shift,
+    get_krea2_resolution_shift_mu,
     get_noisy_model_input_and_timesteps,
 )
 
@@ -104,6 +105,7 @@ def test_shift_sampling(args, noise_scheduler, latents, noise, device):
 
 def test_autoshift_wavelet_maps_detail_location_to_flow_shift(args, noise_scheduler, device):
     args.timestep_sampling = "autoshift_wavelet"
+    args.discrete_flow_shift = 1.0
     latents = torch.zeros(3, 1, 4, 4)
     # Checkerboard detail sits inside the subject, half inside/outside, and outside the subject.
     checker = torch.tensor([[1.0, -1.0], [-1.0, 1.0]])
@@ -129,6 +131,27 @@ def test_autoshift_wavelet_maps_detail_location_to_flow_shift(args, noise_schedu
         )
 
     assert torch.allclose(timesteps, torch.tensor([1000 / 3, 500.0, 600.0]), atol=1e-4)
+
+
+def test_flow_shift_changes_autoshift_and_krea2_shift(args, noise_scheduler, device):
+    latents = torch.zeros(1, 1, 4, 4)
+    noise = torch.ones_like(latents)
+    masks = torch.ones(1, 4, 4)
+    args.timestep_sampling = "autoshift"
+    with patch("torch.randn", return_value=torch.zeros(1)):
+        args.discrete_flow_shift = 1.0
+        _, base_timestep, _ = get_noisy_model_input_and_timesteps(
+            args, noise_scheduler, latents, noise, device, torch.float32, masks
+        )
+        args.discrete_flow_shift = 2.5
+        _, shifted_timestep, _ = get_noisy_model_input_and_timesteps(
+            args, noise_scheduler, latents, noise, device, torch.float32, masks
+        )
+    assert shifted_timestep.item() > base_timestep.item()
+
+    base_mu = get_krea2_resolution_shift_mu(1024, 2.5)
+    stronger_mu = get_krea2_resolution_shift_mu(1024, 5.0)
+    assert stronger_mu > base_mu
 
 
 def test_autoshift_uses_low_shift_when_image_has_no_high_frequency_detail():

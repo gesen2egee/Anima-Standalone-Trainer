@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from networks.cdka import CdkaInfModule, CdkaModule
+from networks import cdka
 from networks.krona import KronaInfModule, KronaModule
 
 
@@ -18,6 +19,41 @@ def _exported_delta(module):
 
 
 class TestKronaCdka(unittest.TestCase):
+
+    def test_krea2_cdka_can_target_qwen3_vl_text_encoder(self):
+        class Qwen3VLTextAttention(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.q_proj = torch.nn.Linear(8, 8, bias=False)
+                self.k_proj = torch.nn.Linear(8, 8, bias=False)
+                self.v_proj = torch.nn.Linear(8, 8, bias=False)
+                self.o_proj = torch.nn.Linear(8, 8, bias=False)
+
+        class Qwen(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.self_attn = Qwen3VLTextAttention()
+
+        Qwen3VLConditioner = type(
+            "Qwen3VLConditioner",
+            (torch.nn.Module,),
+            {"__init__": lambda self: (torch.nn.Module.__init__(self), setattr(self, "qwen", Qwen()))[-1]},
+        )
+        network = cdka.create_network(
+            1.0,
+            4,
+            1.0,
+            None,
+            [Qwen3VLConditioner()],
+            None,
+            exclude_patterns='[".*"]',
+            include_patterns='[".*self_attn\\\\.(v_proj|o_proj)"]',
+        )
+
+        self.assertEqual(
+            [module.original_name for module in network.text_encoder_loras],
+            ["qwen.self_attn.v_proj", "qwen.self_attn.o_proj"],
+        )
 
     def test_krona_default_uses_diffusekrona_lokr_factor_layout(self):
         module = KronaModule("test", torch.nn.Linear(2048, 2048, bias=False))

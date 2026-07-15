@@ -1521,6 +1521,16 @@ body {
     color: var(--warning, #f5a623);
 }
 
+.inline-warning {
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+    border-radius: 6px;
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
 .folder-inspection-status.ok {
     color: var(--success, #3fb950);
 }

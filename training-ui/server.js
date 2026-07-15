@@ -127,6 +127,19 @@ function applyArchitectureJobDefaults(config, architectureId) {
     for (const [section, defaults] of Object.entries(architecture.job_defaults)) {
         config[section] = { ...(config[section] || {}), ...defaults };
     }
+    if (architectureId === 'krea2') stripKrea2ShadowedAnimaArgs(config.anima_arguments);
+}
+
+function stripKrea2ShadowedAnimaArgs(animaArgs) {
+    if (!animaArgs) return;
+    [
+        'timestep_sampling',
+        'timestep_sample_method',
+        'discrete_flow_shift',
+        'sigmoid_scale',
+        'qwen3_max_token_length',
+        't5_max_token_length'
+    ].forEach(key => delete animaArgs[key]);
 }
 
 function stripUiOnlyBackendArgs(trainingArgs) {
@@ -243,7 +256,47 @@ function stripQuotes(p) {
 function normalizeCaptionPrefixFromTriggerWords(value) {
     const triggerWords = String(value || '').trim();
     if (!triggerWords) return '';
-    return /,\s*$/.test(triggerWords) ? triggerWords : `${triggerWords},`;
+    return /,\s*$/.test(triggerWords) ? triggerWords.replace(/,\s*$/, ', ') : `${triggerWords}, `;
+}
+
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildArchitectureJobName(baseName, architectureId, existingNames = []) {
+    const suffix = architectureId === 'krea2' ? 'KREA 2' : 'ANIMA';
+    const cleanBase = sanitizeName(String(baseName || 'my_job'))
+        .replace(/(?:_v\d+)?\s+(?:ANIMA|KREA\s*2)$/i, '')
+        .replace(/_v\d+$/i, '')
+        .trim() || 'my_job';
+    const pattern = new RegExp(`^${escapeRegExp(cleanBase)}(?:_v(\\d+))?(?:\\s+(?:ANIMA|KREA\\s*2))?$`, 'i');
+    let maxVersion = 0;
+    for (const existingName of existingNames) {
+        const match = String(existingName).match(pattern);
+        if (!match) continue;
+        maxVersion = Math.max(maxVersion, match[1] ? Number(match[1]) : 1);
+    }
+    return `${cleanBase}${maxVersion > 0 ? `_v${maxVersion + 1}` : ''} ${suffix}`;
+}
+
+function applyArchitectureDatasetDefaults(datasetConfig, architectureId) {
+    const defaults = ARCH_REGISTRY.architectures[architectureId]?.dataset_defaults;
+    if (!defaults) return;
+    datasetConfig.general = datasetConfig.general || {};
+    datasetConfig.general.min_bucket_reso = defaults.min_bucket_reso;
+    datasetConfig.general.max_bucket_reso = defaults.max_bucket_reso;
+    const datasets = Array.isArray(datasetConfig.datasets)
+        ? datasetConfig.datasets
+        : datasetConfig.datasets ? [datasetConfig.datasets] : [{}];
+    const firstDataset = datasets[0] || {};
+    firstDataset.resolution = [defaults.resolution, defaults.resolution];
+    const subsets = Array.isArray(firstDataset.subsets)
+        ? firstDataset.subsets
+        : firstDataset.subsets ? [firstDataset.subsets] : [];
+    subsets.forEach(subset => { subset.fad_timestep = defaults.fad_timestep; });
+    firstDataset.subsets = subsets;
+    datasets[0] = firstDataset;
+    datasetConfig.datasets = datasets;
 }
 
 function normalizeCustomCliArgs(value) {
@@ -599,10 +652,6 @@ function getGlobalConfig() {
             dit_path: '',
             qwen3_path: '',
             vae_path: '',
-            // Lumina
-            lumina_dit_path: '',
-            gemma2_path: '',
-            lumina_vae_path: '',
             // Krea 2
             krea2_dit_path: '',
             krea2_text_encoder_path: '',
@@ -1047,11 +1096,7 @@ function buildTrainingConfig(jobName, jobPath) {
     if (jobConfig.anima_arguments) {
         merged.anima_arguments = { ...jobConfig.anima_arguments };
         normalizeAnimaArgs(merged);
-    }
-
-    // Lumina arguments
-    if (jobConfig.lumina_arguments) {
-        merged.lumina_arguments = { ...jobConfig.lumina_arguments };
+        if (arch.id === 'krea2') stripKrea2ShadowedAnimaArgs(merged.anima_arguments);
     }
 
     // Krea 2 uses the same shared DiT argument parser but has its own cache/token settings.
@@ -1249,14 +1294,28 @@ app.post('/api/jobs', (req, res) => {
             image_dir,
             max_train_steps,
             model_architecture,
+            auto_name,
+            auto_output_name,
             trigger_words,
             generate_samples,
             batch_import,
             auto_balance_repeats
         } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
+        const requestedArchitecture = ARCH_REGISTRY.architectures[model_architecture];
+        if (!requestedArchitecture) return res.status(400).json({ error: 'Unsupported model architecture' });
+        if (network_module && !requestedArchitecture.network_modules.includes(network_module)) {
+            return res.status(400).json({ error: `${network_module} is not supported by ${requestedArchitecture.display_name}` });
+        }
 
-        const safeName = sanitizeName(name);
+        const jobsDir = getJobsDir();
+        const existingNames = fs.existsSync(jobsDir)
+            ? fs.readdirSync(jobsDir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)
+            : [];
+        const requestedName = auto_name === true
+            ? buildArchitectureJobName(trigger_words || name, model_architecture, existingNames)
+            : name;
+        const safeName = sanitizeName(requestedName);
         const jobPath = path.join(getJobsDir(), safeName);
 
         if (fs.existsSync(jobPath)) {
@@ -1277,7 +1336,9 @@ app.post('/api/jobs', (req, res) => {
             applyArchitectureJobDefaults(config, model_architecture);
         }
         config.training_arguments = config.training_arguments || {};
-        if (output_name && String(output_name).trim()) {
+        if (auto_name === true && auto_output_name === true) {
+            config.training_arguments.output_name = safeName;
+        } else if (output_name && String(output_name).trim()) {
             config.training_arguments.output_name = sanitizeName(String(output_name));
         }
         const parsedSteps = Number.parseInt(max_train_steps, 10);
@@ -1286,12 +1347,16 @@ app.post('/api/jobs', (req, res) => {
             delete config.training_arguments.max_train_epochs;
         }
         const supportedNetworkModules = [
-            'networks.lora_anima', 'networks.lora_lumina', 'networks.lora_krea2',
+            'networks.lora_anima', 'networks.lora_krea2',
             'networks.lora', 'networks.lokr', 'networks.cdka', 'networks.krona'
         ];
         if (network_module && supportedNetworkModules.includes(network_module)) {
             config.network_arguments = config.network_arguments || {};
+            const presetModule = ARCH_REGISTRY.architectures[model_architecture]?.job_defaults?.network_arguments?.network_module;
             config.network_arguments.network_module = network_module;
+            if (presetModule && network_module !== presetModule) {
+                delete config.network_arguments.network_args;
+            }
         }
         if (generate_samples !== true) {
             delete config.training_arguments.sample_at_first;
@@ -1300,6 +1365,7 @@ app.post('/api/jobs', (req, res) => {
         fs.writeFileSync(path.join(jobPath, 'config.toml'), TOML.stringify(config), 'utf8');
 
         const datasetConfig = getDefaultDataset();
+        applyArchitectureDatasetDefaults(datasetConfig, model_architecture);
         const triggerCaptionPrefix = normalizeCaptionPrefixFromTriggerWords(trigger_words);
         const shouldConfigureDataset = (image_dir && String(image_dir).trim()) || triggerCaptionPrefix;
         let datasetMatch = null;

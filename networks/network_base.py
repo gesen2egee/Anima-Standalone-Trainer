@@ -34,10 +34,14 @@ def detect_arch_config(unet, text_encoders) -> ArchConfig:
     # Krea 2 uses a single-stream MMDiT whose trainable surface is composed of
     # Linear layers. LyCORIS-style networks can reuse their generic module
     # implementations when every Krea2 Linear is selected.
-    if unet is not None and unet.__class__.__name__ == "SingleStreamDiT":
+    has_krea_conditioner = any(
+        encoder is not None and encoder.__class__.__name__ == "Qwen3VLConditioner"
+        for encoder in (text_encoders or [])
+    )
+    if (unet is not None and unet.__class__.__name__ == "SingleStreamDiT") or has_krea_conditioner:
         return ArchConfig(
             unet_target_modules=None,
-            te_target_modules=[],
+            te_target_modules=["Qwen3VLTextAttention", "Qwen3VLTextMLP"],
             unet_prefix="lora_unet",
             te_prefixes=["lora_te"],
             default_excludes=[],
@@ -182,6 +186,8 @@ class AdditionalNetwork(torch.nn.Module):
             target_replace_modules: List[str],
             default_dim: Optional[int] = None,
         ) -> Tuple[List[torch.nn.Module], List[str]]:
+            if root_module is None:
+                return [], []
             loras = []
             skipped = []
             for name, module in root_module.named_modules():

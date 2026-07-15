@@ -187,7 +187,6 @@ def load_krea2_text_encoder(
     )
 
 
-@torch.no_grad()
 def get_krea2_prompt_embeds(encoder: Qwen3VLConditioner, prompts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
     """Return (hiddens, mask).
 

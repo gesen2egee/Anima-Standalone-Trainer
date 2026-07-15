@@ -40,26 +40,39 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
   anima: {
     label: "Anima",
     networkModule: "networks.cdka",
-    timestepSampling: "uniform",
+    timestepSampling: "autoshift",
     flowShift: 1.0,
+    resolution: 768,
+    minBucket: 384,
+    maxBucket: 1536,
+    blocksToSwap: 0,
+    transformerDtype: "bfloat16",
+    networkArgs: [
+      'exclude_patterns=[".*"]',
+      "network_reg_lrs=.*self_attn.*=5e-5",
+      'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
+      "allora=True",
+    ],
     supportsFullFinetune: true,
     hint: "使用 Anima 模型路徑與 anima_train_network.py。",
   },
   krea2: {
     label: "Krea 2",
-    networkModule: "networks.lora_krea2",
-    timestepSampling: "krea2_shift",
+    networkModule: "networks.cdka",
+    timestepSampling: "autoshift",
     flowShift: 2.5,
+    resolution: 512,
+    minBucket: 256,
+    maxBucket: 768,
+    blocksToSwap: 20,
+    transformerDtype: "fp8_scaled",
+    networkArgs: [
+      'exclude_patterns=[".*"]',
+      'include_patterns=[".*(attn\\\\.(wv|wo)|self_attn\\\\.(v_proj|o_proj))"]',
+      "allora=True",
+    ],
     supportsFullFinetune: false,
     hint: "使用 Krea 2 RAW DiT、Qwen3-VL 與 Krea2 專用訓練流程。",
-  },
-  lumina: {
-    label: "Lumina",
-    networkModule: "networks.lora_lumina",
-    timestepSampling: "uniform",
-    flowShift: 6.0,
-    supportsFullFinetune: true,
-    hint: "使用 Lumina 模型路徑與 Lumina 訓練流程。",
   },
 });
 
@@ -67,7 +80,6 @@ function inferModelArchitecture(config = {}) {
   const explicit = config.ui_arguments?.architecture || config.model_architecture;
   if (MODEL_ARCHITECTURE_DEFAULTS[explicit]) return explicit;
   if (config.krea2_arguments || config.model_arguments?.krea2_text_encoder) return "krea2";
-  if (config.lumina_arguments || config.network_arguments?.network_module === "networks.lora_lumina") return "lumina";
   if (config.network_arguments?.network_module === "networks.lora_krea2") return "krea2";
   return "anima";
 }
@@ -76,8 +88,52 @@ function getArchitectureArguments(config, architecture) {
   if (architecture === "krea2") {
     return { ...(config.anima_arguments || {}), ...(config.krea2_arguments || {}) };
   }
-  if (architecture === "lumina") return config.lumina_arguments || {};
   return config.anima_arguments || {};
+}
+
+function getArchitectureNetworkModules(architecture) {
+  return archRegistry?.architectures?.[architecture]?.network_modules || (
+    architecture === "krea2"
+      ? ["networks.lora_krea2", "networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"]
+      : ["networks.lora_anima", "networks.lokr", "networks.cdka", "networks.krona"]
+  );
+}
+
+function filterNetworkModuleOptions(select, architecture) {
+  if (!select) return;
+  const allowed = new Set(getArchitectureNetworkModules(architecture));
+  Array.from(select.options).forEach((option) => {
+    option.hidden = !allowed.has(option.value);
+    option.disabled = !allowed.has(option.value);
+  });
+  if (!allowed.has(select.value)) {
+    select.value = MODEL_ARCHITECTURE_DEFAULTS[architecture]?.networkModule || [...allowed][0];
+  }
+}
+
+function applyArchitecturePresetToEditor(architecture) {
+  const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture] || MODEL_ARCHITECTURE_DEFAULTS.anima;
+  $("cfg-network-module").value = defaults.networkModule;
+  $("cfg-network-args").value = defaults.networkArgs.join(" ");
+  $("cfg-timestep-method").value = defaults.timestepSampling;
+  $("cfg-flow-shift").value = defaults.flowShift;
+  $("cfg-resolution").value = defaults.resolution;
+  $("cfg-min-bucket").value = defaults.minBucket;
+  $("cfg-max-bucket").value = defaults.maxBucket;
+  $("cfg-blocks-to-swap").value = defaults.blocksToSwap;
+  $("cfg-transformer-dtype").value = defaults.transformerDtype;
+  currentSubsets.forEach((subset) => { subset.fad_timestep = architecture !== "krea2"; });
+  renderSubsets();
+  $("cfg-cache-latents").checked = true;
+  $("cfg-cache-latents-to-disk").checked = true;
+  $("cfg-cache-te").checked = false;
+  if (architecture === "krea2") {
+    $("cfg-krea2-dynamic-text-encoder").checked = true;
+    $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
+    $("cfg-krea2-text-encoder-layer-offload").checked = true;
+    $("cfg-krea2-text-encoder-offload-percent").value = 100;
+  }
+  renderProgressivePhases();
 }
 
 function updateModelArchitectureUI({ applyDefaults = false } = {}) {
@@ -102,6 +158,24 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   }
   const teGroup = $("group-krea2-text-encoder");
   if (teGroup) teGroup.classList.toggle("hidden", architecture !== "krea2");
+  $("group-t5-max-tokens")?.classList.toggle("hidden", architecture === "krea2");
+  const tokenLabel = $("cfg-primary-max-token-label");
+  if (tokenLabel) tokenLabel.textContent = architecture === "krea2" ? "Qwen3-VL Max Tokens" : "Qwen3 Max Tokens";
+  const flowHint = $("cfg-flow-shift-hint");
+  if (flowHint) {
+    flowHint.textContent = architecture === "krea2"
+      ? "Krea 2：2.5 為建議倍率；Autoshift 會乘上每張圖片的 Mask Shift，Krea 2 Shift 也會套用相對倍率。"
+      : "Anima：1.0 為中性倍率；Autoshift 會乘上每張圖片計算出的 Mask Shift。";
+  }
+  const unetOnlyLabel = $("cfg-unet-only-label");
+  if (unetOnlyLabel) unetOnlyLabel.textContent = architecture === "krea2" ? "Train DiT Only" : "Train DiT Only";
+  const unetOnlyHint = $("cfg-unet-only-hint");
+  if (unetOnlyHint) {
+    unetOnlyHint.textContent = architecture === "krea2"
+      ? "取消後會訓練 Qwen3-VL Text Encoder adapter，並強制使用 Dynamic Encoding；VRAM/RAM 用量會明顯增加。"
+      : "取消後會同時訓練 Qwen3 Text Encoder adapter。";
+  }
+  filterNetworkModuleOptions($("cfg-network-module"), architecture);
   const activationOffload = $("cfg-activation-offload");
   if (activationOffload) {
     activationOffload.disabled = architecture === "krea2";
@@ -135,44 +209,60 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   }
   updateKrea2TextEncoderUI();
   if (applyDefaults) {
-    $("cfg-network-module").value = defaults.networkModule;
-    $("cfg-timestep-method").value = defaults.timestepSampling;
-    $("cfg-flow-shift").value = defaults.flowShift;
-    if (architecture === "krea2") {
-      $("cfg-cache-latents").checked = true;
-      $("cfg-cache-latents-to-disk").checked = true;
-      $("cfg-cache-te").checked = false;
-      $("cfg-krea2-dynamic-text-encoder").checked = true;
-      $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
-      $("cfg-krea2-text-encoder-layer-offload").checked = true;
-      $("cfg-krea2-text-encoder-offload-percent").value = 100;
-      $("cfg-transformer-dtype").value = "fp8_scaled";
-      $("cfg-blocks-to-swap").value = 20;
-    }
+    applyArchitecturePresetToEditor(architecture);
     updateNetworkModuleUI();
-    applyNetworkModulePreset(defaults.networkModule);
     updateKrea2TextEncoderUI();
   }
 }
 
 function updateKrea2TextEncoderUI() {
   const dynamic = $("cfg-krea2-dynamic-text-encoder")?.checked === true;
+  const trainsTextEncoder = $("cfg-model-architecture")?.value === "krea2" && $("cfg-unet-only")?.checked === false;
   const cpu = $("cfg-krea2-dynamic-text-encoder-cpu");
   const layer = $("cfg-krea2-text-encoder-layer-offload");
   const layerPercent = $("cfg-krea2-text-encoder-offload-percent");
   const cache = $("cfg-cache-te");
   if (cpu?.checked && layer?.checked) layer.checked = false;
-  if (cpu) cpu.disabled = !dynamic;
-  if (layer) layer.disabled = !dynamic;
-  if (layerPercent) layerPercent.disabled = !dynamic || !layer?.checked;
+  if (trainsTextEncoder) {
+    if (cpu) cpu.checked = false;
+    if (layer) layer.checked = false;
+  }
+  if (cpu) cpu.disabled = !dynamic || trainsTextEncoder;
+  if (layer) layer.disabled = !dynamic || trainsTextEncoder;
+  if (layerPercent) layerPercent.disabled = !dynamic || !layer?.checked || trainsTextEncoder;
   if (cache) {
-    if (dynamic) {
+    if (dynamic || trainsTextEncoder) {
       cache.checked = false;
       cache.disabled = true;
     } else {
       cache.disabled = false;
     }
   }
+  const reasons = getKrea2DynamicCaptionReasons();
+  const warning = $("krea2-dynamic-text-encoder-warning");
+  if (warning) {
+    const messages = [];
+    if (trainsTextEncoder) messages.push("正在訓練 Qwen3-VL adapter：後端會強制使用 Dynamic Encoding、停用 cache 與 forward-only Layer Offload，完整 Text Encoder 會留在 GPU，VRAM 用量會明顯增加。");
+    if (reasons.length > 0 && !dynamic) {
+      messages.push(`Dataset 的 ${reasons.join("、")} 需要動態文字編碼；即使關閉此選項，後端仍會自動啟用 Layer Offload。`);
+    }
+    warning.textContent = messages.join(" ");
+    warning.classList.toggle("hidden", messages.length === 0);
+  }
+}
+
+function getKrea2DynamicCaptionReasons() {
+  const reasonSet = new Set();
+  currentSubsets.forEach((subset) => {
+    if (subset.caption_dropout_rate > 0 || subset.caption_dropout_every_n_epochs > 0) reasonSet.add("Caption Dropout");
+    if (subset.shuffle_caption) reasonSet.add("Shuffle Caption");
+    if (subset.caption_tag_dropout_rate > 0) reasonSet.add("Tag Dropout");
+    if (subset.enable_fad) reasonSet.add("FAD");
+    if (subset.caption_prefix || subset.caption_suffix) reasonSet.add("Caption Prefix/Suffix");
+    if (subset.token_warmup_step > 0) reasonSet.add("Token Warmup");
+    if (subset.enable_wildcard) reasonSet.add("Wildcard");
+  });
+  return [...reasonSet];
 }
 
 function syncKrea2DynamicCaptionEncoding() {
@@ -202,7 +292,9 @@ function updateNewJobModelArchitecture() {
   const network = $("new-job-network-module");
   if (!select || !network) return;
   const defaults = MODEL_ARCHITECTURE_DEFAULTS[select.value] || MODEL_ARCHITECTURE_DEFAULTS.anima;
+  filterNetworkModuleOptions(network, select.value);
   network.value = defaults.networkModule;
+  refreshNewJobAutoName();
 }
 // --- DOM Refs ---
 const $ = (id) => document.getElementById(id);
@@ -430,7 +522,6 @@ const UI_TRANSLATIONS = {
   "LoRA Output Location": { "zh-TW": "LoRA 輸出位置", "zh-CN": "LoRA 输出位置" },
   "Application": { "zh-TW": "應用程式", "zh-CN": "应用程序" },
   "Anima Models": { "zh-TW": "Anima 模型", "zh-CN": "Anima 模型" },
-  "Lumina Models": { "zh-TW": "Lumina 模型", "zh-CN": "Lumina 模型" },
   "DiT Model Path": { "zh-TW": "DiT 模型路徑", "zh-CN": "DiT 模型路径" },
   "Qwen3 Text Encoder Path": { "zh-TW": "Qwen3 Text Encoder 路徑", "zh-CN": "Qwen3 Text Encoder 路径" },
   "VAE Path": { "zh-TW": "VAE 路徑", "zh-CN": "VAE 路径" },
@@ -1229,8 +1320,8 @@ async function updateFolderInspectionStatus(imageDir, captionExtension, statusEl
     return null;
   }
 }
-function updateNewJobImageDirStatus() {
-  return updateFolderInspectionStatus(
+async function updateNewJobImageDirStatus() {
+  const summary = await updateFolderInspectionStatus(
     $("new-job-image-dir").value.trim(),
     ".txt",
     $("new-job-image-dir-status"),
@@ -1239,12 +1330,14 @@ function updateNewJobImageDirStatus() {
       autoBalanceRepeats: $("new-job-auto-balance")?.checked === true,
     },
   );
+  applyNewJobAutoNaming(summary);
+  return summary;
 }
 async function selectNewJobImageDir() {
   const selected = await selectFolderPath($("new-job-image-dir").value.trim());
   if (!selected) return;
   $("new-job-image-dir").value = selected;
-  updateNewJobImageDirStatus();
+  await updateNewJobImageDirStatus();
 }
 function updateSubsetImageDirStatus(card, subset) {
   return updateFolderInspectionStatus(
@@ -1729,6 +1822,61 @@ function nextVersionedName(baseName, startVersion = 1) {
   }
   return candidate;
 }
+function architectureJobSuffix(architecture) {
+  return architecture === "krea2" ? "KREA 2" : "ANIMA";
+}
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function nextArchitectureJobName(baseName, architecture) {
+  const cleanBase = String(baseName || "my_job")
+    .trim()
+    .replace(/[<>:"/\\|?*]/g, "")
+    .replace(/(?:_v\d+)?\s+(?:ANIMA|KREA\s*2)$/i, "")
+    .replace(/_v\d+$/i, "")
+    .trim() || "my_job";
+  const existing = [...getExistingJobNames()];
+  const basePattern = new RegExp(`^${escapeRegExp(cleanBase)}(?:_v(\\d+))?(?:\\s+(?:ANIMA|KREA\\s*2))?$`, "i");
+  let maxVersion = 0;
+  existing.forEach((name) => {
+    const match = name.match(basePattern);
+    if (!match) return;
+    maxVersion = Math.max(maxVersion, match[1] ? Number(match[1]) : 1);
+  });
+  const versionPart = maxVersion > 0 ? `_v${maxVersion + 1}` : "";
+  return `${cleanBase}${versionPart} ${architectureJobSuffix(architecture)}`;
+}
+function deriveTriggerWordsFromImagePath(imageDir) {
+  const clean = String(imageDir || "").trim().replace(/[\\/]+$/, "");
+  const folder = clean.split(/[\\/]/).pop() || "";
+  return folder
+    .replace(/\{(?:high|low|mid|uniform|suggested\s*(?:high|low))\}/ig, "")
+    .replace(/^\d+_/, "")
+    .trim();
+}
+function setAutoInputValue(input, value) {
+  if (!input) return;
+  if (!input.value || input.value === input.dataset.autoValue) {
+    input.value = value;
+    input.dataset.autoValue = value;
+  }
+}
+function applyNewJobAutoNaming(summary = null) {
+  const architecture = $("new-job-model-architecture")?.value || "anima";
+  const matchedTrigger = summary?.matched_folders?.[0]?.trigger_words || "";
+  const triggerInput = $("new-job-trigger-words");
+  const triggerWords = matchedTrigger
+    || deriveTriggerWordsFromImagePath($("new-job-image-dir")?.value)
+    || triggerInput?.value.trim();
+  if (!triggerWords) return;
+  setAutoInputValue(triggerInput, triggerWords);
+  const jobName = nextArchitectureJobName(triggerWords, architecture);
+  setAutoInputValue($("new-job-name"), jobName);
+  setAutoInputValue($("new-job-output-name"), jobName);
+}
+function refreshNewJobAutoName() {
+  applyNewJobAutoNaming();
+}
 function nextCloneName(name) {
   const raw = String(name || "my_job").trim() || "my_job";
   const match = raw.match(/^(.*?)(?:_v|\s+v)(\d+)$/i);
@@ -2064,7 +2212,7 @@ function populateConfig(config) {
   $("cfg-timestep-method").value =
     a.timestep_sampling ||
     (a.timestep_sample_method === "logit_normal" ? "sigmoid" : a.timestep_sample_method) ||
-    "sigmoid";
+    "autoshift";
   $("cfg-flow-shift").value = a.discrete_flow_shift ?? 1.0;
   updateAutomaskUI();
   $("cfg-weighting-scheme").value = a.weighting_scheme || "uniform";
@@ -2097,6 +2245,7 @@ function populateConfig(config) {
   updateModelArchitectureUI();
   updateNetworkModuleUI();
   $("cfg-unet-only").checked = n.network_train_unet_only ?? true;
+  updateKrea2TextEncoderUI();
   $("cfg-network-weights").value = n.network_weights || "";
   $("cfg-freeze-llm-adapter").checked = t.freeze_llm_adapter ?? true;
   $("cfg-auto-resume").checked = !(n.auto_resume_last_state_user_set === true && n.auto_resume_last_state === false);
@@ -2304,7 +2453,9 @@ function gatherConfig() {
   const modelArchitecture = $("cfg-model-architecture").value;
   const isKrea2 = modelArchitecture === "krea2";
   const transformerDtype = $("cfg-transformer-dtype").value;
-  const krea2DynamicTextEncoder = isKrea2 && $("cfg-krea2-dynamic-text-encoder").checked;
+  const krea2DynamicTextEncoder = isKrea2 && (
+    $("cfg-krea2-dynamic-text-encoder").checked || !$("cfg-unet-only").checked
+  );
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
   const optimizerArgs = [];
@@ -2539,11 +2690,13 @@ function gatherConfig() {
           ...($("cfg-resume").value && !$("cfg-auto-resume").checked && { resume: $("cfg-resume").value }),
     },
     anima_arguments: {
-      timestep_sampling: $("cfg-timestep-method").value,
-      discrete_flow_shift: safeFloat($("cfg-flow-shift").value),
-      sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value),
-      qwen3_max_token_length: safeInt($("cfg-qwen3-max-token-length").value),
-      t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
+      ...(!isKrea2 && {
+        timestep_sampling: $("cfg-timestep-method").value,
+        discrete_flow_shift: safeFloat($("cfg-flow-shift").value),
+        sigmoid_scale: safeFloat($("cfg-sigmoid-scale").value),
+        qwen3_max_token_length: safeInt($("cfg-qwen3-max-token-length").value),
+        t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
+      }),
       weighting_scheme: $("cfg-weighting-scheme").value,
       model_guidance_weight: safeFloat($("cfg-model-guidance-weight").value),
       model_guidance_warmup_steps: safeInt($("cfg-model-guidance-warmup-steps").value),
@@ -2846,6 +2999,7 @@ function renderSubsets() {
         subset.flip_aug = card.querySelector(".sub-flip-aug").checked;
         subset.is_reg = card.querySelector(".sub-is-reg").checked;
         subset.folder_shift = card.querySelector(".sub-folder-shift").value;
+        updateKrea2TextEncoderUI();
         checkDirty();
       };
       card.querySelectorAll("input, textarea, select").forEach((input) => {
@@ -3109,7 +3263,11 @@ function updateNetworkModuleUI() {
   $("network-rank-alpha-row").classList.toggle("hidden", hidesRankAlpha);
 }
 function applyNetworkModulePreset(moduleName) {
-  // 學習率不再與網路模組預設值強行綁定
+  const architecture = $("cfg-model-architecture")?.value || "anima";
+  const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture] || MODEL_ARCHITECTURE_DEFAULTS.anima;
+  $("cfg-network-args").value = moduleName === defaults.networkModule
+    ? defaults.networkArgs.join(" ")
+    : "";
 }
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
@@ -3122,6 +3280,13 @@ $("cfg-network-module").addEventListener("change", () => {
 });
 $("cfg-model-architecture")?.addEventListener("change", () => {
   updateModelArchitectureUI({ applyDefaults: true });
+  checkDirty();
+});
+$("cfg-unet-only")?.addEventListener("change", () => {
+  if ($("cfg-model-architecture")?.value === "krea2" && !$("cfg-unet-only").checked) {
+    $("cfg-krea2-dynamic-text-encoder").checked = true;
+  }
+  updateKrea2TextEncoderUI();
   checkDirty();
 });
 $("cfg-krea2-dynamic-text-encoder")?.addEventListener("change", () => {
@@ -4737,14 +4902,16 @@ $("btn-queue-start")?.addEventListener("click", startQueue);
 $("btn-queue-stop")?.addEventListener("click", pauseQueue);
 
 $("btn-new-job").addEventListener("click", () => {
-  const defaultName = nextVersionedName("my_job", 1);
+  const defaultName = nextArchitectureJobName("my_job", "anima");
   $("new-job-name").value = defaultName;
+  $("new-job-name").dataset.autoValue = defaultName;
   $("new-job-output-name").value = defaultName;
   $("new-job-output-name").dataset.autoValue = defaultName;
-  $("new-job-trigger-words").value = defaultName;
-  $("new-job-trigger-words").dataset.autoValue = defaultName;
+  $("new-job-trigger-words").value = "my_job";
+  $("new-job-trigger-words").dataset.autoValue = "my_job";
   $("new-job-model-architecture").value = "anima";
   $("new-job-network-module").value = "networks.cdka";
+  filterNetworkModuleOptions($("new-job-network-module"), "anima");
   $("new-job-image-dir").value = "";
   $("new-job-image-dir-status").textContent = "No folder selected.";
   $("new-job-image-dir-status").classList.remove("warning", "ok");
@@ -4759,14 +4926,12 @@ $("btn-new-job").addEventListener("click", () => {
 $("new-job-name").addEventListener("input", () => {
   const newName = $("new-job-name").value.trim();
   const outputInput = $("new-job-output-name");
-  const triggerInput = $("new-job-trigger-words");
   if (outputInput.value === outputInput.dataset.autoValue) {
     outputInput.value = newName;
     outputInput.dataset.autoValue = outputInput.value;
   }
-  if (triggerInput.value === triggerInput.dataset.autoValue) {
-    triggerInput.value = newName;
-    triggerInput.dataset.autoValue = triggerInput.value;
+  if (newName !== $("new-job-name").dataset.autoValue) {
+    delete $("new-job-name").dataset.autoValue;
   }
 });
 $("new-job-model-architecture")?.addEventListener("change", updateNewJobModelArchitecture);
@@ -4792,7 +4957,9 @@ async function createJobFromModal({ autoTag = false } = {}) {
       method: "POST",
       body: {
         name,
+        auto_name: $("new-job-name").dataset.autoValue === name,
         output_name: $("new-job-output-name").value.trim(),
+        auto_output_name: $("new-job-output-name").dataset.autoValue === $("new-job-output-name").value.trim(),
         model_architecture: $("new-job-model-architecture").value,
         network_module: $("new-job-network-module").value,
         image_dir: imageDir,
