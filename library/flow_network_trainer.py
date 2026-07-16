@@ -40,6 +40,9 @@ def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None
         action="store_true",
         help="apply CDC geometry to the KNN-selected Immiscible Diffusion noise in the same training step",
     )
+    parser.add_argument("--cdc_alternate_knn", action="store_true", help="alternate KNN-only and CDC-only optimizer steps")
+    parser.add_argument("--cdc_knn_metric", choices=["l2", "mahalanobis"], default="l2")
+    parser.add_argument("--cdc_knn_regularization", type=float, default=0.1)
     parser.add_argument(
         "--cdc_switch_ratio",
         type=float,
@@ -128,14 +131,15 @@ class FlowNetworkTrainerMixin:
         if getattr(args, "use_cdc_fm", False):
             switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
             combine_knn = bool(getattr(args, "cdc_combine_knn", False))
+            alternate_knn = bool(getattr(args, "cdc_alternate_knn", False))
             if not 0.0 <= switch_ratio < 1.0:
                 raise ValueError("cdc_switch_ratio must be in [0, 1)")
-            if combine_knn and switch_ratio > 0.0:
-                raise ValueError("cdc_combine_knn and cdc_switch_ratio cannot be enabled together")
-            if (combine_knn or switch_ratio > 0.0) and getattr(args, "knn_noise_k", 0) < 1:
-                raise ValueError("cdc_combine_knn or cdc_switch_ratio requires knn_noise_k to be greater than 0")
-            if not combine_knn and switch_ratio == 0.0 and getattr(args, "knn_noise_k", 0) > 0:
-                raise ValueError("CDC-FM and KNN noise are mutually exclusive; set knn_noise_k to 0")
+            if sum((combine_knn, alternate_knn, switch_ratio > 0.0)) > 1:
+                raise ValueError("CDC combined, alternate, and switch modes are mutually exclusive")
+            if (combine_knn or alternate_knn or switch_ratio > 0.0) and getattr(args, "knn_noise_k", 0) < 1:
+                raise ValueError("CDC combined, alternate, or switch mode requires knn_noise_k to be greater than 0")
+            if args.cdc_knn_regularization <= 0.0:
+                raise ValueError("cdc_knn_regularization must be greater than 0")
             if not args.cache_latents or not args.cache_latents_to_disk:
                 raise ValueError("CDC-FM requires --cache_latents and --cache_latents_to_disk")
             if args.cdc_k_neighbors < 2:
@@ -166,28 +170,35 @@ class FlowNetworkTrainerMixin:
     def is_cdc_stage_active(self, args, is_train: bool = True) -> bool:
         if not is_train or not getattr(args, "use_cdc_fm", False):
             return False
+        if getattr(args, "cdc_alternate_knn", False):
+            return self.global_step % 2 == 1
         switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
         if switch_ratio <= 0.0:
             return True
         switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
         return self.global_step >= switch_step
 
-    def sample_flow_training_noise(self, args, latents: torch.Tensor, is_train: bool = True) -> torch.Tensor:
+    def sample_flow_training_noise(self, args, latents: torch.Tensor, batch=None, is_train: bool = True) -> torch.Tensor:
         if not getattr(args, "use_cdc_fm", False):
             return train_util.sample_training_noise(args, latents)
 
         cdc_active = self.is_cdc_stage_active(args, is_train)
         switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
         combine_knn = bool(getattr(args, "cdc_combine_knn", False))
+        alternate_knn = bool(getattr(args, "cdc_alternate_knn", False))
         if is_train and cdc_active and combine_knn:
             stage = "combined"
         elif cdc_active:
             stage = "cdc"
-        elif is_train and switch_ratio > 0.0:
+        elif is_train and (switch_ratio > 0.0 or alternate_knn):
             stage = "knn"
         else:
             stage = "gaussian"
-        if is_train and stage != self._cdc_last_stage:
+        if is_train and alternate_knn:
+            if self._cdc_last_stage != "alternate":
+                logger.info("CDC-FM: alternating KNN-only and CDC-only optimizer steps")
+            self._cdc_last_stage = "alternate"
+        elif is_train and stage != self._cdc_last_stage:
             if stage == "knn":
                 switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
                 logger.info("CDC-FM schedule: using KNN noise until step %d", switch_step)
@@ -198,6 +209,23 @@ class FlowNetworkTrainerMixin:
             self._cdc_last_stage = stage
 
         if stage in ("knn", "combined"):
+            if getattr(args, "cdc_knn_metric", "l2") == "mahalanobis":
+                if self.cdc_geometry_cache is None:
+                    raise RuntimeError("CDC-aware KNN requires a prepared CDC geometry cache")
+                if batch is None or batch.get("cdc_keys") is None:
+                    raise RuntimeError("CDC-aware KNN training batch does not contain cdc_keys")
+                candidates = torch.randn(
+                    (latents.shape[0], int(args.knn_noise_k), *latents.shape[1:]),
+                    device=latents.device,
+                    dtype=latents.dtype,
+                )
+                return self.cdc_geometry_cache.select_geometry_aware_noise(
+                    latents,
+                    candidates,
+                    batch["cdc_keys"],
+                    batch.get("flippeds"),
+                    float(args.cdc_knn_regularization),
+                )
             return train_util.sample_knn_noise(latents, int(args.knn_noise_k))
         return torch.randn_like(latents, device=latents.device)
 
@@ -403,6 +431,9 @@ class FlowNetworkTrainerMixin:
         metadata["ss_cdc_bandwidth_rescale"] = getattr(args, "cdc_bandwidth_rescale", 0.0)
         metadata["ss_cdc_min_bucket_size"] = getattr(args, "cdc_min_bucket_size", 0)
         metadata["ss_cdc_combine_knn"] = getattr(args, "cdc_combine_knn", False)
+        metadata["ss_cdc_alternate_knn"] = getattr(args, "cdc_alternate_knn", False)
+        metadata["ss_cdc_knn_metric"] = getattr(args, "cdc_knn_metric", "l2")
+        metadata["ss_cdc_knn_regularization"] = getattr(args, "cdc_knn_regularization", 0.1)
         metadata["ss_cdc_switch_ratio"] = getattr(args, "cdc_switch_ratio", 0.0)
         metadata["ss_use_self_flow"] = getattr(args, "use_self_flow", False)
         metadata["ss_self_flow_mask_ratio"] = getattr(args, "self_flow_mask_ratio", 0.0)

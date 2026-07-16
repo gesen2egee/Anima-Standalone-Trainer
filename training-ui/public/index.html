@@ -509,7 +509,7 @@
                             <div class="form-group">
                                 <label>KNN Noise K</label>
                                 <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
-                                <small>直接使用 CDC-FM 時設為 0；比例切換時可設為大於 0。</small>
+                                <small>保留原始設定值；只在 KNN、比例切換或 combined 模式中生效。</small>
                             </div>
                             <div class="form-group">
                                 <label>CEP Noise</label>
@@ -543,6 +543,23 @@
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-cdc-combine-knn"> Combine KNN + CDC</label>
                                 <small>同一步先選 KNN noise，再套用 CDC geometry；啟用時不使用比例切換。</small>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-cdc-alternate-knn"> Alternate KNN / CDC</label>
+                                <small>第 1 步 KNN、第 2 步 CDC，依 optimizer step 持續交替。</small>
+                            </div>
+                            <div class="form-group">
+                                <label>KNN Pairing Metric</label>
+                                <select id="cfg-cdc-knn-metric">
+                                    <option value="l2">Original L2</option>
+                                    <option value="mahalanobis">CDC Mahalanobis</option>
+                                </select>
+                                <small>Mahalanobis 使用每張圖的低秩 CDC covariance 選擇 noise。</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Mahalanobis Regularization</label>
+                                <input type="number" id="cfg-cdc-knn-regularization" value="0.1" min="0.001" step="0.05">
+                                <small>相對於最大 eigenvalue 的 τ；越小越強調 CDC 幾何。</small>
                             </div>
                         </div>
                         <div class="form-row">

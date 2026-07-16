@@ -2089,19 +2089,17 @@ function populateConfig(config) {
   $("cfg-use-cdc-fm").checked = t.use_cdc_fm ?? false;
   $("cfg-cdc-switch-ratio").value = t.cdc_switch_ratio ?? 0;
   $("cfg-cdc-combine-knn").checked = t.cdc_combine_knn ?? false;
+  $("cfg-cdc-alternate-knn").checked = t.cdc_alternate_knn ?? false;
   if ($("cfg-cdc-combine-knn").checked) {
+    $("cfg-cdc-alternate-knn").checked = false;
     $("cfg-cdc-switch-ratio").value = 0;
-    if (safeInt($("cfg-knn-noise-k").value, 0) <= 0) {
-      $("cfg-knn-noise-k").value = 8;
-    }
   }
-  if (
-    $("cfg-use-cdc-fm").checked &&
-    !$("cfg-cdc-combine-knn").checked &&
-    safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0
-  ) {
-    $("cfg-knn-noise-k").value = 0;
+  if ($("cfg-cdc-alternate-knn").checked) {
+    $("cfg-cdc-combine-knn").checked = false;
+    $("cfg-cdc-switch-ratio").value = 0;
   }
+  $("cfg-cdc-knn-metric").value = t.cdc_knn_metric ?? "l2";
+  $("cfg-cdc-knn-regularization").value = t.cdc_knn_regularization ?? 0.1;
   $("cfg-cdc-k-neighbors").value = t.cdc_k_neighbors ?? 64;
   $("cfg-cdc-k-bandwidth").value = t.cdc_k_bandwidth ?? 8;
   $("cfg-cdc-dim").value = t.cdc_dim ?? 8;
@@ -2532,6 +2530,7 @@ function gatherConfig() {
   const useCdcFm = $("cfg-use-cdc-fm").checked;
   const cdcSwitchRatio = safeFloat($("cfg-cdc-switch-ratio").value, 0);
   const cdcCombineKnn = $("cfg-cdc-combine-knn").checked;
+  const cdcAlternateKnn = $("cfg-cdc-alternate-knn").checked;
   const useSelfFlow = $("cfg-use-self-flow").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
@@ -2606,10 +2605,13 @@ function gatherConfig() {
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
-      knn_noise_k: useCdcFm && !cdcCombineKnn && cdcSwitchRatio <= 0 ? 0 : safeInt($("cfg-knn-noise-k").value),
+      knn_noise_k: safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
       use_cdc_fm: useCdcFm,
       cdc_combine_knn: cdcCombineKnn,
+      cdc_alternate_knn: cdcAlternateKnn,
+      cdc_knn_metric: $("cfg-cdc-knn-metric").value,
+      cdc_knn_regularization: safeFloat($("cfg-cdc-knn-regularization").value, 0.1),
       cdc_switch_ratio: cdcSwitchRatio,
       cdc_k_neighbors: safeInt($("cfg-cdc-k-neighbors").value, 64),
       cdc_k_bandwidth: safeInt($("cfg-cdc-k-bandwidth").value, 8),
@@ -5986,14 +5988,11 @@ async function init() {
     updateActivationOffloadUI,
   );
   $("cfg-loss-type").addEventListener("change", updateLossTypeUI);
-  // Direct and scheduled modes keep KNN/CDC on separate steps. Combined mode
-  // intentionally feeds the paper's KNN-selected noise through the CDC path.
+  // Switch and alternate modes keep KNN/CDC on separate steps. Combined mode
+  // intentionally feeds the selected noise through the CDC path in one step.
   $("cfg-use-cdc-fm").addEventListener("change", (event) => {
     if (!event.target.checked) return;
     $("cfg-use-self-flow").checked = false;
-    if (!$("cfg-cdc-combine-knn").checked && safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0) {
-      $("cfg-knn-noise-k").value = 0;
-    }
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
   });
@@ -6003,43 +6002,32 @@ async function init() {
     $("cfg-unet-only").checked = true;
     $("cfg-network-dropout").value = 0;
   });
-  $("cfg-knn-noise-k").addEventListener("input", (event) => {
-    if (
-      safeInt(event.target.value, 0) > 0 &&
-      !$("cfg-cdc-combine-knn").checked &&
-      safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0
-    ) {
-      $("cfg-use-cdc-fm").checked = false;
-    }
-  });
   $("cfg-cdc-switch-ratio").addEventListener("input", (event) => {
     const ratio = safeFloat(event.target.value, 0);
     if (ratio > 0) {
       $("cfg-use-cdc-fm").checked = true;
       $("cfg-use-self-flow").checked = false;
       $("cfg-cdc-combine-knn").checked = false;
-      if (safeInt($("cfg-knn-noise-k").value, 0) <= 0) {
-        $("cfg-knn-noise-k").value = 8;
-      }
+      $("cfg-cdc-alternate-knn").checked = false;
       $("cfg-cache-latents").checked = true;
       $("cfg-cache-latents-to-disk").checked = true;
-    } else if ($("cfg-use-cdc-fm").checked && !$("cfg-cdc-combine-knn").checked) {
-      $("cfg-knn-noise-k").value = 0;
     }
   });
   $("cfg-cdc-combine-knn").addEventListener("change", (event) => {
-    if (!event.target.checked) {
-      if ($("cfg-use-cdc-fm").checked && safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0) {
-        $("cfg-knn-noise-k").value = 0;
-      }
-      return;
-    }
+    if (!event.target.checked) return;
     $("cfg-use-cdc-fm").checked = true;
     $("cfg-use-self-flow").checked = false;
+    $("cfg-cdc-alternate-knn").checked = false;
     $("cfg-cdc-switch-ratio").value = 0;
-    if (safeInt($("cfg-knn-noise-k").value, 0) <= 0) {
-      $("cfg-knn-noise-k").value = 8;
-    }
+    $("cfg-cache-latents").checked = true;
+    $("cfg-cache-latents-to-disk").checked = true;
+  });
+  $("cfg-cdc-alternate-knn").addEventListener("change", (event) => {
+    if (!event.target.checked) return;
+    $("cfg-use-cdc-fm").checked = true;
+    $("cfg-use-self-flow").checked = false;
+    $("cfg-cdc-combine-knn").checked = false;
+    $("cfg-cdc-switch-ratio").value = 0;
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
   });

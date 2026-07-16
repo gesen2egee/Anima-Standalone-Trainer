@@ -337,6 +337,63 @@ class CDCGeometryCache:
             corrections.append(correction)
         return torch.stack(corrections).reshape_as(noise).to(dtype=noise.dtype)
 
+    @torch.no_grad()
+    def select_geometry_aware_noise(
+        self,
+        latents: torch.Tensor,
+        candidates: torch.Tensor,
+        keys: Sequence[str],
+        flippeds: Optional[Sequence[bool]] = None,
+        regularization: float = 0.1,
+    ) -> torch.Tensor:
+        """Select candidates using the stabilized local Mahalanobis metric.
+
+        The cached covariance is low-rank, so ``tau I`` supplies variance in
+        its orthogonal complement. ``regularization`` expresses tau relative
+        to the largest local eigenvalue and keeps the setting scale-invariant.
+        """
+        if candidates.ndim != latents.ndim + 1 or candidates.shape[0] != latents.shape[0]:
+            raise ValueError("CDC-aware KNN candidates must have shape [B,K,*latent_shape]")
+        if len(keys) != latents.shape[0]:
+            raise ValueError(f"CDC-FM key count {len(keys)} does not match batch size {latents.shape[0]}")
+        if regularization <= 0.0:
+            raise ValueError("CDC-aware KNN regularization must be greater than 0")
+
+        flips = list(flippeds) if flippeds is not None else [False] * len(keys)
+        flattened_latents = latents.float().reshape(latents.shape[0], -1)
+        flattened_candidates = candidates.float().reshape(candidates.shape[0], candidates.shape[1], -1)
+        selected = []
+        for index, (key, flipped) in enumerate(zip(keys, flips)):
+            deltas = flattened_candidates[index] - flattened_latents[index].unsqueeze(0)
+            loaded = self._load(key)
+            if loaded is None:
+                costs = deltas.square().sum(dim=1)
+            else:
+                vectors, values, shape = loaded
+                if tuple(latents.shape[1:]) != shape:
+                    raise ValueError(
+                        f"CDC-FM latent shape mismatch for {key}: cache={shape}, batch={tuple(latents.shape[1:])}"
+                    )
+                vectors = vectors.to(device=latents.device, dtype=torch.float32)
+                values = values.to(device=latents.device, dtype=torch.float32)
+                if flipped:
+                    vectors = torch.flip(vectors.reshape(vectors.shape[0], *shape), dims=[-1]).reshape_as(vectors)
+                active = values > 0
+                vectors = vectors[active]
+                values = values[active]
+                if values.numel() == 0:
+                    costs = deltas.square().sum(dim=1)
+                else:
+                    vectors = torch.nn.functional.normalize(vectors, dim=1)
+                    projected = deltas @ vectors.T
+                    projected_energy = projected.square()
+                    total_energy = deltas.square().sum(dim=1)
+                    normal_energy = (total_energy - projected_energy.sum(dim=1)).clamp_min(0)
+                    tau = (values.max() * float(regularization)).clamp_min(1e-6)
+                    costs = normal_energy / tau + (projected_energy / (values.unsqueeze(0) + tau)).sum(dim=1)
+            selected.append(candidates[index, torch.argmin(costs)])
+        return torch.stack(selected)
+
 
 def apply_cdc_flow_path(
     latents: torch.Tensor,
