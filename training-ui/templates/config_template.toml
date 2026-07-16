@@ -34,6 +34,7 @@ max_grad_norm = 1
 train_batch_size = 1
 knn_noise_k = 64
 use_cdc_fm = false
+cdc_switch_ratio = 0.0
 cdc_k_neighbors = 64
 cdc_k_bandwidth = 8
 cdc_dim = 8

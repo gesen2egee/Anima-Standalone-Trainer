@@ -2087,7 +2087,8 @@ function populateConfig(config) {
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
   $("cfg-use-cdc-fm").checked = t.use_cdc_fm ?? false;
-  if ($("cfg-use-cdc-fm").checked) {
+  $("cfg-cdc-switch-ratio").value = t.cdc_switch_ratio ?? 0;
+  if ($("cfg-use-cdc-fm").checked && safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0) {
     $("cfg-knn-noise-k").value = 0;
   }
   $("cfg-cdc-k-neighbors").value = t.cdc_k_neighbors ?? 64;
@@ -2518,6 +2519,7 @@ function gatherConfig() {
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
   const useCdcFm = $("cfg-use-cdc-fm").checked;
+  const cdcSwitchRatio = safeFloat($("cfg-cdc-switch-ratio").value, 0);
   const useSelfFlow = $("cfg-use-self-flow").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
@@ -2592,9 +2594,10 @@ function gatherConfig() {
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
-      knn_noise_k: useCdcFm ? 0 : safeInt($("cfg-knn-noise-k").value),
+      knn_noise_k: useCdcFm && cdcSwitchRatio <= 0 ? 0 : safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
       use_cdc_fm: useCdcFm,
+      cdc_switch_ratio: cdcSwitchRatio,
       cdc_k_neighbors: safeInt($("cfg-cdc-k-neighbors").value, 64),
       cdc_k_bandwidth: safeInt($("cfg-cdc-k-bandwidth").value, 8),
       cdc_dim: safeInt($("cfg-cdc-dim").value, 8),
@@ -5975,7 +5978,9 @@ async function init() {
   $("cfg-use-cdc-fm").addEventListener("change", (event) => {
     if (!event.target.checked) return;
     $("cfg-use-self-flow").checked = false;
-    $("cfg-knn-noise-k").value = 0;
+    if (safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0) {
+      $("cfg-knn-noise-k").value = 0;
+    }
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
   });
@@ -5986,8 +5991,22 @@ async function init() {
     $("cfg-network-dropout").value = 0;
   });
   $("cfg-knn-noise-k").addEventListener("input", (event) => {
-    if (safeInt(event.target.value, 0) > 0) {
+    if (safeInt(event.target.value, 0) > 0 && safeFloat($("cfg-cdc-switch-ratio").value, 0) <= 0) {
       $("cfg-use-cdc-fm").checked = false;
+    }
+  });
+  $("cfg-cdc-switch-ratio").addEventListener("input", (event) => {
+    const ratio = safeFloat(event.target.value, 0);
+    if (ratio > 0) {
+      $("cfg-use-cdc-fm").checked = true;
+      $("cfg-use-self-flow").checked = false;
+      if (safeInt($("cfg-knn-noise-k").value, 0) <= 0) {
+        $("cfg-knn-noise-k").value = 8;
+      }
+      $("cfg-cache-latents").checked = true;
+      $("cfg-cache-latents-to-disk").checked = true;
+    } else if ($("cfg-use-cdc-fm").checked) {
+      $("cfg-knn-noise-k").value = 0;
     }
   });
   // Discard Button

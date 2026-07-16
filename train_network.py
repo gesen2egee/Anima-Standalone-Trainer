@@ -466,6 +466,10 @@ class NetworkTrainer:
     def on_step_start(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype, is_train: bool = True):
         pass
 
+    def set_current_training_step(self, global_step: int) -> None:
+        """Update architecture-specific step schedules before processing a batch."""
+        return None
+
     def on_validation_step_end(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype):
         pass
 
@@ -1637,6 +1641,7 @@ class NetworkTrainer:
                     initial_step -= 1
                     continue
 
+                self.set_current_training_step(global_step)
                 with accelerator.accumulate(training_model):
                     on_step_start_for_network(text_encoder, unet)
 

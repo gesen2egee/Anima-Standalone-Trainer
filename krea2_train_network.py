@@ -419,7 +419,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             latents = latents.squeeze(2)
 
         latents = latents.to(accelerator.device, dtype=weight_dtype)
-        noise = train_util.sample_training_noise(args, latents)
+        noise = self.sample_flow_training_noise(args, latents, is_train)
         noisy, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
             args,
             noise_scheduler,

@@ -1,6 +1,7 @@
 """Shared rectified-flow network training behavior for Anima-family models."""
 
 import argparse
+import logging
 import math
 from contextlib import contextmanager
 from typing import Optional, Sequence, Union
@@ -8,6 +9,9 @@ from typing import Optional, Sequence, Union
 import torch
 
 from library import anima_train_utils, cdc_fm, qwen_image_autoencoder_kl, sd3_train_utils, self_flow, train_util
+
+
+logger = logging.getLogger(__name__)
 
 
 def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None:
@@ -31,6 +35,12 @@ def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None
     parser.add_argument("--cdc_cache_dir", type=str, default="tasks/cdc_cache")
     parser.add_argument("--cdc_cache_memory_entries", type=int, default=32)
     parser.add_argument("--cdc_force_recache", action="store_true")
+    parser.add_argument(
+        "--cdc_switch_ratio",
+        type=float,
+        default=0.0,
+        help="fraction of training steps using KNN noise before switching to CDC-FM (0 disables scheduling)",
+    )
     parser.add_argument("--use_self_flow", action="store_true", help="enable Self-Flow dual-timestep self-distillation")
     parser.add_argument("--self_flow_mask_ratio", type=float, default=0.25)
     parser.add_argument("--self_flow_representation_weight", type=float, default=0.8)
@@ -54,6 +64,7 @@ class FlowNetworkTrainerMixin:
         super().__init__(*args, **kwargs)
         self.global_step = 0
         self.cdc_geometry_cache = None
+        self._cdc_last_stage = None
         self.self_flow_ema = None
         self.current_self_flow_representation_loss = None
 
@@ -110,7 +121,12 @@ class FlowNetworkTrainerMixin:
                     if value != 0.0:
                         raise ValueError("Self-Flow does not support rank_dropout or module_dropout")
         if getattr(args, "use_cdc_fm", False):
-            if getattr(args, "knn_noise_k", 0) > 0:
+            switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
+            if not 0.0 <= switch_ratio < 1.0:
+                raise ValueError("cdc_switch_ratio must be in [0, 1)")
+            if switch_ratio > 0.0 and getattr(args, "knn_noise_k", 0) < 1:
+                raise ValueError("cdc_switch_ratio requires knn_noise_k to be greater than 0")
+            if switch_ratio == 0.0 and getattr(args, "knn_noise_k", 0) > 0:
                 raise ValueError("CDC-FM and KNN noise are mutually exclusive; set knn_noise_k to 0")
             if not args.cache_latents or not args.cache_latents_to_disk:
                 raise ValueError("CDC-FM requires --cache_latents and --cache_latents_to_disk")
@@ -135,8 +151,40 @@ class FlowNetworkTrainerMixin:
         architecture = getattr(self, "cdc_architecture_name", self.__class__.__name__.lower())
         self.cdc_geometry_cache = cdc_fm.prepare_cdc_cache(args, train_dataset_group, accelerator, architecture)
 
-    def apply_cdc_flow_path(self, args, batch, latents, noise, sigmas, is_train):
+    def set_current_training_step(self, global_step: int) -> None:
+        self.global_step = int(global_step)
+        super().set_current_training_step(global_step)
+
+    def is_cdc_stage_active(self, args, is_train: bool = True) -> bool:
         if not is_train or not getattr(args, "use_cdc_fm", False):
+            return False
+        switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
+        if switch_ratio <= 0.0:
+            return True
+        switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
+        return self.global_step >= switch_step
+
+    def sample_flow_training_noise(self, args, latents: torch.Tensor, is_train: bool = True) -> torch.Tensor:
+        if not getattr(args, "use_cdc_fm", False):
+            return train_util.sample_training_noise(args, latents)
+
+        cdc_active = self.is_cdc_stage_active(args, is_train)
+        switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
+        stage = "cdc" if cdc_active else "knn" if is_train and switch_ratio > 0.0 else "gaussian"
+        if is_train and stage != self._cdc_last_stage:
+            if stage == "knn":
+                switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
+                logger.info("CDC-FM schedule: using KNN noise until step %d", switch_step)
+            elif stage == "cdc":
+                logger.info("CDC-FM schedule: switched to CDC geometry at step %d", self.global_step)
+            self._cdc_last_stage = stage
+
+        if stage == "knn":
+            return train_util.sample_knn_noise(latents, int(args.knn_noise_k))
+        return torch.randn_like(latents, device=latents.device)
+
+    def apply_cdc_flow_path(self, args, batch, latents, noise, sigmas, is_train):
+        if not self.is_cdc_stage_active(args, is_train):
             return None
         if self.cdc_geometry_cache is None:
             raise RuntimeError("CDC-FM is enabled but its geometry cache was not prepared")
@@ -336,6 +384,7 @@ class FlowNetworkTrainerMixin:
         metadata["ss_cdc_gamma"] = getattr(args, "cdc_gamma", 0.0)
         metadata["ss_cdc_bandwidth_rescale"] = getattr(args, "cdc_bandwidth_rescale", 0.0)
         metadata["ss_cdc_min_bucket_size"] = getattr(args, "cdc_min_bucket_size", 0)
+        metadata["ss_cdc_switch_ratio"] = getattr(args, "cdc_switch_ratio", 0.0)
         metadata["ss_use_self_flow"] = getattr(args, "use_self_flow", False)
         metadata["ss_self_flow_mask_ratio"] = getattr(args, "self_flow_mask_ratio", 0.0)
         metadata["ss_self_flow_representation_weight"] = getattr(args, "self_flow_representation_weight", 0.0)
