@@ -16,22 +16,27 @@ class MockNoiseScheduler:
         self.config = SimpleNamespace(num_train_timesteps=1000)
 
 
-def test_weighted_percentiles_respect_repeats_and_ties():
+def test_weighted_quantile_matches_expanded_repeats():
     values = [1.0, 2.0, 2.0, 3.0]
     weights = [1, 2, 1, 2]
 
-    result = train_util.DatasetGroup._weighted_percentile_ranks(values, weights)
+    low = train_util.DatasetGroup._weighted_quantile(values, weights, 0.05)
+    middle = train_util.DatasetGroup._weighted_quantile(values, weights, 0.5)
+    high = train_util.DatasetGroup._weighted_quantile(values, weights, 0.95)
 
-    assert result == pytest.approx([0.0, 0.4, 0.4, 0.9])
+    expanded = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0])
+    assert [low, middle, high] == pytest.approx(np.percentile(expanded, [5, 50, 95]))
 
 
-def test_dataset_tqa_percentiles_map_difference_extremes_to_exact_shift_range(monkeypatch):
+def test_dataset_tqa_robust_ranges_map_direct_difference_to_shift(monkeypatch):
     infos = [
         SimpleNamespace(
             tqa_koniq_quality_score=quality,
             tqa_dbaes_score=aesthetic,
-            tqa_quality_percentile=None,
-            tqa_dbaes_percentile=None,
+            tqa_quality_normalized=None,
+            tqa_dbaes_normalized=None,
+            tqa_quality_loss_weight=None,
+            tqa_dbaes_loss_weight=None,
             tqa_shift=None,
             latents_npz=None,
             absolute_path=f"image-{index}.png",
@@ -50,7 +55,18 @@ def test_dataset_tqa_percentiles_map_difference_extremes_to_exact_shift_range(mo
 
     group._normalize_tqa_scores()
 
+    assert [info.tqa_quality_normalized for info in infos] == pytest.approx([0.0, 0.5, 1.0])
+    assert [info.tqa_dbaes_normalized for info in infos] == pytest.approx([1.0, 0.5, 0.0])
     assert [info.tqa_shift for info in infos] == pytest.approx([1.5, 1.0, 0.5])
+    assert np.average([info.tqa_quality_loss_weight for info in infos], weights=[2, 2, 2]) == pytest.approx(1.0)
+    assert np.average([info.tqa_dbaes_loss_weight for info in infos], weights=[2, 2, 2]) == pytest.approx(1.0)
+
+
+def test_robust_minmax_keeps_small_raw_differences_small():
+    values = [70.0, 70.01, 70.1]
+    normalized, _, _ = train_util.DatasetGroup._robust_minmax(values, [1, 1, 1])
+
+    assert normalized[1] - normalized[0] < normalized[2] - normalized[1]
 
 
 def test_tqa_loss_interpolates_quality_to_aesthetic_by_timestep():
@@ -61,8 +77,8 @@ def test_tqa_loss_interpolates_quality_to_aesthetic_by_timestep():
         max_train_steps=100,
     )
     batch = {
-        "tqa_quality_percentiles": torch.tensor([0.25, 0.75]),
-        "tqa_dbaes_percentiles": torch.tensor([0.75, 0.25]),
+        "tqa_quality_weights": torch.tensor([0.5, 1.5]),
+        "tqa_dbaes_weights": torch.tensor([1.5, 0.5]),
     }
     loss = torch.ones(2)
 
@@ -87,8 +103,8 @@ def test_tqa_and_dbaes_use_geometric_mean():
     )
     batch = {
         "aes_scores": torch.tensor([2.0]),
-        "tqa_quality_percentiles": torch.tensor([0.125]),
-        "tqa_dbaes_percentiles": torch.tensor([0.125]),
+        "tqa_quality_weights": torch.tensor([0.25]),
+        "tqa_dbaes_weights": torch.tensor([0.25]),
     }
 
     weighted = train_util.apply_aes_loss_weighting(
@@ -106,8 +122,8 @@ def test_progressive_tqa_weighting_transitions_from_one_to_timestep_weight():
         max_train_steps=101,
     )
     batch = {
-        "tqa_quality_percentiles": torch.tensor([0.25]),
-        "tqa_dbaes_percentiles": torch.tensor([0.75]),
+        "tqa_quality_weights": torch.tensor([0.5]),
+        "tqa_dbaes_weights": torch.tensor([1.5]),
     }
     sigma = torch.ones(1, 1, 1, 1)
 

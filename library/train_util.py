@@ -474,8 +474,10 @@ class ImageInfo:
         self.aes_score: Optional[float] = None
         self.tqa_koniq_quality_score: Optional[float] = None
         self.tqa_dbaes_score: Optional[float] = None
-        self.tqa_quality_percentile: Optional[float] = None
-        self.tqa_dbaes_percentile: Optional[float] = None
+        self.tqa_quality_normalized: Optional[float] = None
+        self.tqa_dbaes_normalized: Optional[float] = None
+        self.tqa_quality_loss_weight: Optional[float] = None
+        self.tqa_dbaes_loss_weight: Optional[float] = None
         self.tqa_shift: Optional[float] = None
         self.resize_interpolation: Optional[str] = None
 
@@ -2159,8 +2161,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
         loss_weights = []
         aes_scores = []
-        tqa_quality_percentiles = []
-        tqa_dbaes_percentiles = []
+        tqa_quality_weights = []
+        tqa_dbaes_weights = []
         tqa_shift_values = []
         captions = []
         input_ids_list = []
@@ -2205,10 +2207,10 @@ class BaseDataset(torch.utils.data.Dataset):
                 aes_scores.append(image_info.aes_score / self.aes_score_mean)
 
             if self.latents_caching_strategy is not None and self.latents_caching_strategy.cache_tqa_scores:
-                if image_info.tqa_quality_percentile is None or image_info.tqa_dbaes_percentile is None:
-                    raise ValueError(f"TQA percentiles are missing from latent cache: {image_info.absolute_path}")
-                tqa_quality_percentiles.append(image_info.tqa_quality_percentile)
-                tqa_dbaes_percentiles.append(image_info.tqa_dbaes_percentile)
+                if image_info.tqa_quality_loss_weight is None or image_info.tqa_dbaes_loss_weight is None:
+                    raise ValueError(f"TQA robust weights are missing from latent cache: {image_info.absolute_path}")
+                tqa_quality_weights.append(image_info.tqa_quality_loss_weight)
+                tqa_dbaes_weights.append(image_info.tqa_dbaes_loss_weight)
                 if image_info.tqa_shift is None:
                     raise ValueError(f"TQA shift is missing from latent cache: {image_info.absolute_path}")
                 tqa_shift_values.append(image_info.tqa_shift)
@@ -2428,9 +2430,9 @@ class BaseDataset(torch.utils.data.Dataset):
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         if aes_scores:
             example["aes_scores"] = torch.FloatTensor(aes_scores)
-        if tqa_quality_percentiles:
-            example["tqa_quality_percentiles"] = torch.FloatTensor(tqa_quality_percentiles)
-            example["tqa_dbaes_percentiles"] = torch.FloatTensor(tqa_dbaes_percentiles)
+        if tqa_quality_weights:
+            example["tqa_quality_weights"] = torch.FloatTensor(tqa_quality_weights)
+            example["tqa_dbaes_weights"] = torch.FloatTensor(tqa_dbaes_weights)
             example["tqa_shift_values"] = torch.FloatTensor(tqa_shift_values)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
@@ -3507,37 +3509,46 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
         )
 
     @staticmethod
-    def _weighted_percentile_ranks(values: list[float], weights: list[int]) -> list[float]:
-        """Return 0-1 average ranks while treating repeats as duplicate samples."""
+    def _weighted_quantile(values: list[float], weights: list[int], quantile: float) -> float:
+        """Match a linear quantile over the virtual sample list expanded by repeats."""
         if len(values) != len(weights):
-            raise ValueError("TQA percentile values and weights must have the same length")
+            raise ValueError("TQA quantile values and weights must have the same length")
         if not values:
-            return []
-        normalized_weights = [max(int(weight), 0) for weight in weights]
-        total_weight = sum(normalized_weights)
+            raise ValueError("Cannot calculate a TQA quantile for an empty dataset")
+        quantile = max(0.0, min(1.0, float(quantile)))
+        samples = sorted(
+            (float(value), max(int(weight), 0))
+            for value, weight in zip(values, weights)
+            if int(weight) > 0
+        )
+        total_weight = sum(weight for _, weight in samples)
         if total_weight <= 0:
-            raise ValueError("Cannot calculate TQA percentiles for an empty training dataset")
+            raise ValueError("Cannot calculate a TQA quantile for an empty training dataset")
 
-        order = sorted(range(len(values)), key=lambda index: values[index])
-        result = [0.0] * len(values)
-        cumulative = 0
-        start = 0
-        while start < len(order):
-            end = start + 1
-            score = values[order[start]]
-            while end < len(order) and values[order[end]] == score:
-                end += 1
-            group_weight = sum(normalized_weights[order[position]] for position in range(start, end))
-            if total_weight == 1:
-                percentile = 0.5
-            else:
-                percentile = (cumulative + (group_weight - 1) / 2.0) / (total_weight - 1)
-            percentile = max(0.0, min(1.0, percentile))
-            for position in range(start, end):
-                result[order[position]] = percentile
-            cumulative += group_weight
-            start = end
-        return result
+        position = (total_weight - 1) * quantile
+        lower_index = math.floor(position)
+        upper_index = math.ceil(position)
+
+        def value_at(index: int) -> float:
+            cumulative = 0
+            for value, weight in samples:
+                cumulative += weight
+                if index < cumulative:
+                    return value
+            return samples[-1][0]
+
+        lower = value_at(lower_index)
+        upper = value_at(upper_index)
+        return lower + (upper - lower) * (position - lower_index)
+
+    @staticmethod
+    def _robust_minmax(values: list[float], weights: list[int]) -> tuple[list[float], float, float]:
+        low = DatasetGroup._weighted_quantile(values, weights, 0.05)
+        high = DatasetGroup._weighted_quantile(values, weights, 0.95)
+        if high <= low:
+            return [0.5] * len(values), low, high
+        normalized = [max(0.0, min(1.0, (value - low) / (high - low))) for value in values]
+        return normalized, low, high
 
     def _normalize_tqa_scores(self):
         strategy = LatentsCachingStrategy.get_strategy()
@@ -3556,41 +3567,37 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
                         if scores is not None:
                             info.tqa_koniq_quality_score, info.tqa_dbaes_score = scores
                 if info.tqa_koniq_quality_score is None or info.tqa_dbaes_score is None:
-                    raise ValueError(f"TQA scores are missing while normalizing percentiles: {info.absolute_path}")
+                    raise ValueError(f"TQA scores are missing while applying robust normalization: {info.absolute_path}")
                 infos.append(info)
                 weights.append(max(int(info.num_repeats), 0))
                 quality_scores.append(float(info.tqa_koniq_quality_score))
                 dbaes_scores.append(float(info.tqa_dbaes_score))
 
-        quality_percentiles = self._weighted_percentile_ranks(quality_scores, weights)
-        dbaes_percentiles = self._weighted_percentile_ranks(dbaes_scores, weights)
-        differences = [
-            dbaes - quality
-            for quality, dbaes in zip(quality_percentiles, dbaes_percentiles)
-        ]
-        difference_percentiles = self._weighted_percentile_ranks(differences, weights)
-        difference_min = min(difference_percentiles)
-        difference_max = max(difference_percentiles)
-        if difference_max > difference_min:
-            shift_percentiles = [
-                (percentile - difference_min) / (difference_max - difference_min)
-                for percentile in difference_percentiles
-            ]
-        else:
-            shift_percentiles = [0.5] * len(difference_percentiles)
-        for info, quality, dbaes, difference_percentile in zip(
-            infos,
-            quality_percentiles,
-            dbaes_percentiles,
-            shift_percentiles,
-        ):
-            info.tqa_quality_percentile = quality
-            info.tqa_dbaes_percentile = dbaes
-            info.tqa_shift = 0.5 + difference_percentile
+        quality_normalized, quality_low, quality_high = self._robust_minmax(quality_scores, weights)
+        dbaes_normalized, dbaes_low, dbaes_high = self._robust_minmax(dbaes_scores, weights)
+        total_weight = sum(weights)
+        quality_loss_mean = sum(
+            (0.5 + value) * weight for value, weight in zip(quality_normalized, weights)
+        ) / total_weight
+        dbaes_loss_mean = sum(
+            (0.5 + value) * weight for value, weight in zip(dbaes_normalized, weights)
+        ) / total_weight
+
+        for info, quality, dbaes in zip(infos, quality_normalized, dbaes_normalized):
+            info.tqa_quality_normalized = quality
+            info.tqa_dbaes_normalized = dbaes
+            info.tqa_quality_loss_weight = (0.5 + quality) / quality_loss_mean
+            info.tqa_dbaes_loss_weight = (0.5 + dbaes) / dbaes_loss_mean
+            info.tqa_shift = 1.0 + 0.5 * (dbaes - quality)
 
         logger.info(
-            "normalized TQA scores to weighted percentiles: images=%d, shift_range=%.4f..%.4f",
+            "normalized TQA scores with weighted 5%%-95%% robust ranges: images=%d, "
+            "quality_bounds=%.6f..%.6f, dbaes_bounds=%.6f..%.6f, shift_range=%.4f..%.4f",
             len(infos),
+            quality_low,
+            quality_high,
+            dbaes_low,
+            dbaes_high,
             min(info.tqa_shift for info in infos),
             max(info.tqa_shift for info in infos),
         )
@@ -5808,7 +5815,7 @@ def add_dataset_arguments(
     parser.add_argument(
         "--tqa_loss_weighting",
         action="store_true",
-        help="cache DBAesthetic and KonIQ NR-IQA scores and interpolate percentile loss weights by timestep",
+        help="cache DBAesthetic and KonIQ NR-IQA scores and interpolate robust 5%-95% range weights by timestep",
     )
     parser.add_argument(
         "--tqa_loss_weighting_schedule",
@@ -7745,18 +7752,18 @@ def apply_aes_loss_weighting(
 
     tqa_weights = None
     if use_tqa:
-        quality = batch.get("tqa_quality_percentiles")
-        dbaes = batch.get("tqa_dbaes_percentiles")
+        quality = batch.get("tqa_quality_weights")
+        dbaes = batch.get("tqa_dbaes_weights")
         if quality is None or dbaes is None:
-            raise ValueError("TQA loss weighting is enabled, but this batch has no cached TQA percentiles")
+            raise ValueError("TQA loss weighting is enabled, but this batch has no robust TQA weights")
         if sigmas is None:
             raise ValueError("TQA loss weighting requires the sampled timestep sigmas")
         quality = quality.to(device=loss.device, dtype=loss.dtype)
         dbaes = dbaes.to(device=loss.device, dtype=loss.dtype)
         timestep = sigmas.to(device=loss.device, dtype=loss.dtype).reshape(loss.shape[0], -1).mean(dim=1)
         timestep = timestep.clamp(0.0, 1.0)
-        # Each percentile distribution has mean 0.5, so x2 preserves mean loss weight 1.0.
-        tqa_weights = 2.0 * torch.lerp(quality, dbaes, timestep)
+        # Both robust endpoint weights have dataset mean 1.0, so every interpolation does too.
+        tqa_weights = torch.lerp(quality, dbaes, timestep)
         if getattr(args, "tqa_loss_weighting_schedule", False):
             tqa_weights = torch.lerp(torch.ones_like(tqa_weights), tqa_weights, progress)
 
