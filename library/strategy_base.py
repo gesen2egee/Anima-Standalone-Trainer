@@ -438,6 +438,18 @@ class LatentsCachingStrategy:
     def cache_batch_latents(self, model: Any, batch: List, flip_aug: bool, alpha_mask: bool, random_crop: bool):
         raise NotImplementedError
 
+    def release_after_latents_caching(self, device: Optional[torch.device] = None) -> None:
+        """Release optional metric models after the complete latent-cache pass."""
+        if not self.cache_aes_score:
+            return
+
+        try:
+            from library.anime_aesthetic import release_anime_dbaesthetic
+
+            release_anime_dbaesthetic(device)
+        except Exception as e:
+            logger.warning(f"failed to release anime DBAesthetic model cleanly: {e}")
+
     def _default_is_disk_cached_latents_expected(
         self,
         latents_stride: int,
@@ -534,17 +546,10 @@ class LatentsCachingStrategy:
 
         aes_scores = [None] * len(image_infos)
         if self.cache_aes_score:
-            try:
-                from imgutils.metrics import anime_dbaesthetic
-            except ImportError as e:
-                raise ImportError(
-                    "AES loss weighting requires dghs-imgutils. Install the project requirements before caching latents."
-                ) from e
+            from library.anime_aesthetic import anime_dbaesthetic
 
             for i, info in enumerate(image_infos):
-                result = anime_dbaesthetic(info.absolute_path, fmt="percentile")
-                if isinstance(result, (tuple, list)):
-                    result = result[0]
+                result = anime_dbaesthetic(info.absolute_path)
                 aes_scores[i] = float(np.clip(float(result), 0.0, 1.0))
 
         img_tensor = img_tensor.to(device=vae_device, dtype=vae_dtype)

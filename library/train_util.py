@@ -1806,6 +1806,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         finally:
             executor.shutdown()
+            caching_strategy.release_after_latents_caching(accelerator.device)
 
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
         # マルチGPUには対応していないので、そちらはtools/cache_latents.pyを使うこと

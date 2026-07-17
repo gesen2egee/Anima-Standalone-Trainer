@@ -256,8 +256,14 @@ class AnimaLatentsCachingStrategy(LatentsCachingStrategy):
 
     ANIMA_LATENTS_NPZ_SUFFIX = "_anima.npz"
 
-    def __init__(self, cache_to_disk: bool, batch_size: int, skip_disk_cache_validity_check: bool) -> None:
-        super().__init__(cache_to_disk, batch_size, skip_disk_cache_validity_check)
+    def __init__(
+        self,
+        cache_to_disk: bool,
+        batch_size: int,
+        skip_disk_cache_validity_check: bool,
+        cache_aes_score: bool = False,
+    ) -> None:
+        super().__init__(cache_to_disk, batch_size, skip_disk_cache_validity_check, cache_aes_score)
 
     @property
     def cache_suffix(self) -> str:
