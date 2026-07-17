@@ -446,7 +446,7 @@ class LatentsCachingStrategy:
 
     def release_after_latents_caching(self, device: Optional[torch.device] = None) -> None:
         """Release optional metric models after the complete latent-cache pass."""
-        if self.cache_aes_score:
+        if self.cache_aes_score or self.cache_tqa_scores:
             try:
                 from library.anime_aesthetic import release_anime_dbaesthetic
 
@@ -459,7 +459,7 @@ class LatentsCachingStrategy:
 
                 release_tqa_models(device)
             except Exception as e:
-                logger.warning(f"failed to release TQA SigLIP models cleanly: {e}")
+                logger.warning(f"failed to release TQA SigLIP quality model cleanly: {e}")
 
     def _default_is_disk_cached_latents_expected(
         self,
@@ -498,7 +498,7 @@ class LatentsCachingStrategy:
                 if self.cache_aes_score and "aes_score" not in npz:
                     return False
                 if self.cache_tqa_scores and (
-                    "tqa_quality_score" not in npz or "tqa_aesthetic_score" not in npz
+                    "tqa_quality_score" not in npz or "tqa_dbaes_score" not in npz
                 ):
                     return False
                 if self.skip_disk_cache_validity_check:
@@ -559,20 +559,20 @@ class LatentsCachingStrategy:
             image_infos, apply_alpha_mask, random_crop
         )
 
-        aes_scores = [None] * len(image_infos)
-        if self.cache_aes_score:
+        dbaes_scores = [None] * len(image_infos)
+        if self.cache_aes_score or self.cache_tqa_scores:
             from library.anime_aesthetic import anime_dbaesthetic
 
             for i, info in enumerate(image_infos):
                 result = anime_dbaesthetic(info.absolute_path)
-                aes_scores[i] = float(np.clip(float(result), 0.0, 1.0))
+                dbaes_scores[i] = float(np.clip(float(result), 0.0, 1.0))
 
-        tqa_scores = [(None, None)] * len(image_infos)
+        tqa_quality_scores = [None] * len(image_infos)
         if self.cache_tqa_scores:
-            from library.tqa_metrics import score_tqa
+            from library.tqa_metrics import score_tqa_quality
 
             for i, info in enumerate(image_infos):
-                tqa_scores[i] = score_tqa(info.absolute_path)
+                tqa_quality_scores[i] = score_tqa_quality(info.absolute_path)
 
         img_tensor = img_tensor.to(device=vae_device, dtype=vae_dtype)
 
@@ -593,8 +593,9 @@ class LatentsCachingStrategy:
             alpha_mask = alpha_masks[i]
             original_size = original_sizes[i]
             crop_ltrb = crop_ltrbs[i]
-            aes_score = aes_scores[i]
-            tqa_quality_score, tqa_aesthetic_score = tqa_scores[i]
+            aes_score = dbaes_scores[i] if self.cache_aes_score else None
+            tqa_dbaes_score = dbaes_scores[i] if self.cache_tqa_scores else None
+            tqa_quality_score = tqa_quality_scores[i]
 
             latents_size = latents.shape[-2:]  # H, W (supports both 4D and 5D latents)
             key_reso_suffix = f"_{latents_size[0]}x{latents_size[1]}" if multi_resolution else ""  # e.g. "_32x64", HxW
@@ -611,7 +612,7 @@ class LatentsCachingStrategy:
                     automask_settings=train_util.get_automask_settings_for_caching(),
                     aes_score=aes_score,
                     tqa_quality_score=tqa_quality_score,
-                    tqa_aesthetic_score=tqa_aesthetic_score,
+                    tqa_dbaes_score=tqa_dbaes_score,
                 )
             else:
                 info.latents_original_size = original_size
@@ -622,7 +623,7 @@ class LatentsCachingStrategy:
                 info.alpha_mask = alpha_mask
                 info.aes_score = aes_score
                 info.tqa_quality_score = tqa_quality_score
-                info.tqa_aesthetic_score = tqa_aesthetic_score
+                info.tqa_dbaes_score = tqa_dbaes_score
 
     def load_latents_from_disk(
         self, npz_path: str, bucket_reso: Tuple[int, int]
@@ -699,11 +700,11 @@ class LatentsCachingStrategy:
 
     def load_tqa_scores_from_disk(self, npz_path: str) -> Optional[tuple[float, float]]:
         with np.load(npz_path) as npz:
-            if "tqa_quality_score" not in npz or "tqa_aesthetic_score" not in npz:
+            if "tqa_quality_score" not in npz or "tqa_dbaes_score" not in npz:
                 return None
             return (
                 float(np.asarray(npz["tqa_quality_score"]).item()),
-                float(np.asarray(npz["tqa_aesthetic_score"]).item()),
+                float(np.asarray(npz["tqa_dbaes_score"]).item()),
             )
 
     def save_latents_to_disk(
@@ -718,7 +719,7 @@ class LatentsCachingStrategy:
         automask_settings: AutomaskSettings | None = None,
         aes_score: Optional[float] = None,
         tqa_quality_score: Optional[float] = None,
-        tqa_aesthetic_score: Optional[float] = None,
+        tqa_dbaes_score: Optional[float] = None,
     ):
         """
         Args:
@@ -768,6 +769,6 @@ class LatentsCachingStrategy:
             kwargs["aes_score"] = np.array(float(np.clip(aes_score, 0.0, 1.0)), dtype=np.float32)
         if tqa_quality_score is not None:
             kwargs["tqa_quality_score"] = np.array(float(tqa_quality_score), dtype=np.float32)
-        if tqa_aesthetic_score is not None:
-            kwargs["tqa_aesthetic_score"] = np.array(float(tqa_aesthetic_score), dtype=np.float32)
+        if tqa_dbaes_score is not None:
+            kwargs["tqa_dbaes_score"] = np.array(float(np.clip(tqa_dbaes_score, 0.0, 1.0)), dtype=np.float32)
         np.savez(npz_path, **kwargs)

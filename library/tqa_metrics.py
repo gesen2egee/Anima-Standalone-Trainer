@@ -1,4 +1,4 @@
-"""SigLIP quality/aesthetic regression runtime for TQA latent caching."""
+"""SigLIP quality regression runtime for TQA latent caching."""
 
 import gc
 import logging
@@ -11,10 +11,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-_MODEL_IDS = {
-    "quality": "trojblue/distill-q-align-quality-siglip2-base",
-    "aesthetic": "trojblue/distill-q-align-aesthetic-siglip2-base",
-}
+_MODEL_IDS = {"quality": "trojblue/distill-q-align-quality-siglip2-base"}
 _models = {}
 _processors = {}
 _device: Optional[torch.device] = None
@@ -55,7 +52,7 @@ def _ensure_loaded() -> None:
                 _processors[name] = processor
                 _models[name] = model
             logger.info(
-                "loaded TQA SigLIP models on %s with dtype %s",
+                "loaded TQA SigLIP quality model on %s with dtype %s",
                 _device,
                 _dtype,
             )
@@ -64,8 +61,8 @@ def _ensure_loaded() -> None:
             raise
 
 
-def score_tqa(image_path: str) -> tuple[float, float]:
-    """Return raw (quality, aesthetic) regression scores for one image."""
+def score_tqa_quality(image_path: str) -> float:
+    """Return the raw SigLIP quality regression score for one image."""
     _ensure_loaded()
     with Image.open(image_path) as source:
         if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
@@ -75,21 +72,18 @@ def score_tqa(image_path: str) -> tuple[float, float]:
         else:
             image = source.convert("RGB")
 
-    scores = []
     with torch.inference_mode():
-        for name in ("quality", "aesthetic"):
-            inputs = _processors[name](images=image, return_tensors="pt")
-            inputs = {
-                key: value.to(device=_device, dtype=_dtype if value.is_floating_point() else None)
-                for key, value in inputs.items()
-            }
-            score = _models[name](**inputs).logits.float().reshape(-1)[0].item()
-            scores.append(float(score))
-    return scores[0], scores[1]
+        inputs = _processors["quality"](images=image, return_tensors="pt")
+        inputs = {
+            key: value.to(device=_device, dtype=_dtype if value.is_floating_point() else None)
+            for key, value in inputs.items()
+        }
+        score = _models["quality"](**inputs).logits.float().reshape(-1)[0].item()
+    return float(score)
 
 
 def release_tqa_models(device: Optional[torch.device] = None) -> None:
-    """Release both SigLIP models after the complete latent-cache pass."""
+    """Release the SigLIP quality model after the complete latent-cache pass."""
     global _device, _dtype
     with _lock:
         models = list(_models.values())
@@ -104,4 +98,4 @@ def release_tqa_models(device: Optional[torch.device] = None) -> None:
     cleanup_device = device or runtime_device
     if cleanup_device is not None and cleanup_device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
-    logger.info("released TQA SigLIP models after latent caching")
+    logger.info("released TQA SigLIP quality model after latent caching")

@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from library import train_util
+from library import anime_aesthetic, tqa_metrics
 from library.flux_train_utils import get_noisy_model_input_and_timesteps
 from library.strategy_base import LatentsCachingStrategy
 
@@ -27,9 +28,9 @@ def test_dataset_tqa_percentiles_map_difference_extremes_to_exact_shift_range(mo
     infos = [
         SimpleNamespace(
             tqa_quality_score=quality,
-            tqa_aesthetic_score=aesthetic,
+            tqa_dbaes_score=aesthetic,
             tqa_quality_percentile=None,
-            tqa_aesthetic_percentile=None,
+            tqa_dbaes_percentile=None,
             tqa_shift=None,
             latents_npz=None,
             absolute_path=f"image-{index}.png",
@@ -60,7 +61,7 @@ def test_tqa_loss_interpolates_quality_to_aesthetic_by_timestep():
     )
     batch = {
         "tqa_quality_percentiles": torch.tensor([0.25, 0.75]),
-        "tqa_aesthetic_percentiles": torch.tensor([0.75, 0.25]),
+        "tqa_dbaes_percentiles": torch.tensor([0.75, 0.25]),
     }
     loss = torch.ones(2)
 
@@ -86,7 +87,7 @@ def test_tqa_and_dbaes_use_geometric_mean():
     batch = {
         "aes_scores": torch.tensor([2.0]),
         "tqa_quality_percentiles": torch.tensor([0.125]),
-        "tqa_aesthetic_percentiles": torch.tensor([0.125]),
+        "tqa_dbaes_percentiles": torch.tensor([0.125]),
     }
 
     weighted = train_util.apply_aes_loss_weighting(
@@ -105,7 +106,7 @@ def test_progressive_tqa_weighting_transitions_from_one_to_timestep_weight():
     )
     batch = {
         "tqa_quality_percentiles": torch.tensor([0.25]),
-        "tqa_aesthetic_percentiles": torch.tensor([0.75]),
+        "tqa_dbaes_percentiles": torch.tensor([0.75]),
     }
     sigma = torch.ones(1, 1, 1, 1)
 
@@ -151,7 +152,12 @@ def test_tqa_missing_npz_fields_forces_recache_even_when_checks_are_skipped(tmp_
         skip_disk_cache_validity_check=True,
         cache_tqa_scores=True,
     )
-    np.savez(cache, latents=np.zeros((1, 4, 4), dtype=np.float32))
+    np.savez(
+        cache,
+        latents=np.zeros((1, 4, 4), dtype=np.float32),
+        tqa_quality_score=np.array(4.0, dtype=np.float32),
+        tqa_aesthetic_score=np.array(3.0, dtype=np.float32),
+    )
 
     assert not strategy._default_is_disk_cached_latents_expected(
         8, (32, 32), str(cache), False, False
@@ -161,8 +167,56 @@ def test_tqa_missing_npz_fields_forces_recache_even_when_checks_are_skipped(tmp_
         cache,
         latents=np.zeros((1, 4, 4), dtype=np.float32),
         tqa_quality_score=np.array(4.0, dtype=np.float32),
-        tqa_aesthetic_score=np.array(3.0, dtype=np.float32),
+        tqa_dbaes_score=np.array(0.75, dtype=np.float32),
     )
     assert strategy._default_is_disk_cached_latents_expected(
         8, (32, 32), str(cache), False, False
     )
+
+
+def test_tqa_and_aes_share_one_dbaes_inference_per_image(monkeypatch):
+    infos = [SimpleNamespace(absolute_path=f"image-{index}.png") for index in range(2)]
+    calls = {"dbaes": 0, "quality": 0}
+
+    def fake_dbaes(_path):
+        calls["dbaes"] += 1
+        return 0.25 * calls["dbaes"]
+
+    def fake_quality(_path):
+        calls["quality"] += 1
+        return 4.0 + calls["quality"]
+
+    monkeypatch.setattr(anime_aesthetic, "anime_dbaesthetic", fake_dbaes)
+    monkeypatch.setattr(tqa_metrics, "score_tqa_quality", fake_quality)
+    monkeypatch.setattr(
+        train_util,
+        "load_images_and_masks_for_caching",
+        lambda *_args: (
+            torch.zeros(2, 3, 8, 8),
+            [None, None],
+            [(8, 8), (8, 8)],
+            [(0, 0, 8, 8), (0, 0, 8, 8)],
+        ),
+    )
+    strategy = LatentsCachingStrategy(
+        cache_to_disk=False,
+        batch_size=2,
+        skip_disk_cache_validity_check=False,
+        cache_aes_score=True,
+        cache_tqa_scores=True,
+    )
+
+    strategy._default_cache_batch_latents(
+        lambda images: torch.zeros(images.shape[0], 1, 2, 2),
+        torch.device("cpu"),
+        torch.float32,
+        infos,
+        False,
+        False,
+        False,
+    )
+
+    assert calls == {"dbaes": 2, "quality": 2}
+    assert [info.aes_score for info in infos] == [0.25, 0.5]
+    assert [info.tqa_dbaes_score for info in infos] == [0.25, 0.5]
+    assert [info.tqa_quality_score for info in infos] == [5.0, 6.0]

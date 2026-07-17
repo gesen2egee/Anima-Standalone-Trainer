@@ -459,7 +459,7 @@
                                     <option value="shift">Shift</option>
                                     <option value="autoshift">Autoshift (Mask Ratio)</option>
                                     <option value="autoshift_wavelet">Autoshift (Multiscale Wavelet)</option>
-                                    <option value="autoshift_tqa">Autoshift (TQA)</option>
+                                    <option value="autoshift_tqa">Autoshift (TQA: DBAES − Quality)</option>
                                     <option value="krea2_shift">Krea 2 Resolution Shift</option>
                                     <option value="flux_shift">Flux Shift</option>
                                     <option value="plora">P-LoRA</option>
@@ -639,7 +639,7 @@
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-tqa-loss-weighting"> TQA Loss Weighting</label>
-                                <small>Interpolate normalized quality and aesthetic percentiles using each sampled timestep.</small>
+                                <small>Interpolate SigLIP quality and DBAES aesthetic percentiles using each sampled timestep.</small>
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-tqa-loss-weighting-schedule"> Progressive TQA Weighting</label>
