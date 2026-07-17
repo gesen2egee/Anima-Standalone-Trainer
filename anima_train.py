@@ -81,7 +81,7 @@ def train(args):
     # prepare caching strategy: must be set before preparing dataset
     if args.cache_latents:
         latents_caching_strategy = strategy_anima.AnimaLatentsCachingStrategy(
-            args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check
+            args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check, args.aes_loss_weighting
         )
         strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
@@ -685,6 +685,7 @@ def train(args):
 
                 loss_weights = batch["loss_weights"]
                 loss = loss * loss_weights
+                loss = train_util.apply_aes_loss_weighting(loss, batch, args, global_step)
                 loss = loss.mean()
 
                 accelerator.backward(loss)

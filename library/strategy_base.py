@@ -385,10 +385,17 @@ class LatentsCachingStrategy:
 
     _warned_fallback_to_old_npz = False  # to avoid spamming logs about fallback
 
-    def __init__(self, cache_to_disk: bool, batch_size: int, skip_disk_cache_validity_check: bool) -> None:
+    def __init__(
+        self,
+        cache_to_disk: bool,
+        batch_size: int,
+        skip_disk_cache_validity_check: bool,
+        cache_aes_score: bool = False,
+    ) -> None:
         self._cache_to_disk = cache_to_disk
         self._batch_size = batch_size
         self.skip_disk_cache_validity_check = skip_disk_cache_validity_check
+        self._cache_aes_score = cache_aes_score
 
     @classmethod
     def set_strategy(cls, strategy):
@@ -407,6 +414,10 @@ class LatentsCachingStrategy:
     @property
     def batch_size(self):
         return self._batch_size
+
+    @property
+    def cache_aes_score(self):
+        return self._cache_aes_score
 
     @property
     def cache_suffix(self):
@@ -452,9 +463,6 @@ class LatentsCachingStrategy:
             return False
         if not os.path.exists(npz_path):
             return False
-        if self.skip_disk_cache_validity_check:
-            return True
-
         expected_latents_size = (bucket_reso[1] // latents_stride, bucket_reso[0] // latents_stride)  # bucket_reso is (W, H)
 
         # e.g. "_32x64", HxW
@@ -462,6 +470,12 @@ class LatentsCachingStrategy:
 
         try:
             with np.load(npz_path) as npz:
+                # AES weighting explicitly requires the score even when the
+                # caller skips the normal latent shape/content checks.
+                if self.cache_aes_score and "aes_score" not in npz:
+                    return False
+                if self.skip_disk_cache_validity_check:
+                    return True
                 # In old SD/SDXL npz files, if the actual latents shape does not match the expected shape, it doesn't raise an error as long as "latents" key exists (backward compatibility)
                 # In non-SD/SDXL npz files (multi-resolution support), the latents key always has the resolution suffix, and no latents key without suffix exists, so it raises an error if the expected resolution suffix key is not found (this doesn't change the behavior for non-SD/SDXL npz files).
                 if "latents" + key_reso_suffix not in npz and "latents" not in npz:
@@ -517,6 +531,22 @@ class LatentsCachingStrategy:
         img_tensor, alpha_masks, original_sizes, crop_ltrbs = train_util.load_images_and_masks_for_caching(
             image_infos, apply_alpha_mask, random_crop
         )
+
+        aes_scores = [None] * len(image_infos)
+        if self.cache_aes_score:
+            try:
+                from imgutils.metrics import anime_dbaesthetic
+            except ImportError as e:
+                raise ImportError(
+                    "AES loss weighting requires dghs-imgutils. Install the project requirements before caching latents."
+                ) from e
+
+            for i, info in enumerate(image_infos):
+                result = anime_dbaesthetic(info.absolute_path, fmt="percentile")
+                if isinstance(result, (tuple, list)):
+                    result = result[0]
+                aes_scores[i] = float(np.clip(float(result), 0.0, 1.0))
+
         img_tensor = img_tensor.to(device=vae_device, dtype=vae_dtype)
 
         with torch.no_grad():
@@ -536,6 +566,7 @@ class LatentsCachingStrategy:
             alpha_mask = alpha_masks[i]
             original_size = original_sizes[i]
             crop_ltrb = crop_ltrbs[i]
+            aes_score = aes_scores[i]
 
             latents_size = latents.shape[-2:]  # H, W (supports both 4D and 5D latents)
             key_reso_suffix = f"_{latents_size[0]}x{latents_size[1]}" if multi_resolution else ""  # e.g. "_32x64", HxW
@@ -550,6 +581,7 @@ class LatentsCachingStrategy:
                     alpha_mask,
                     key_reso_suffix,
                     automask_settings=train_util.get_automask_settings_for_caching(),
+                    aes_score=aes_score,
                 )
             else:
                 info.latents_original_size = original_size
@@ -558,6 +590,7 @@ class LatentsCachingStrategy:
                 if flip_aug:
                     info.latents_flipped = flipped_latent
                 info.alpha_mask = alpha_mask
+                info.aes_score = aes_score
 
     def load_latents_from_disk(
         self, npz_path: str, bucket_reso: Tuple[int, int]
@@ -626,6 +659,12 @@ class LatentsCachingStrategy:
             alpha_mask = alpha_mask_from_uint8(alpha_mask)
         return latents, original_size, crop_ltrb, flipped_latents, alpha_mask
 
+    def load_aes_score_from_disk(self, npz_path: str) -> Optional[float]:
+        with np.load(npz_path) as npz:
+            if "aes_score" not in npz:
+                return None
+            return float(np.clip(float(np.asarray(npz["aes_score"]).item()), 0.0, 1.0))
+
     def save_latents_to_disk(
         self,
         npz_path,
@@ -636,6 +675,7 @@ class LatentsCachingStrategy:
         alpha_mask=None,
         key_reso_suffix="",
         automask_settings: AutomaskSettings | None = None,
+        aes_score: Optional[float] = None,
     ):
         """
         Args:
@@ -681,4 +721,6 @@ class LatentsCachingStrategy:
                     kwargs["alpha_mask" + key_reso_suffix] = alpha_mask.float().cpu().numpy()
                 else:
                     kwargs["alpha_mask" + key_reso_suffix] = np.asarray(alpha_mask, dtype=np.float32)
+        if aes_score is not None:
+            kwargs["aes_score"] = np.array(float(np.clip(aes_score, 0.0, 1.0)), dtype=np.float32)
         np.savez(npz_path, **kwargs)

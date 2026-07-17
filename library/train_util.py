@@ -471,6 +471,7 @@ class ImageInfo:
         self.text_encoder_pool2: Optional[torch.Tensor] = None
 
         self.alpha_mask: Optional[torch.Tensor] = None  # alpha mask can be flipped in runtime
+        self.aes_score: Optional[float] = None
         self.resize_interpolation: Optional[str] = None
 
 
@@ -2151,6 +2152,7 @@ class BaseDataset(torch.utils.data.Dataset):
             return self.get_item_for_caching(bucket, bucket_batch_size, image_index)
 
         loss_weights = []
+        aes_scores = []
         captions = []
         input_ids_list = []
         latents_list = []
@@ -2185,6 +2187,13 @@ class BaseDataset(torch.utils.data.Dataset):
 
             # in case of fine tuning, is_reg is always False
             loss_weights.append(self.prior_loss_weight if image_info.is_reg else 1.0)
+
+            if self.latents_caching_strategy is not None and self.latents_caching_strategy.cache_aes_score:
+                if image_info.aes_score is None and image_info.latents_npz is not None:
+                    image_info.aes_score = self.latents_caching_strategy.load_aes_score_from_disk(image_info.latents_npz)
+                if image_info.aes_score is None:
+                    raise ValueError(f"AES score is missing from latent cache: {image_info.absolute_path}")
+                aes_scores.append(image_info.aes_score)
 
             flipped = subset.flip_aug and random.random() < 0.5  # not flipped or flipped with 50% chance
 
@@ -2399,6 +2408,8 @@ class BaseDataset(torch.utils.data.Dataset):
             example["automask_shift_values"] = automask_shift_values
         example["folder_shift_progress"] = self.get_folder_shift_progress()
         example["loss_weights"] = torch.FloatTensor(loss_weights)
+        if aes_scores:
+            example["aes_scores"] = torch.FloatTensor(aes_scores)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
 
@@ -5386,6 +5397,12 @@ def verify_training_args(args: argparse.Namespace):
     """
     enable_high_vram(args)
 
+    if getattr(args, "aes_loss_weighting_schedule", False):
+        args.aes_loss_weighting = True
+    if getattr(args, "aes_loss_weighting", False) and not args.cache_latents:
+        args.cache_latents = True
+        logger.warning("AES loss weighting is enabled, so cache_latents is also enabled")
+
     if args.v2 and args.clip_skip is not None:
         logger.warning("v2 with clip_skip will be unexpected / v2でclip_skipを使用することは想定されていません")
 
@@ -5619,6 +5636,16 @@ def add_dataset_arguments(
         "--cache_latents_to_disk",
         action="store_true",
         help="cache latents to disk to reduce VRAM usage (augmentations must be disabled) / VRAM削減のためにlatentをディスクにcacheする（augmentationは使用不可）",
+    )
+    parser.add_argument(
+        "--aes_loss_weighting",
+        action="store_true",
+        help="cache anime DBAesthetic percentile scores and use them as per-sample loss weights",
+    )
+    parser.add_argument(
+        "--aes_loss_weighting_schedule",
+        action="store_true",
+        help="linearly lower AES loss weights from 1.0 to each sample's score over training",
     )
     parser.add_argument(
         "--skip_cache_check",
@@ -7516,6 +7543,28 @@ def ait_wavelet_loss(
     # and CIOP target adjustments.
     loss = (haar_dwt_2d(model_pred.float()) - haar_dwt_2d(target.float())) ** 2
     return loss * getattr(args, "wavelet_loss_weight", 1.0)
+
+
+def apply_aes_loss_weighting(
+    loss: torch.Tensor,
+    batch: dict,
+    args: argparse.Namespace,
+    current_step: int,
+) -> torch.Tensor:
+    """Apply cached anime DBAesthetic percentiles as per-sample loss weights."""
+    if not getattr(args, "aes_loss_weighting", False):
+        return loss
+
+    aes_scores = batch.get("aes_scores")
+    if aes_scores is None:
+        raise ValueError("AES loss weighting is enabled, but this batch has no cached AES scores")
+
+    weights = aes_scores.to(device=loss.device, dtype=loss.dtype).clamp_(0.0, 1.0)
+    if getattr(args, "aes_loss_weighting_schedule", False):
+        denominator = max(int(args.max_train_steps) - 1, 1)
+        progress = max(0.0, min(1.0, float(current_step) / float(denominator)))
+        weights = torch.lerp(torch.ones_like(weights), weights, progress)
+    return loss * weights
 
 
 def conditional_loss(

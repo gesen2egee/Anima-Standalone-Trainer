@@ -62,6 +62,7 @@ class NetworkTrainer:
         self._cwmi_loss_module: Optional[Any] = None
         self._cwmi_loss_config: Optional[Tuple[int, int, float]] = None
         self._cwmi_warned_small_latent = False
+        self.current_training_step = 0
 
     @staticmethod
     def get_optimizer_avg_lr(optimizer) -> Optional[float]:
@@ -468,7 +469,7 @@ class NetworkTrainer:
 
     def set_current_training_step(self, global_step: int) -> None:
         """Update architecture-specific step schedules before processing a batch."""
-        return None
+        self.current_training_step = int(global_step)
 
     def on_validation_step_end(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype):
         pass
@@ -657,6 +658,7 @@ class NetworkTrainer:
 
         loss_weights = batch["loss_weights"]  # 各sampleごとのweight
         loss = loss * loss_weights
+        loss = train_util.apply_aes_loss_weighting(loss, batch, args, self.current_training_step)
 
         loss = self.post_process_loss(loss, args, timesteps, noise_scheduler)
 

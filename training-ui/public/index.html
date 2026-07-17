@@ -625,6 +625,19 @@
                             </div>
                         </div>
 
+                        <h4 style="margin-top: 24px;">Aesthetic Loss Weighting</h4>
+                        <small>Score images while caching latents and use the 0-1 anime DBAesthetic percentile for sample loss weighting.</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-aes-loss-weighting"> AES Loss Weighting</label>
+                                <small>Cache an AES score in each latent NPZ and weight each sample loss by that score.</small>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="cfg-aes-loss-weighting-schedule"> Progressive AES Weighting</label>
+                                <small>Linearly lower each sample weight from 1.0 to its AES score over training.</small>
+                            </div>
+                        </div>
+
                         <h4 style="margin-top: 24px;">Masking</h4>
                         <small>Alpha and generated mask controls. These affect dataset subsets and latent caching.</small>
                         <div class="form-row" style="margin-top: 12px;">

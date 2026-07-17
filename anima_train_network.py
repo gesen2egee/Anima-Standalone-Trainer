@@ -157,7 +157,12 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return [tokenize_strategy.qwen3_tokenizer]
 
     def get_latents_caching_strategy(self, args):
-        return strategy_anima.AnimaLatentsCachingStrategy(args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check)
+        return strategy_anima.AnimaLatentsCachingStrategy(
+            args.cache_latents_to_disk,
+            args.vae_batch_size,
+            args.skip_cache_check,
+            args.aes_loss_weighting,
+        )
 
     def get_text_encoding_strategy(self, args):
         return strategy_anima.AnimaTextEncodingStrategy()

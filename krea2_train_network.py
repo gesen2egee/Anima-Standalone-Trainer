@@ -230,7 +230,12 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         return [tokenize_strategy.tokenizer]
 
     def get_latents_caching_strategy(self, args):
-        return Krea2LatentsCachingStrategy(args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check)
+        return Krea2LatentsCachingStrategy(
+            args.cache_latents_to_disk,
+            args.vae_batch_size,
+            args.skip_cache_check,
+            args.aes_loss_weighting,
+        )
 
     def get_text_encoding_strategy(self, args):
         return Krea2TextEncodingStrategy()

@@ -468,6 +468,21 @@ const UI_TRANSLATIONS = {
   "Gradient Accumulation": { "zh-TW": "Gradient Accumulation", "zh-CN": "Gradient Accumulation" },
   "Caption Extension": { "zh-TW": "Caption 副檔名", "zh-CN": "Caption 扩展名" },
   "Alpha Mask": { "zh-TW": "Alpha Mask", "zh-CN": "Alpha Mask" },
+  "Aesthetic Loss Weighting": { "zh-TW": "美感 Loss 加權", "zh-CN": "美感 Loss 加權" },
+  "Score images while caching latents and use the 0-1 anime DBAesthetic percentile for sample loss weighting.": {
+    "zh-TW": "快取 latent 時替圖片計算 0–1 anime DBAesthetic 百分位，並用於樣本 loss 加權。",
+    "zh-CN": "快取 latent 时替图片计算 0–1 anime DBAesthetic 百分位，并用于样本 loss 加权。",
+  },
+  "AES Loss Weighting": { "zh-TW": "AES Loss 加權", "zh-CN": "AES Loss 加權" },
+  "Cache an AES score in each latent NPZ and weight each sample loss by that score.": {
+    "zh-TW": "將 AES 分數存入每個 latent NPZ，並依分數加權各樣本 loss。",
+    "zh-CN": "将 AES 分数存入每个 latent NPZ，并依分数加权各样本 loss。",
+  },
+  "Progressive AES Weighting": { "zh-TW": "漸進式 AES 加權", "zh-CN": "渐进式 AES 加权" },
+  "Linearly lower each sample weight from 1.0 to its AES score over training.": {
+    "zh-TW": "隨訓練進度將各樣本權重由 1.0 線性下降至 AES 分數。",
+    "zh-CN": "随训练进度将各样本权重由 1.0 线性下降至 AES 分数。",
+  },
   "Automask": { "zh-TW": "Automask", "zh-CN": "Automask" },
   "Generate an alpha mask during latent caching with remove background. Source images are not changed.": {
     "zh-TW": "在 cache latents 時用 remove background 產生 alpha mask，不會修改原圖。",
@@ -2143,6 +2158,8 @@ function populateConfig(config) {
     t.persistent_data_loader_workers ?? true;
   $("cfg-cache-latents").checked = t.cache_latents ?? true;
   $("cfg-cache-latents-to-disk").checked = t.cache_latents_to_disk ?? true;
+  $("cfg-aes-loss-weighting").checked = (t.aes_loss_weighting ?? false) || (t.aes_loss_weighting_schedule ?? false);
+  $("cfg-aes-loss-weighting-schedule").checked = t.aes_loss_weighting_schedule ?? false;
   if ($("cfg-use-cdc-fm").checked) {
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
@@ -2656,8 +2673,10 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
-      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked,
+      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked || $("cfg-aes-loss-weighting").checked,
       cache_latents_to_disk: useCdcFm || $("cfg-cache-latents-to-disk").checked,
+      aes_loss_weighting: $("cfg-aes-loss-weighting").checked || $("cfg-aes-loss-weighting-schedule").checked,
+      aes_loss_weighting_schedule: $("cfg-aes-loss-weighting-schedule").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
@@ -5064,6 +5083,18 @@ $("new-job-name").addEventListener("input", () => {
   }
   if (newName !== $("new-job-name").dataset.autoValue) {
     delete $("new-job-name").dataset.autoValue;
+  }
+});
+
+$("cfg-aes-loss-weighting").addEventListener("change", () => {
+  if (!$("cfg-aes-loss-weighting").checked) {
+    $("cfg-aes-loss-weighting-schedule").checked = false;
+  }
+});
+
+$("cfg-aes-loss-weighting-schedule").addEventListener("change", () => {
+  if ($("cfg-aes-loss-weighting-schedule").checked) {
+    $("cfg-aes-loss-weighting").checked = true;
   }
 });
 $("new-job-model-architecture")?.addEventListener("change", updateNewJobModelArchitecture);
