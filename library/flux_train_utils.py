@@ -610,6 +610,7 @@ def get_noisy_model_input_and_timesteps(
     batch_timesteps: Optional[torch.Tensor] = None,
     folder_shift_progress: Optional[float] = None,
     automask_shift_values: Optional[Sequence[float]] = None,
+    tqa_shift_values: Optional[Sequence[float]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
@@ -650,8 +651,15 @@ def get_noisy_model_input_and_timesteps(
             sigmas, folder_shifts, folder_shift_progress=folder_shift_progress
         )
         timesteps = sigmas * num_timesteps
-    elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet"):
-        if args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
+    elif args.timestep_sampling in ("shift", "autoshift", "autoshift_wavelet", "autoshift_tqa"):
+        if args.timestep_sampling == "autoshift_tqa":
+            if tqa_shift_values is None:
+                raise ValueError("autoshift_tqa requires cached TQA shift values")
+            shift = torch.as_tensor(tqa_shift_values, device=device, dtype=dtype).reshape(-1)
+            if shift.numel() != bsz:
+                raise ValueError(f"cached TQA shifts must match batch size: {shift.numel()} != {bsz}")
+            shift = shift.clamp(0.5, 1.5)
+        elif args.timestep_sampling in ("autoshift", "autoshift_wavelet"):
             normalized_folder_shifts = (
                 [train_util.normalize_folder_shift(value) for value in folder_shifts]
                 if folder_shifts is not None
@@ -708,7 +716,7 @@ def get_noisy_model_input_and_timesteps(
                     dtype=dtype,
                 )
         # AUTOSHIFT keeps the per-sample sigmoid proposal and applies the selected
-        # Automask or folder-derived flow shift for each sample.
+        # Automask, TQA, or folder-derived flow shift for each sample.
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()

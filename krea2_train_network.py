@@ -235,6 +235,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             args.vae_batch_size,
             args.skip_cache_check,
             args.aes_loss_weighting,
+            getattr(args, "tqa_loss_weighting", False) or args.timestep_sampling == "autoshift_tqa",
         )
 
     def get_text_encoding_strategy(self, args):
@@ -437,6 +438,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             batch_timesteps=batch.get("timesteps"),
             folder_shift_progress=batch.get("folder_shift_progress"),
             automask_shift_values=batch.get("automask_shift_values"),
+            tqa_shift_values=batch.get("tqa_shift_values"),
         )
         t = sigmas.reshape(sigmas.shape[0], -1)[:, 0].to(dtype=torch.float32)
         self.current_self_flow_representation_loss = None
@@ -455,6 +457,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                 batch_timesteps=None,
                 folder_shift_progress=batch.get("folder_shift_progress"),
                 automask_shift_values=batch.get("automask_shift_values"),
+                tqa_shift_values=batch.get("tqa_shift_values"),
             )
             patch = unet.config.patch
             token_height = latents.shape[-2] // patch

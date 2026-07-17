@@ -472,6 +472,11 @@ class ImageInfo:
 
         self.alpha_mask: Optional[torch.Tensor] = None  # alpha mask can be flipped in runtime
         self.aes_score: Optional[float] = None
+        self.tqa_quality_score: Optional[float] = None
+        self.tqa_aesthetic_score: Optional[float] = None
+        self.tqa_quality_percentile: Optional[float] = None
+        self.tqa_aesthetic_percentile: Optional[float] = None
+        self.tqa_shift: Optional[float] = None
         self.resize_interpolation: Optional[str] = None
 
 
@@ -2154,6 +2159,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
         loss_weights = []
         aes_scores = []
+        tqa_quality_percentiles = []
+        tqa_aesthetic_percentiles = []
+        tqa_shift_values = []
         captions = []
         input_ids_list = []
         latents_list = []
@@ -2195,6 +2203,15 @@ class BaseDataset(torch.utils.data.Dataset):
                 if image_info.aes_score is None:
                     raise ValueError(f"AES score is missing from latent cache: {image_info.absolute_path}")
                 aes_scores.append(image_info.aes_score / self.aes_score_mean)
+
+            if self.latents_caching_strategy is not None and self.latents_caching_strategy.cache_tqa_scores:
+                if image_info.tqa_quality_percentile is None or image_info.tqa_aesthetic_percentile is None:
+                    raise ValueError(f"TQA percentiles are missing from latent cache: {image_info.absolute_path}")
+                tqa_quality_percentiles.append(image_info.tqa_quality_percentile)
+                tqa_aesthetic_percentiles.append(image_info.tqa_aesthetic_percentile)
+                if image_info.tqa_shift is None:
+                    raise ValueError(f"TQA shift is missing from latent cache: {image_info.absolute_path}")
+                tqa_shift_values.append(image_info.tqa_shift)
 
             flipped = subset.flip_aug and random.random() < 0.5  # not flipped or flipped with 50% chance
 
@@ -2411,6 +2428,10 @@ class BaseDataset(torch.utils.data.Dataset):
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         if aes_scores:
             example["aes_scores"] = torch.FloatTensor(aes_scores)
+        if tqa_quality_percentiles:
+            example["tqa_quality_percentiles"] = torch.FloatTensor(tqa_quality_percentiles)
+            example["tqa_aesthetic_percentiles"] = torch.FloatTensor(tqa_aesthetic_percentiles)
+            example["tqa_shift_values"] = torch.FloatTensor(tqa_shift_values)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
 
@@ -3444,6 +3465,7 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
                 dataset.new_cache_latents(model, accelerator)
             accelerator.wait_for_everyone()
             self._normalize_aes_scores()
+            self._normalize_tqa_scores()
         finally:
             strategy = LatentsCachingStrategy.get_strategy()
             if strategy is not None:
@@ -3482,6 +3504,95 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
             aes_score_mean,
             min(raw_scores) / aes_score_mean,
             max(raw_scores) / aes_score_mean,
+        )
+
+    @staticmethod
+    def _weighted_percentile_ranks(values: list[float], weights: list[int]) -> list[float]:
+        """Return 0-1 average ranks while treating repeats as duplicate samples."""
+        if len(values) != len(weights):
+            raise ValueError("TQA percentile values and weights must have the same length")
+        if not values:
+            return []
+        normalized_weights = [max(int(weight), 0) for weight in weights]
+        total_weight = sum(normalized_weights)
+        if total_weight <= 0:
+            raise ValueError("Cannot calculate TQA percentiles for an empty training dataset")
+
+        order = sorted(range(len(values)), key=lambda index: values[index])
+        result = [0.0] * len(values)
+        cumulative = 0
+        start = 0
+        while start < len(order):
+            end = start + 1
+            score = values[order[start]]
+            while end < len(order) and values[order[end]] == score:
+                end += 1
+            group_weight = sum(normalized_weights[order[position]] for position in range(start, end))
+            if total_weight == 1:
+                percentile = 0.5
+            else:
+                percentile = (cumulative + (group_weight - 1) / 2.0) / (total_weight - 1)
+            percentile = max(0.0, min(1.0, percentile))
+            for position in range(start, end):
+                result[order[position]] = percentile
+            cumulative += group_weight
+            start = end
+        return result
+
+    def _normalize_tqa_scores(self):
+        strategy = LatentsCachingStrategy.get_strategy()
+        if strategy is None or not strategy.cache_tqa_scores:
+            return
+
+        infos = []
+        weights = []
+        quality_scores = []
+        aesthetic_scores = []
+        for dataset in self.datasets:
+            for info in dataset.image_data.values():
+                if info.tqa_quality_score is None or info.tqa_aesthetic_score is None:
+                    if info.latents_npz is not None:
+                        scores = strategy.load_tqa_scores_from_disk(info.latents_npz)
+                        if scores is not None:
+                            info.tqa_quality_score, info.tqa_aesthetic_score = scores
+                if info.tqa_quality_score is None or info.tqa_aesthetic_score is None:
+                    raise ValueError(f"TQA scores are missing while normalizing percentiles: {info.absolute_path}")
+                infos.append(info)
+                weights.append(max(int(info.num_repeats), 0))
+                quality_scores.append(float(info.tqa_quality_score))
+                aesthetic_scores.append(float(info.tqa_aesthetic_score))
+
+        quality_percentiles = self._weighted_percentile_ranks(quality_scores, weights)
+        aesthetic_percentiles = self._weighted_percentile_ranks(aesthetic_scores, weights)
+        differences = [
+            aesthetic - quality
+            for quality, aesthetic in zip(quality_percentiles, aesthetic_percentiles)
+        ]
+        difference_percentiles = self._weighted_percentile_ranks(differences, weights)
+        difference_min = min(difference_percentiles)
+        difference_max = max(difference_percentiles)
+        if difference_max > difference_min:
+            shift_percentiles = [
+                (percentile - difference_min) / (difference_max - difference_min)
+                for percentile in difference_percentiles
+            ]
+        else:
+            shift_percentiles = [0.5] * len(difference_percentiles)
+        for info, quality, aesthetic, difference_percentile in zip(
+            infos,
+            quality_percentiles,
+            aesthetic_percentiles,
+            shift_percentiles,
+        ):
+            info.tqa_quality_percentile = quality
+            info.tqa_aesthetic_percentile = aesthetic
+            info.tqa_shift = 0.5 + difference_percentile
+
+        logger.info(
+            "normalized TQA scores to weighted percentiles: images=%d, shift_range=%.4f..%.4f",
+            len(infos),
+            min(info.tqa_shift for info in infos),
+            max(info.tqa_shift for info in infos),
         )
 
     def cache_text_encoder_outputs(
@@ -5438,9 +5549,17 @@ def verify_training_args(args: argparse.Namespace):
 
     if getattr(args, "aes_loss_weighting_schedule", False):
         args.aes_loss_weighting = True
+    if getattr(args, "tqa_loss_weighting_schedule", False):
+        args.tqa_loss_weighting = True
     if getattr(args, "aes_loss_weighting", False) and not args.cache_latents:
         args.cache_latents = True
         logger.warning("AES loss weighting is enabled, so cache_latents is also enabled")
+    if (
+        getattr(args, "tqa_loss_weighting", False)
+        or getattr(args, "timestep_sampling", None) == "autoshift_tqa"
+    ) and not args.cache_latents:
+        args.cache_latents = True
+        logger.warning("TQA is enabled, so cache_latents is also enabled")
 
     if args.v2 and args.clip_skip is not None:
         logger.warning("v2 with clip_skip will be unexpected / v2でclip_skipを使用することは想定されていません")
@@ -5685,6 +5804,16 @@ def add_dataset_arguments(
         "--aes_loss_weighting_schedule",
         action="store_true",
         help="linearly transition AES loss weights from 1.0 to each dataset-normalized sample weight over training",
+    )
+    parser.add_argument(
+        "--tqa_loss_weighting",
+        action="store_true",
+        help="cache SigLIP quality/aesthetic scores and interpolate percentile loss weights by timestep",
+    )
+    parser.add_argument(
+        "--tqa_loss_weighting_schedule",
+        action="store_true",
+        help="linearly transition TQA loss weights from 1.0 over training",
     )
     parser.add_argument(
         "--skip_cache_check",
@@ -7589,20 +7718,52 @@ def apply_aes_loss_weighting(
     batch: dict,
     args: argparse.Namespace,
     current_step: int,
+    sigmas: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Apply cached anime DBAesthetic percentiles as per-sample loss weights."""
-    if not getattr(args, "aes_loss_weighting", False):
+    """Apply AES/TQA sample weights, combining both by geometric mean."""
+    use_aes = getattr(args, "aes_loss_weighting", False)
+    use_tqa = getattr(args, "tqa_loss_weighting", False)
+    if not use_aes and not use_tqa:
         return loss
 
-    aes_scores = batch.get("aes_scores")
-    if aes_scores is None:
-        raise ValueError("AES loss weighting is enabled, but this batch has no cached AES scores")
-
-    weights = aes_scores.to(device=loss.device, dtype=loss.dtype).clamp_min_(0.0)
-    if getattr(args, "aes_loss_weighting_schedule", False):
+    progress = 1.0
+    if (
+        (use_aes and getattr(args, "aes_loss_weighting_schedule", False))
+        or (use_tqa and getattr(args, "tqa_loss_weighting_schedule", False))
+    ):
         denominator = max(int(args.max_train_steps) - 1, 1)
         progress = max(0.0, min(1.0, float(current_step) / float(denominator)))
-        weights = torch.lerp(torch.ones_like(weights), weights, progress)
+
+    aes_weights = None
+    if use_aes:
+        aes_scores = batch.get("aes_scores")
+        if aes_scores is None:
+            raise ValueError("AES loss weighting is enabled, but this batch has no cached AES scores")
+        aes_weights = aes_scores.to(device=loss.device, dtype=loss.dtype).clamp_min_(0.0)
+        if getattr(args, "aes_loss_weighting_schedule", False):
+            aes_weights = torch.lerp(torch.ones_like(aes_weights), aes_weights, progress)
+
+    tqa_weights = None
+    if use_tqa:
+        quality = batch.get("tqa_quality_percentiles")
+        aesthetic = batch.get("tqa_aesthetic_percentiles")
+        if quality is None or aesthetic is None:
+            raise ValueError("TQA loss weighting is enabled, but this batch has no cached TQA percentiles")
+        if sigmas is None:
+            raise ValueError("TQA loss weighting requires the sampled timestep sigmas")
+        quality = quality.to(device=loss.device, dtype=loss.dtype)
+        aesthetic = aesthetic.to(device=loss.device, dtype=loss.dtype)
+        timestep = sigmas.to(device=loss.device, dtype=loss.dtype).reshape(loss.shape[0], -1).mean(dim=1)
+        timestep = timestep.clamp(0.0, 1.0)
+        # Each percentile distribution has mean 0.5, so x2 preserves mean loss weight 1.0.
+        tqa_weights = 2.0 * torch.lerp(quality, aesthetic, timestep)
+        if getattr(args, "tqa_loss_weighting_schedule", False):
+            tqa_weights = torch.lerp(torch.ones_like(tqa_weights), tqa_weights, progress)
+
+    if aes_weights is not None and tqa_weights is not None:
+        weights = torch.sqrt((aes_weights * tqa_weights).clamp_min_(0.0))
+    else:
+        weights = aes_weights if aes_weights is not None else tqa_weights
     return loss * weights
 
 

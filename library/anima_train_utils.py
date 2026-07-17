@@ -101,7 +101,7 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         "--timestep_sampling",
         type=str,
         default="autoshift",
-        choices=["sigma", "uniform", "sigmoid", "shift", "autoshift", "autoshift_wavelet", "flux_shift", "plora", "spectrally_guided"],
+        choices=["sigma", "uniform", "sigmoid", "shift", "autoshift", "autoshift_wavelet", "autoshift_tqa", "flux_shift", "plora", "spectrally_guided"],
         help="Timestep sampling method (default: autoshift)",
     )
     parser.add_argument(

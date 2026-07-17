@@ -162,6 +162,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             args.vae_batch_size,
             args.skip_cache_check,
             args.aes_loss_weighting,
+            getattr(args, "tqa_loss_weighting", False) or args.timestep_sampling == "autoshift_tqa",
         )
 
     def get_text_encoding_strategy(self, args):
@@ -284,6 +285,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             batch_timesteps=batch.get("timesteps", None),
             folder_shift_progress=batch.get("folder_shift_progress", None),
             automask_shift_values=batch.get("automask_shift_values", None),
+            tqa_shift_values=batch.get("tqa_shift_values", None),
         )
         timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
@@ -303,6 +305,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                 batch_timesteps=None,
                 folder_shift_progress=batch.get("folder_shift_progress", None),
                 automask_shift_values=batch.get("automask_shift_values", None),
+                tqa_shift_values=batch.get("tqa_shift_values", None),
             )
             patch = anima.patch_spatial
             token_height = latents.shape[-2] // patch

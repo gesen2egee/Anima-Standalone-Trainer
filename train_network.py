@@ -658,7 +658,13 @@ class NetworkTrainer:
 
         loss_weights = batch["loss_weights"]  # 各sampleごとのweight
         loss = loss * loss_weights
-        loss = train_util.apply_aes_loss_weighting(loss, batch, args, self.current_training_step)
+        loss = train_util.apply_aes_loss_weighting(
+            loss,
+            batch,
+            args,
+            self.current_training_step,
+            sigmas=getattr(self, "current_sigmas", None),
+        )
 
         loss = self.post_process_loss(loss, args, timesteps, noise_scheduler)
 

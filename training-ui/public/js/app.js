@@ -483,6 +483,16 @@ const UI_TRANSLATIONS = {
     "zh-TW": "隨訓練進度將各樣本由 1.0 線性過渡至資料集正規化後的 AES 權重。",
     "zh-CN": "随训练进度将各样本由 1.0 线性过渡至数据集正规化后的 AES 权重。",
   },
+  "TQA Loss Weighting": { "zh-TW": "TQA Loss 加權", "zh-CN": "TQA Loss 加權" },
+  "Interpolate normalized quality and aesthetic percentiles using each sampled timestep.": {
+    "zh-TW": "依每次取樣時間步，在正規化品質百分位與美學百分位之間插值。",
+    "zh-CN": "依每次采样时间步，在正规化品质百分位与美学百分位之间插值。",
+  },
+  "Progressive TQA Weighting": { "zh-TW": "漸進式 TQA 加權", "zh-CN": "渐进式 TQA 加权" },
+  "Linearly transition each sample from 1.0 to its timestep-aware TQA weight over training.": {
+    "zh-TW": "隨訓練進度將各樣本由 1.0 線性過渡至時間步感知的 TQA 權重。",
+    "zh-CN": "随训练进度将各样本由 1.0 线性过渡至时间步感知的 TQA 权重。",
+  },
   "Automask": { "zh-TW": "Automask", "zh-CN": "Automask" },
   "Generate an alpha mask during latent caching with remove background. Source images are not changed.": {
     "zh-TW": "在 cache latents 時用 remove background 產生 alpha mask，不會修改原圖。",
@@ -2160,6 +2170,8 @@ function populateConfig(config) {
   $("cfg-cache-latents-to-disk").checked = t.cache_latents_to_disk ?? true;
   $("cfg-aes-loss-weighting").checked = (t.aes_loss_weighting ?? false) || (t.aes_loss_weighting_schedule ?? false);
   $("cfg-aes-loss-weighting-schedule").checked = t.aes_loss_weighting_schedule ?? false;
+  $("cfg-tqa-loss-weighting").checked = (t.tqa_loss_weighting ?? false) || (t.tqa_loss_weighting_schedule ?? false);
+  $("cfg-tqa-loss-weighting-schedule").checked = t.tqa_loss_weighting_schedule ?? false;
   if ($("cfg-use-cdc-fm").checked) {
     $("cfg-cache-latents").checked = true;
     $("cfg-cache-latents-to-disk").checked = true;
@@ -2458,8 +2470,9 @@ function updateActivationOffloadUI() {
 }
 function updateAutomaskUI() {
   const autoshift = ["autoshift", "autoshift_wavelet"].includes($("cfg-timestep-method").value);
+  const flowShiftAuto = autoshift || $("cfg-timestep-method").value === "autoshift_tqa";
   $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked && !autoshift);
-  $("cfg-flow-shift").disabled = autoshift;
+  $("cfg-flow-shift").disabled = flowShiftAuto;
 }
 // Helpers for safe parsing
 function safeInt(val, fallback = 0) {
@@ -2673,10 +2686,12 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
-      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked || $("cfg-aes-loss-weighting").checked,
+      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked || $("cfg-aes-loss-weighting").checked || $("cfg-tqa-loss-weighting").checked || $("cfg-timestep-method").value === "autoshift_tqa",
       cache_latents_to_disk: useCdcFm || $("cfg-cache-latents-to-disk").checked,
       aes_loss_weighting: $("cfg-aes-loss-weighting").checked || $("cfg-aes-loss-weighting-schedule").checked,
       aes_loss_weighting_schedule: $("cfg-aes-loss-weighting-schedule").checked,
+      tqa_loss_weighting: $("cfg-tqa-loss-weighting").checked || $("cfg-tqa-loss-weighting-schedule").checked,
+      tqa_loss_weighting_schedule: $("cfg-tqa-loss-weighting-schedule").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
@@ -5095,6 +5110,17 @@ $("cfg-aes-loss-weighting").addEventListener("change", () => {
 $("cfg-aes-loss-weighting-schedule").addEventListener("change", () => {
   if ($("cfg-aes-loss-weighting-schedule").checked) {
     $("cfg-aes-loss-weighting").checked = true;
+  }
+});
+$("cfg-tqa-loss-weighting").addEventListener("change", () => {
+  if (!$("cfg-tqa-loss-weighting").checked) {
+    $("cfg-tqa-loss-weighting-schedule").checked = false;
+  }
+});
+
+$("cfg-tqa-loss-weighting-schedule").addEventListener("change", () => {
+  if ($("cfg-tqa-loss-weighting-schedule").checked) {
+    $("cfg-tqa-loss-weighting").checked = true;
   }
 });
 $("new-job-model-architecture")?.addEventListener("change", updateNewJobModelArchitecture);

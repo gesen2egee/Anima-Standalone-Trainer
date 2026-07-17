@@ -81,7 +81,11 @@ def train(args):
     # prepare caching strategy: must be set before preparing dataset
     if args.cache_latents:
         latents_caching_strategy = strategy_anima.AnimaLatentsCachingStrategy(
-            args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check, args.aes_loss_weighting
+            args.cache_latents_to_disk,
+            args.vae_batch_size,
+            args.skip_cache_check,
+            args.aes_loss_weighting,
+            getattr(args, "tqa_loss_weighting", False) or args.timestep_sampling == "autoshift_tqa",
         )
         strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
@@ -537,6 +541,7 @@ def train(args):
                     batch_timesteps=batch.get("timesteps", None),
                     folder_shift_progress=batch.get("folder_shift_progress", None),
                     automask_shift_values=batch.get("automask_shift_values", None),
+                    tqa_shift_values=batch.get("tqa_shift_values", None),
                 )
                 noisy_model_input_4d = noisy_model_input
                 timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
@@ -685,7 +690,7 @@ def train(args):
 
                 loss_weights = batch["loss_weights"]
                 loss = loss * loss_weights
-                loss = train_util.apply_aes_loss_weighting(loss, batch, args, global_step)
+                loss = train_util.apply_aes_loss_weighting(loss, batch, args, global_step, sigmas=sigmas)
                 loss = loss.mean()
 
                 accelerator.backward(loss)

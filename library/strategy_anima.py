@@ -262,8 +262,15 @@ class AnimaLatentsCachingStrategy(LatentsCachingStrategy):
         batch_size: int,
         skip_disk_cache_validity_check: bool,
         cache_aes_score: bool = False,
+        cache_tqa_scores: bool = False,
     ) -> None:
-        super().__init__(cache_to_disk, batch_size, skip_disk_cache_validity_check, cache_aes_score)
+        super().__init__(
+            cache_to_disk,
+            batch_size,
+            skip_disk_cache_validity_check,
+            cache_aes_score,
+            cache_tqa_scores,
+        )
 
     @property
     def cache_suffix(self) -> str:
