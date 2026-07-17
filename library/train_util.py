@@ -1085,6 +1085,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         # caching
         self.caching_mode = None  # None, 'latents', 'text'
+        self.aes_score_mean = 1.0
 
         self.tokenize_strategy = None
         self.text_encoder_output_caching_strategy = None
@@ -1806,7 +1807,6 @@ class BaseDataset(torch.utils.data.Dataset):
 
         finally:
             executor.shutdown()
-            caching_strategy.release_after_latents_caching(accelerator.device)
 
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
         # マルチGPUには対応していないので、そちらはtools/cache_latents.pyを使うこと
@@ -2194,7 +2194,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     image_info.aes_score = self.latents_caching_strategy.load_aes_score_from_disk(image_info.latents_npz)
                 if image_info.aes_score is None:
                     raise ValueError(f"AES score is missing from latent cache: {image_info.absolute_path}")
-                aes_scores.append(image_info.aes_score)
+                aes_scores.append(image_info.aes_score / self.aes_score_mean)
 
             flipped = subset.flip_aug and random.random() < 0.5  # not flipped or flipped with 50% chance
 
@@ -3443,8 +3443,46 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
                 logger.info(f"[Dataset {i}]")
                 dataset.new_cache_latents(model, accelerator)
             accelerator.wait_for_everyone()
+            self._normalize_aes_scores()
         finally:
+            strategy = LatentsCachingStrategy.get_strategy()
+            if strategy is not None:
+                strategy.release_after_latents_caching(accelerator.device)
             release_automask_remover()
+
+    def _normalize_aes_scores(self):
+        strategy = LatentsCachingStrategy.get_strategy()
+        if strategy is None or not strategy.cache_aes_score:
+            return
+
+        weighted_score_sum = 0.0
+        sample_count = 0
+        raw_scores = []
+        for dataset in self.datasets:
+            for info in dataset.image_data.values():
+                if info.aes_score is None and info.latents_npz is not None:
+                    info.aes_score = strategy.load_aes_score_from_disk(info.latents_npz)
+                if info.aes_score is None:
+                    raise ValueError(f"AES score is missing while normalizing dataset weights: {info.absolute_path}")
+                repeats = max(int(info.num_repeats), 0)
+                weighted_score_sum += float(info.aes_score) * repeats
+                sample_count += repeats
+                raw_scores.append(float(info.aes_score))
+
+        if sample_count <= 0:
+            raise ValueError("Cannot normalize AES weights for an empty training dataset")
+        aes_score_mean = weighted_score_sum / sample_count
+        if aes_score_mean <= 0.0:
+            raise ValueError("Cannot normalize AES weights because the dataset mean AES score is zero")
+
+        for dataset in self.datasets:
+            dataset.aes_score_mean = aes_score_mean
+        logger.info(
+            "normalized AES sample weights to dataset mean 1.0: raw_mean=%.6f, normalized_range=%.4f..%.4f",
+            aes_score_mean,
+            min(raw_scores) / aes_score_mean,
+            max(raw_scores) / aes_score_mean,
+        )
 
     def cache_text_encoder_outputs(
         self, tokenizers, text_encoders, device, weight_dtype, cache_to_disk=False, is_main_process=True
@@ -5646,7 +5684,7 @@ def add_dataset_arguments(
     parser.add_argument(
         "--aes_loss_weighting_schedule",
         action="store_true",
-        help="linearly lower AES loss weights from 1.0 to each sample's score over training",
+        help="linearly transition AES loss weights from 1.0 to each dataset-normalized sample weight over training",
     )
     parser.add_argument(
         "--skip_cache_check",
@@ -7560,7 +7598,7 @@ def apply_aes_loss_weighting(
     if aes_scores is None:
         raise ValueError("AES loss weighting is enabled, but this batch has no cached AES scores")
 
-    weights = aes_scores.to(device=loss.device, dtype=loss.dtype).clamp_(0.0, 1.0)
+    weights = aes_scores.to(device=loss.device, dtype=loss.dtype).clamp_min_(0.0)
     if getattr(args, "aes_loss_weighting_schedule", False):
         denominator = max(int(args.max_train_steps) - 1, 1)
         progress = max(0.0, min(1.0, float(current_step) / float(denominator)))

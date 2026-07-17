@@ -469,19 +469,19 @@ const UI_TRANSLATIONS = {
   "Caption Extension": { "zh-TW": "Caption 副檔名", "zh-CN": "Caption 扩展名" },
   "Alpha Mask": { "zh-TW": "Alpha Mask", "zh-CN": "Alpha Mask" },
   "Aesthetic Loss Weighting": { "zh-TW": "美感 Loss 加權", "zh-CN": "美感 Loss 加權" },
-  "Score images while caching latents and use the 0-1 anime DBAesthetic percentile for sample loss weighting.": {
-    "zh-TW": "快取 latent 時替圖片計算 0–1 anime DBAesthetic 百分位，並用於樣本 loss 加權。",
-    "zh-CN": "快取 latent 时替图片计算 0–1 anime DBAesthetic 百分位，并用于样本 loss 加权。",
+  "Score images while caching latents, then normalize sample weights so the full dataset mean is 1.0.": {
+    "zh-TW": "快取 latent 時替圖片計算 anime DBAesthetic 分數，再將完整資料集的平均樣本權重正規化為 1.0。",
+    "zh-CN": "快取 latent 时替图片计算 anime DBAesthetic 分数，再将完整数据集的平均样本权重正规化为 1.0。",
   },
   "AES Loss Weighting": { "zh-TW": "AES Loss 加權", "zh-CN": "AES Loss 加權" },
-  "Cache an AES score in each latent NPZ and weight each sample loss by that score.": {
-    "zh-TW": "將 AES 分數存入每個 latent NPZ，並依分數加權各樣本 loss。",
-    "zh-CN": "将 AES 分数存入每个 latent NPZ，并依分数加权各样本 loss。",
+  "Cache an AES score in each latent NPZ. Above-average samples can receive weights greater than 1.0.": {
+    "zh-TW": "將 AES 分數存入每個 latent NPZ；高於平均的樣本可得到超過 1.0 的權重。",
+    "zh-CN": "将 AES 分数存入每个 latent NPZ；高于平均的样本可得到超过 1.0 的权重。",
   },
   "Progressive AES Weighting": { "zh-TW": "漸進式 AES 加權", "zh-CN": "渐进式 AES 加权" },
-  "Linearly lower each sample weight from 1.0 to its AES score over training.": {
-    "zh-TW": "隨訓練進度將各樣本權重由 1.0 線性下降至 AES 分數。",
-    "zh-CN": "随训练进度将各样本权重由 1.0 线性下降至 AES 分数。",
+  "Linearly transition each sample from 1.0 to its dataset-normalized AES weight over training.": {
+    "zh-TW": "隨訓練進度將各樣本由 1.0 線性過渡至資料集正規化後的 AES 權重。",
+    "zh-CN": "随训练进度将各样本由 1.0 线性过渡至数据集正规化后的 AES 权重。",
   },
   "Automask": { "zh-TW": "Automask", "zh-CN": "Automask" },
   "Generate an alpha mask during latent caching with remove background. Source images are not changed.": {

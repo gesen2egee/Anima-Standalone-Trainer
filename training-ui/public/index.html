@@ -626,15 +626,15 @@
                         </div>
 
                         <h4 style="margin-top: 24px;">Aesthetic Loss Weighting</h4>
-                        <small>Score images while caching latents and use the 0-1 anime DBAesthetic percentile for sample loss weighting.</small>
+                        <small>Score images while caching latents, then normalize sample weights so the full dataset mean is 1.0.</small>
                         <div class="form-row" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-aes-loss-weighting"> AES Loss Weighting</label>
-                                <small>Cache an AES score in each latent NPZ and weight each sample loss by that score.</small>
+                                <small>Cache an AES score in each latent NPZ. Above-average samples can receive weights greater than 1.0.</small>
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-aes-loss-weighting-schedule"> Progressive AES Weighting</label>
-                                <small>Linearly lower each sample weight from 1.0 to its AES score over training.</small>
+                                <small>Linearly transition each sample from 1.0 to its dataset-normalized AES weight over training.</small>
                             </div>
                         </div>
 
