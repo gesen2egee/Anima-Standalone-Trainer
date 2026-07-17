@@ -2088,6 +2088,7 @@ function populateConfig(config) {
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
   $("cfg-use-cdc-fm").checked = t.use_cdc_fm ?? false;
   $("cfg-cdc-switch-ratio").value = t.cdc_switch_ratio ?? 0;
+  $("cfg-cdc-switch-direction").value = t.cdc_switch_reverse ? "cdc_to_knn" : "knn_to_cdc";
   $("cfg-cdc-combine-knn").checked = t.cdc_combine_knn ?? false;
   $("cfg-cdc-alternate-knn").checked = t.cdc_alternate_knn ?? false;
   if ($("cfg-cdc-combine-knn").checked) {
@@ -2613,6 +2614,7 @@ function gatherConfig() {
       cdc_knn_metric: $("cfg-cdc-knn-metric").value,
       cdc_knn_regularization: safeFloat($("cfg-cdc-knn-regularization").value, 0.1),
       cdc_switch_ratio: cdcSwitchRatio,
+      cdc_switch_reverse: $("cfg-cdc-switch-direction").value === "cdc_to_knn",
       cdc_k_neighbors: safeInt($("cfg-cdc-k-neighbors").value, 64),
       cdc_k_bandwidth: safeInt($("cfg-cdc-k-bandwidth").value, 8),
       cdc_dim: safeInt($("cfg-cdc-dim").value, 8),

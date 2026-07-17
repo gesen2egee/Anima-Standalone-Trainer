@@ -49,6 +49,11 @@ def add_flow_network_training_arguments(parser: argparse.ArgumentParser) -> None
         default=0.0,
         help="fraction of training steps using KNN noise before switching to CDC-FM (0 disables scheduling)",
     )
+    parser.add_argument(
+        "--cdc_switch_reverse",
+        action="store_true",
+        help="reverse the ratio schedule to use CDC-FM first and KNN noise afterwards",
+    )
     parser.add_argument("--use_self_flow", action="store_true", help="enable Self-Flow dual-timestep self-distillation")
     parser.add_argument("--self_flow_mask_ratio", type=float, default=0.25)
     parser.add_argument("--self_flow_representation_weight", type=float, default=0.8)
@@ -176,6 +181,8 @@ class FlowNetworkTrainerMixin:
         if switch_ratio <= 0.0:
             return True
         switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
+        if getattr(args, "cdc_switch_reverse", False):
+            return self.global_step < switch_step
         return self.global_step >= switch_step
 
     def sample_flow_training_noise(self, args, latents: torch.Tensor, batch=None, is_train: bool = True) -> torch.Tensor:
@@ -184,6 +191,7 @@ class FlowNetworkTrainerMixin:
 
         cdc_active = self.is_cdc_stage_active(args, is_train)
         switch_ratio = float(getattr(args, "cdc_switch_ratio", 0.0))
+        switch_reverse = bool(getattr(args, "cdc_switch_reverse", False))
         combine_knn = bool(getattr(args, "cdc_combine_knn", False))
         alternate_knn = bool(getattr(args, "cdc_alternate_knn", False))
         if is_train and cdc_active and combine_knn:
@@ -199,11 +207,20 @@ class FlowNetworkTrainerMixin:
                 logger.info("CDC-FM: alternating KNN-only and CDC-only optimizer steps")
             self._cdc_last_stage = "alternate"
         elif is_train and stage != self._cdc_last_stage:
-            if stage == "knn":
+            if switch_ratio > 0.0 and switch_reverse:
+                switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
+                if stage == "cdc":
+                    logger.info("CDC-FM reverse schedule: using CDC geometry until step %d", switch_step)
+                elif stage == "knn":
+                    logger.info("CDC-FM reverse schedule: switched to KNN noise at step %d", self.global_step)
+            elif stage == "knn":
                 switch_step = math.ceil(int(args.max_train_steps) * switch_ratio)
                 logger.info("CDC-FM schedule: using KNN noise until step %d", switch_step)
             elif stage == "cdc":
-                logger.info("CDC-FM schedule: switched to CDC geometry at step %d", self.global_step)
+                if switch_ratio > 0.0:
+                    logger.info("CDC-FM schedule: switched to CDC geometry at step %d", self.global_step)
+                else:
+                    logger.info("CDC-FM: using CDC geometry")
             elif stage == "combined":
                 logger.info("CDC-FM: combining KNN Immiscible noise with CDC geometry")
             self._cdc_last_stage = stage
@@ -435,6 +452,7 @@ class FlowNetworkTrainerMixin:
         metadata["ss_cdc_knn_metric"] = getattr(args, "cdc_knn_metric", "l2")
         metadata["ss_cdc_knn_regularization"] = getattr(args, "cdc_knn_regularization", 0.1)
         metadata["ss_cdc_switch_ratio"] = getattr(args, "cdc_switch_ratio", 0.0)
+        metadata["ss_cdc_switch_reverse"] = getattr(args, "cdc_switch_reverse", False)
         metadata["ss_use_self_flow"] = getattr(args, "use_self_flow", False)
         metadata["ss_self_flow_mask_ratio"] = getattr(args, "self_flow_mask_ratio", 0.0)
         metadata["ss_self_flow_representation_weight"] = getattr(args, "self_flow_representation_weight", 0.0)
