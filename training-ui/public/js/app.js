@@ -484,9 +484,9 @@ const UI_TRANSLATIONS = {
     "zh-CN": "随训练进度将各样本由 1.0 线性过渡至数据集正规化后的 AES 权重。",
   },
   "TQA Loss Weighting": { "zh-TW": "TQA Loss 加權", "zh-CN": "TQA Loss 加權" },
-  "Interpolate SigLIP quality and DBAES aesthetic percentiles using each sampled timestep.": {
-    "zh-TW": "依每次取樣時間步，在 SigLIP 品質百分位與 DBAES 美學百分位之間插值。",
-    "zh-CN": "依每次采样时间步，在 SigLIP 品质百分位与 DBAES 美学百分位之间插值。",
+  "Interpolate KonIQ NR-IQA quality and DBAES aesthetic percentiles using each sampled timestep.": {
+    "zh-TW": "依每次取樣時間步，在 KonIQ NR-IQA 品質百分位與 DBAES 美學百分位之間插值。",
+    "zh-CN": "依每次采样时间步，在 KonIQ NR-IQA 品质百分位与 DBAES 美学百分位之间插值。",
   },
   "Progressive TQA Weighting": { "zh-TW": "漸進式 TQA 加權", "zh-CN": "渐进式 TQA 加权" },
   "Linearly transition each sample from 1.0 to its timestep-aware TQA weight over training.": {

@@ -6,6 +6,7 @@ import torch
 
 from library import train_util
 from library import anime_aesthetic, tqa_metrics
+from library.tqa_metrics import TQA_QUALITY_CACHE_MODEL
 from library.flux_train_utils import get_noisy_model_input_and_timesteps
 from library.strategy_base import LatentsCachingStrategy
 
@@ -27,7 +28,7 @@ def test_weighted_percentiles_respect_repeats_and_ties():
 def test_dataset_tqa_percentiles_map_difference_extremes_to_exact_shift_range(monkeypatch):
     infos = [
         SimpleNamespace(
-            tqa_quality_score=quality,
+            tqa_koniq_quality_score=quality,
             tqa_dbaes_score=aesthetic,
             tqa_quality_percentile=None,
             tqa_dbaes_percentile=None,
@@ -166,8 +167,20 @@ def test_tqa_missing_npz_fields_forces_recache_even_when_checks_are_skipped(tmp_
     np.savez(
         cache,
         latents=np.zeros((1, 4, 4), dtype=np.float32),
-        tqa_quality_score=np.array(4.0, dtype=np.float32),
+        tqa_koniq_quality_score=np.array(70.0, dtype=np.float32),
         tqa_dbaes_score=np.array(0.75, dtype=np.float32),
+        tqa_quality_model=np.array("different-model"),
+    )
+    assert not strategy._default_is_disk_cached_latents_expected(
+        8, (32, 32), str(cache), False, False
+    )
+
+    np.savez(
+        cache,
+        latents=np.zeros((1, 4, 4), dtype=np.float32),
+        tqa_koniq_quality_score=np.array(70.0, dtype=np.float32),
+        tqa_dbaes_score=np.array(0.75, dtype=np.float32),
+        tqa_quality_model=np.array(TQA_QUALITY_CACHE_MODEL),
     )
     assert strategy._default_is_disk_cached_latents_expected(
         8, (32, 32), str(cache), False, False
@@ -219,4 +232,33 @@ def test_tqa_and_aes_share_one_dbaes_inference_per_image(monkeypatch):
     assert calls == {"dbaes": 2, "quality": 2}
     assert [info.aes_score for info in infos] == [0.25, 0.5]
     assert [info.tqa_dbaes_score for info in infos] == [0.25, 0.5]
-    assert [info.tqa_quality_score for info in infos] == [5.0, 6.0]
+    assert [info.tqa_koniq_quality_score for info in infos] == [5.0, 6.0]
+
+
+def test_tqa_quality_cache_identifies_koniq_and_retires_old_siglip_model():
+    assert "SigLIP2-NR-IQA-KonIQ" in TQA_QUALITY_CACHE_MODEL
+    assert "trojblue" not in TQA_QUALITY_CACHE_MODEL
+
+
+def test_tqa_save_writes_koniq_field_and_model_identity(tmp_path):
+    cache = tmp_path / "latent.npz"
+    strategy = LatentsCachingStrategy(
+        cache_to_disk=True,
+        batch_size=1,
+        skip_disk_cache_validity_check=False,
+        cache_tqa_scores=True,
+    )
+
+    strategy.save_latents_to_disk(
+        str(cache),
+        np.zeros((1, 4, 4), dtype=np.float32),
+        (32, 32),
+        (0, 0, 32, 32),
+        tqa_koniq_quality_score=72.5,
+        tqa_dbaes_score=0.75,
+    )
+
+    with np.load(cache) as data:
+        assert "tqa_quality_score" not in data
+        assert float(data["tqa_koniq_quality_score"]) == pytest.approx(72.5)
+        assert str(data["tqa_quality_model"].item()) == TQA_QUALITY_CACHE_MODEL

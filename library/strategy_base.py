@@ -459,7 +459,7 @@ class LatentsCachingStrategy:
 
                 release_tqa_models(device)
             except Exception as e:
-                logger.warning(f"failed to release TQA SigLIP quality model cleanly: {e}")
+                logger.warning(f"failed to release TQA KonIQ NR-IQA model cleanly: {e}")
 
     def _default_is_disk_cached_latents_expected(
         self,
@@ -498,9 +498,17 @@ class LatentsCachingStrategy:
                 if self.cache_aes_score and "aes_score" not in npz:
                     return False
                 if self.cache_tqa_scores and (
-                    "tqa_quality_score" not in npz or "tqa_dbaes_score" not in npz
+                    "tqa_koniq_quality_score" not in npz
+                    or "tqa_dbaes_score" not in npz
+                    or "tqa_quality_model" not in npz
                 ):
                     return False
+                if self.cache_tqa_scores:
+                    from library.tqa_metrics import TQA_QUALITY_CACHE_MODEL
+
+                    cached_model = str(np.asarray(npz["tqa_quality_model"]).item())
+                    if cached_model != TQA_QUALITY_CACHE_MODEL:
+                        return False
                 if self.skip_disk_cache_validity_check:
                     return True
                 # In old SD/SDXL npz files, if the actual latents shape does not match the expected shape, it doesn't raise an error as long as "latents" key exists (backward compatibility)
@@ -595,7 +603,7 @@ class LatentsCachingStrategy:
             crop_ltrb = crop_ltrbs[i]
             aes_score = dbaes_scores[i] if self.cache_aes_score else None
             tqa_dbaes_score = dbaes_scores[i] if self.cache_tqa_scores else None
-            tqa_quality_score = tqa_quality_scores[i]
+            tqa_koniq_quality_score = tqa_quality_scores[i]
 
             latents_size = latents.shape[-2:]  # H, W (supports both 4D and 5D latents)
             key_reso_suffix = f"_{latents_size[0]}x{latents_size[1]}" if multi_resolution else ""  # e.g. "_32x64", HxW
@@ -611,7 +619,7 @@ class LatentsCachingStrategy:
                     key_reso_suffix,
                     automask_settings=train_util.get_automask_settings_for_caching(),
                     aes_score=aes_score,
-                    tqa_quality_score=tqa_quality_score,
+                    tqa_koniq_quality_score=tqa_koniq_quality_score,
                     tqa_dbaes_score=tqa_dbaes_score,
                 )
             else:
@@ -622,7 +630,7 @@ class LatentsCachingStrategy:
                     info.latents_flipped = flipped_latent
                 info.alpha_mask = alpha_mask
                 info.aes_score = aes_score
-                info.tqa_quality_score = tqa_quality_score
+                info.tqa_koniq_quality_score = tqa_koniq_quality_score
                 info.tqa_dbaes_score = tqa_dbaes_score
 
     def load_latents_from_disk(
@@ -700,10 +708,15 @@ class LatentsCachingStrategy:
 
     def load_tqa_scores_from_disk(self, npz_path: str) -> Optional[tuple[float, float]]:
         with np.load(npz_path) as npz:
-            if "tqa_quality_score" not in npz or "tqa_dbaes_score" not in npz:
+            required = {"tqa_koniq_quality_score", "tqa_dbaes_score", "tqa_quality_model"}
+            if not required.issubset(npz.files):
+                return None
+            from library.tqa_metrics import TQA_QUALITY_CACHE_MODEL
+
+            if str(np.asarray(npz["tqa_quality_model"]).item()) != TQA_QUALITY_CACHE_MODEL:
                 return None
             return (
-                float(np.asarray(npz["tqa_quality_score"]).item()),
+                float(np.asarray(npz["tqa_koniq_quality_score"]).item()),
                 float(np.asarray(npz["tqa_dbaes_score"]).item()),
             )
 
@@ -718,7 +731,7 @@ class LatentsCachingStrategy:
         key_reso_suffix="",
         automask_settings: AutomaskSettings | None = None,
         aes_score: Optional[float] = None,
-        tqa_quality_score: Optional[float] = None,
+        tqa_koniq_quality_score: Optional[float] = None,
         tqa_dbaes_score: Optional[float] = None,
     ):
         """
@@ -767,8 +780,11 @@ class LatentsCachingStrategy:
                     kwargs["alpha_mask" + key_reso_suffix] = np.asarray(alpha_mask, dtype=np.float32)
         if aes_score is not None:
             kwargs["aes_score"] = np.array(float(np.clip(aes_score, 0.0, 1.0)), dtype=np.float32)
-        if tqa_quality_score is not None:
-            kwargs["tqa_quality_score"] = np.array(float(tqa_quality_score), dtype=np.float32)
+        if tqa_koniq_quality_score is not None:
+            from library.tqa_metrics import TQA_QUALITY_CACHE_MODEL
+
+            kwargs["tqa_koniq_quality_score"] = np.array(float(tqa_koniq_quality_score), dtype=np.float32)
+            kwargs["tqa_quality_model"] = np.array(TQA_QUALITY_CACHE_MODEL)
         if tqa_dbaes_score is not None:
             kwargs["tqa_dbaes_score"] = np.array(float(np.clip(tqa_dbaes_score, 0.0, 1.0)), dtype=np.float32)
         np.savez(npz_path, **kwargs)

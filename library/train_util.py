@@ -472,7 +472,7 @@ class ImageInfo:
 
         self.alpha_mask: Optional[torch.Tensor] = None  # alpha mask can be flipped in runtime
         self.aes_score: Optional[float] = None
-        self.tqa_quality_score: Optional[float] = None
+        self.tqa_koniq_quality_score: Optional[float] = None
         self.tqa_dbaes_score: Optional[float] = None
         self.tqa_quality_percentile: Optional[float] = None
         self.tqa_dbaes_percentile: Optional[float] = None
@@ -3550,16 +3550,16 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
         dbaes_scores = []
         for dataset in self.datasets:
             for info in dataset.image_data.values():
-                if info.tqa_quality_score is None or info.tqa_dbaes_score is None:
+                if info.tqa_koniq_quality_score is None or info.tqa_dbaes_score is None:
                     if info.latents_npz is not None:
                         scores = strategy.load_tqa_scores_from_disk(info.latents_npz)
                         if scores is not None:
-                            info.tqa_quality_score, info.tqa_dbaes_score = scores
-                if info.tqa_quality_score is None or info.tqa_dbaes_score is None:
+                            info.tqa_koniq_quality_score, info.tqa_dbaes_score = scores
+                if info.tqa_koniq_quality_score is None or info.tqa_dbaes_score is None:
                     raise ValueError(f"TQA scores are missing while normalizing percentiles: {info.absolute_path}")
                 infos.append(info)
                 weights.append(max(int(info.num_repeats), 0))
-                quality_scores.append(float(info.tqa_quality_score))
+                quality_scores.append(float(info.tqa_koniq_quality_score))
                 dbaes_scores.append(float(info.tqa_dbaes_score))
 
         quality_percentiles = self._weighted_percentile_ranks(quality_scores, weights)
@@ -5808,7 +5808,7 @@ def add_dataset_arguments(
     parser.add_argument(
         "--tqa_loss_weighting",
         action="store_true",
-        help="cache DBAesthetic and SigLIP quality scores and interpolate percentile loss weights by timestep",
+        help="cache DBAesthetic and KonIQ NR-IQA scores and interpolate percentile loss weights by timestep",
     )
     parser.add_argument(
         "--tqa_loss_weighting_schedule",
