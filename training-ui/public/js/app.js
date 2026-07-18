@@ -484,9 +484,16 @@ const UI_TRANSLATIONS = {
     "zh-CN": "随训练进度将各样本由 1.0 线性过渡至数据集正规化后的 AES 权重。",
   },
   "TQA Loss Weighting": { "zh-TW": "TQA Loss 加權", "zh-CN": "TQA Loss 加權" },
-  "Interpolate KonIQ NR-IQA quality and DBAES aesthetic using weighted 5%-95% robust ranges; dataset mean loss weight stays 1.": {
-    "zh-TW": "依每次取樣時間步，在 KonIQ NR-IQA 品質與 DBAES 美學的加權 5%～95% Robust 範圍間插值；資料集平均 Loss 權重維持為 1。",
-    "zh-CN": "依每次采样时间步，在 KonIQ NR-IQA 品质与 DBAES 美学的加权 5%～95% Robust 范围间插值；数据集平均 Loss 权重维持为 1。",
+  "Round robust scores upward to 0.1 steps within 0.1-1.0, then multiply by 2 for the final loss weight.": {
+    "zh-TW": "將 Robust 分數無條件進位為 0.1～1.0 的 0.1 級距，再乘以 2 作為最終 Loss 權重。",
+    "zh-CN": "将 Robust 分数向上取整为 0.1～1.0 的 0.1 级距，再乘以 2 作为最终 Loss 权重。",
+  },
+  "TQA Loss Formula": { "zh-TW": "TQA Loss 公式", "zh-CN": "TQA Loss 公式" },
+  "Timestep Interpolation": { "zh-TW": "時間步插值", "zh-CN": "时间步插值" },
+  "Geometric Mean": { "zh-TW": "幾何平均", "zh-CN": "几何平均" },
+  "Interpolate KonIQ quality toward DBAES aesthetic by timestep, or combine both robust scores using their geometric mean.": {
+    "zh-TW": "依時間步從 KonIQ 品質插值至 DBAES 美學，或以兩個 Robust 分數的幾何平均合併。",
+    "zh-CN": "依时间步从 KonIQ 品质插值至 DBAES 美学，或以两个 Robust 分数的几何平均合并。",
   },
   "Progressive TQA Weighting": { "zh-TW": "漸進式 TQA 加權", "zh-CN": "渐进式 TQA 加权" },
   "Linearly transition each sample from 1.0 to its timestep-aware TQA weight over training.": {
@@ -2171,6 +2178,7 @@ function populateConfig(config) {
   $("cfg-aes-loss-weighting").checked = (t.aes_loss_weighting ?? false) || (t.aes_loss_weighting_schedule ?? false);
   $("cfg-aes-loss-weighting-schedule").checked = t.aes_loss_weighting_schedule ?? false;
   $("cfg-tqa-loss-weighting").checked = (t.tqa_loss_weighting ?? false) || (t.tqa_loss_weighting_schedule ?? false);
+  $("cfg-tqa-loss-weighting-mode").value = t.tqa_loss_weighting_mode ?? "timestep";
   $("cfg-tqa-loss-weighting-schedule").checked = t.tqa_loss_weighting_schedule ?? false;
   if ($("cfg-use-cdc-fm").checked) {
     $("cfg-cache-latents").checked = true;
@@ -2691,6 +2699,7 @@ function gatherConfig() {
       aes_loss_weighting: $("cfg-aes-loss-weighting").checked || $("cfg-aes-loss-weighting-schedule").checked,
       aes_loss_weighting_schedule: $("cfg-aes-loss-weighting-schedule").checked,
       tqa_loss_weighting: $("cfg-tqa-loss-weighting").checked || $("cfg-tqa-loss-weighting-schedule").checked,
+      tqa_loss_weighting_mode: $("cfg-tqa-loss-weighting-mode").value,
       tqa_loss_weighting_schedule: $("cfg-tqa-loss-weighting-schedule").checked,
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),

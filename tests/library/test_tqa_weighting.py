@@ -35,8 +35,6 @@ def test_dataset_tqa_robust_ranges_map_direct_difference_to_shift(monkeypatch):
             tqa_dbaes_score=aesthetic,
             tqa_quality_normalized=None,
             tqa_dbaes_normalized=None,
-            tqa_quality_loss_weight=None,
-            tqa_dbaes_loss_weight=None,
             tqa_shift=None,
             latents_npz=None,
             absolute_path=f"image-{index}.png",
@@ -58,8 +56,6 @@ def test_dataset_tqa_robust_ranges_map_direct_difference_to_shift(monkeypatch):
     assert [info.tqa_quality_normalized for info in infos] == pytest.approx([0.0, 0.5, 1.0])
     assert [info.tqa_dbaes_normalized for info in infos] == pytest.approx([1.0, 0.5, 0.0])
     assert [info.tqa_shift for info in infos] == pytest.approx([1.5, 1.0, 0.5])
-    assert np.average([info.tqa_quality_loss_weight for info in infos], weights=[2, 2, 2]) == pytest.approx(1.0)
-    assert np.average([info.tqa_dbaes_loss_weight for info in infos], weights=[2, 2, 2]) == pytest.approx(1.0)
 
 
 def test_robust_minmax_keeps_small_raw_differences_small():
@@ -73,12 +69,13 @@ def test_tqa_loss_interpolates_quality_to_aesthetic_by_timestep():
     args = SimpleNamespace(
         aes_loss_weighting=False,
         tqa_loss_weighting=True,
+        tqa_loss_weighting_mode="timestep",
         tqa_loss_weighting_schedule=False,
         max_train_steps=100,
     )
     batch = {
-        "tqa_quality_weights": torch.tensor([0.5, 1.5]),
-        "tqa_dbaes_weights": torch.tensor([1.5, 0.5]),
+        "tqa_quality_scores": torch.tensor([0.21, 0.71]),
+        "tqa_dbaes_scores": torch.tensor([0.71, 0.21]),
     }
     loss = torch.ones(2)
 
@@ -88,42 +85,80 @@ def test_tqa_loss_interpolates_quality_to_aesthetic_by_timestep():
         loss, batch, args, 0, sigmas=torch.full((2, 1, 1, 1), 0.5)
     )
 
-    assert torch.allclose(low, torch.tensor([0.5, 1.5]))
-    assert torch.allclose(high, torch.tensor([1.5, 0.5]))
-    assert torch.allclose(middle, torch.ones(2))
+    assert torch.allclose(low, torch.tensor([0.6, 1.6]))
+    assert torch.allclose(high, torch.tensor([1.6, 0.6]))
+    assert torch.allclose(middle, torch.tensor([1.0, 1.0]))
 
 
-def test_tqa_and_dbaes_use_geometric_mean():
+def test_tqa_loss_geometric_mode_combines_both_robust_scores():
+    args = SimpleNamespace(
+        aes_loss_weighting=False,
+        tqa_loss_weighting=True,
+        tqa_loss_weighting_mode="geometric",
+        tqa_loss_weighting_schedule=False,
+        max_train_steps=100,
+    )
+    batch = {
+        "tqa_quality_scores": torch.tensor([0.16, 0.81]),
+        "tqa_dbaes_scores": torch.tensor([0.64, 0.25]),
+    }
+
+    weighted = train_util.apply_aes_loss_weighting(torch.ones(2), batch, args, 0, sigmas=None)
+
+    assert torch.allclose(weighted, torch.tensor([0.8, 1.0]))
+
+
+def test_tqa_loss_rounding_keeps_effective_weight_in_point_two_to_two():
+    args = SimpleNamespace(
+        aes_loss_weighting=False,
+        tqa_loss_weighting=True,
+        tqa_loss_weighting_mode="geometric",
+        tqa_loss_weighting_schedule=False,
+        max_train_steps=100,
+    )
+    batch = {
+        "tqa_quality_scores": torch.tensor([0.0, 0.3, 1.0]),
+        "tqa_dbaes_scores": torch.tensor([0.0, 0.3, 1.0]),
+    }
+
+    weighted = train_util.apply_aes_loss_weighting(torch.ones(3), batch, args, 0, sigmas=None)
+
+    assert torch.allclose(weighted, torch.tensor([0.2, 0.6, 2.0]))
+
+
+def test_tqa_and_aes_use_geometric_mean():
     args = SimpleNamespace(
         aes_loss_weighting=True,
         aes_loss_weighting_schedule=False,
         tqa_loss_weighting=True,
+        tqa_loss_weighting_mode="timestep",
         tqa_loss_weighting_schedule=False,
         max_train_steps=100,
     )
     batch = {
         "aes_scores": torch.tensor([2.0]),
-        "tqa_quality_weights": torch.tensor([0.25]),
-        "tqa_dbaes_weights": torch.tensor([0.25]),
+        "tqa_quality_scores": torch.tensor([0.11]),
+        "tqa_dbaes_scores": torch.tensor([0.11]),
     }
 
     weighted = train_util.apply_aes_loss_weighting(
         torch.ones(1), batch, args, 0, sigmas=torch.zeros(1, 1, 1, 1)
     )
 
-    assert torch.allclose(weighted, torch.tensor([np.sqrt(0.5)], dtype=torch.float32))
+    assert torch.allclose(weighted, torch.tensor([np.sqrt(0.8)], dtype=torch.float32))
 
 
 def test_progressive_tqa_weighting_transitions_from_one_to_timestep_weight():
     args = SimpleNamespace(
         aes_loss_weighting=False,
         tqa_loss_weighting=True,
+        tqa_loss_weighting_mode="timestep",
         tqa_loss_weighting_schedule=True,
         max_train_steps=101,
     )
     batch = {
-        "tqa_quality_weights": torch.tensor([0.5]),
-        "tqa_dbaes_weights": torch.tensor([1.5]),
+        "tqa_quality_scores": torch.tensor([0.21]),
+        "tqa_dbaes_scores": torch.tensor([0.21]),
     }
     sigma = torch.ones(1, 1, 1, 1)
 
@@ -132,8 +167,8 @@ def test_progressive_tqa_weighting_transitions_from_one_to_timestep_weight():
     end = train_util.apply_aes_loss_weighting(torch.ones(1), batch, args, 100, sigmas=sigma)
 
     assert torch.allclose(start, torch.tensor([1.0]))
-    assert torch.allclose(middle, torch.tensor([1.25]))
-    assert torch.allclose(end, torch.tensor([1.5]))
+    assert torch.allclose(middle, torch.tensor([0.8]))
+    assert torch.allclose(end, torch.tensor([0.6]))
 
 
 def test_autoshift_tqa_uses_cached_half_to_one_and_half_range(monkeypatch):

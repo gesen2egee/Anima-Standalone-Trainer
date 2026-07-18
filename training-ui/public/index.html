@@ -639,7 +639,15 @@
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-tqa-loss-weighting"> TQA Loss Weighting</label>
-                                <small>Interpolate KonIQ NR-IQA quality and DBAES aesthetic using weighted 5%-95% robust ranges; dataset mean loss weight stays 1.</small>
+                                <small>Round robust scores upward to 0.1 steps within 0.1-1.0, then multiply by 2 for the final loss weight.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfg-tqa-loss-weighting-mode">TQA Loss Formula</label>
+                                <select id="cfg-tqa-loss-weighting-mode">
+                                    <option value="timestep">Timestep Interpolation</option>
+                                    <option value="geometric">Geometric Mean</option>
+                                </select>
+                                <small>Interpolate KonIQ quality toward DBAES aesthetic by timestep, or combine both robust scores using their geometric mean.</small>
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-tqa-loss-weighting-schedule"> Progressive TQA Weighting</label>

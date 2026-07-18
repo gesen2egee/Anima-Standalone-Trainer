@@ -78,6 +78,7 @@ seed = 42
 cache_latents = true
 cache_latents_to_disk = true
 tqa_loss_weighting = false
+tqa_loss_weighting_mode = "timestep"
 tqa_loss_weighting_schedule = false
 vae_batch_size = 1
 vae_chunk_size = 64

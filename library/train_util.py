@@ -476,8 +476,6 @@ class ImageInfo:
         self.tqa_dbaes_score: Optional[float] = None
         self.tqa_quality_normalized: Optional[float] = None
         self.tqa_dbaes_normalized: Optional[float] = None
-        self.tqa_quality_loss_weight: Optional[float] = None
-        self.tqa_dbaes_loss_weight: Optional[float] = None
         self.tqa_shift: Optional[float] = None
         self.resize_interpolation: Optional[str] = None
 
@@ -2161,8 +2159,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
         loss_weights = []
         aes_scores = []
-        tqa_quality_weights = []
-        tqa_dbaes_weights = []
+        tqa_quality_scores = []
+        tqa_dbaes_scores = []
         tqa_shift_values = []
         captions = []
         input_ids_list = []
@@ -2207,10 +2205,10 @@ class BaseDataset(torch.utils.data.Dataset):
                 aes_scores.append(image_info.aes_score / self.aes_score_mean)
 
             if self.latents_caching_strategy is not None and self.latents_caching_strategy.cache_tqa_scores:
-                if image_info.tqa_quality_loss_weight is None or image_info.tqa_dbaes_loss_weight is None:
-                    raise ValueError(f"TQA robust weights are missing from latent cache: {image_info.absolute_path}")
-                tqa_quality_weights.append(image_info.tqa_quality_loss_weight)
-                tqa_dbaes_weights.append(image_info.tqa_dbaes_loss_weight)
+                if image_info.tqa_quality_normalized is None or image_info.tqa_dbaes_normalized is None:
+                    raise ValueError(f"TQA robust scores are missing from latent cache: {image_info.absolute_path}")
+                tqa_quality_scores.append(image_info.tqa_quality_normalized)
+                tqa_dbaes_scores.append(image_info.tqa_dbaes_normalized)
                 if image_info.tqa_shift is None:
                     raise ValueError(f"TQA shift is missing from latent cache: {image_info.absolute_path}")
                 tqa_shift_values.append(image_info.tqa_shift)
@@ -2430,9 +2428,9 @@ class BaseDataset(torch.utils.data.Dataset):
         example["loss_weights"] = torch.FloatTensor(loss_weights)
         if aes_scores:
             example["aes_scores"] = torch.FloatTensor(aes_scores)
-        if tqa_quality_weights:
-            example["tqa_quality_weights"] = torch.FloatTensor(tqa_quality_weights)
-            example["tqa_dbaes_weights"] = torch.FloatTensor(tqa_dbaes_weights)
+        if tqa_quality_scores:
+            example["tqa_quality_scores"] = torch.FloatTensor(tqa_quality_scores)
+            example["tqa_dbaes_scores"] = torch.FloatTensor(tqa_dbaes_scores)
             example["tqa_shift_values"] = torch.FloatTensor(tqa_shift_values)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
@@ -3575,19 +3573,10 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
 
         quality_normalized, quality_low, quality_high = self._robust_minmax(quality_scores, weights)
         dbaes_normalized, dbaes_low, dbaes_high = self._robust_minmax(dbaes_scores, weights)
-        total_weight = sum(weights)
-        quality_loss_mean = sum(
-            (0.5 + value) * weight for value, weight in zip(quality_normalized, weights)
-        ) / total_weight
-        dbaes_loss_mean = sum(
-            (0.5 + value) * weight for value, weight in zip(dbaes_normalized, weights)
-        ) / total_weight
 
         for info, quality, dbaes in zip(infos, quality_normalized, dbaes_normalized):
             info.tqa_quality_normalized = quality
             info.tqa_dbaes_normalized = dbaes
-            info.tqa_quality_loss_weight = (0.5 + quality) / quality_loss_mean
-            info.tqa_dbaes_loss_weight = (0.5 + dbaes) / dbaes_loss_mean
             info.tqa_shift = 1.0 + 0.5 * (dbaes - quality)
 
         logger.info(
@@ -5815,7 +5804,14 @@ def add_dataset_arguments(
     parser.add_argument(
         "--tqa_loss_weighting",
         action="store_true",
-        help="cache DBAesthetic and KonIQ NR-IQA scores and interpolate robust 5%-95% range weights by timestep",
+        help="cache DBAesthetic and KonIQ NR-IQA scores and apply 0.1-step robust range loss weights",
+    )
+    parser.add_argument(
+        "--tqa_loss_weighting_mode",
+        type=str,
+        default="timestep",
+        choices=["timestep", "geometric"],
+        help="interpolate quality/aesthetic by timestep or use their geometric mean",
     )
     parser.add_argument(
         "--tqa_loss_weighting_schedule",
@@ -7752,18 +7748,27 @@ def apply_aes_loss_weighting(
 
     tqa_weights = None
     if use_tqa:
-        quality = batch.get("tqa_quality_weights")
-        dbaes = batch.get("tqa_dbaes_weights")
+        quality = batch.get("tqa_quality_scores")
+        dbaes = batch.get("tqa_dbaes_scores")
         if quality is None or dbaes is None:
-            raise ValueError("TQA loss weighting is enabled, but this batch has no robust TQA weights")
-        if sigmas is None:
-            raise ValueError("TQA loss weighting requires the sampled timestep sigmas")
+            raise ValueError("TQA loss weighting is enabled, but this batch has no robust TQA scores")
         quality = quality.to(device=loss.device, dtype=loss.dtype)
         dbaes = dbaes.to(device=loss.device, dtype=loss.dtype)
-        timestep = sigmas.to(device=loss.device, dtype=loss.dtype).reshape(loss.shape[0], -1).mean(dim=1)
-        timestep = timestep.clamp(0.0, 1.0)
-        # Both robust endpoint weights have dataset mean 1.0, so every interpolation does too.
-        tqa_weights = torch.lerp(quality, dbaes, timestep)
+        mode = getattr(args, "tqa_loss_weighting_mode", "timestep")
+        if mode == "geometric":
+            tqa_weights = torch.sqrt((quality * dbaes).clamp_min_(0.0))
+        elif mode == "timestep":
+            if sigmas is None:
+                raise ValueError("TQA timestep loss weighting requires the sampled timestep sigmas")
+            timestep = sigmas.to(device=loss.device, dtype=loss.dtype).reshape(loss.shape[0], -1).mean(dim=1)
+            timestep = timestep.clamp(0.0, 1.0)
+            tqa_weights = torch.lerp(quality, dbaes, timestep)
+        else:
+            raise ValueError(f"Unsupported TQA loss weighting mode: {mode}")
+        # Round the robust score upward to 0.1..1.0, then x2 to keep the loss scale centered near 1.
+        tqa_weights = (torch.ceil(tqa_weights.float().clamp(0.0, 1.0) * 10.0 - 1e-6) / 10.0).clamp_(0.1, 1.0)
+        tqa_weights = tqa_weights.to(dtype=loss.dtype)
+        tqa_weights = tqa_weights * 2.0
         if getattr(args, "tqa_loss_weighting_schedule", False):
             tqa_weights = torch.lerp(torch.ones_like(tqa_weights), tqa_weights, progress)
 
