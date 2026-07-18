@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 def add_anima_training_arguments(parser: argparse.ArgumentParser):
     """Add Anima-specific training arguments to the parser."""
     parser.add_argument(
+        "--diff_output_preservation",
+        action="store_true",
+        help="Enable AI Toolkit-style Differential Output Preservation for Anima LoRA training.",
+    )
+    parser.add_argument(
+        "--diff_output_preservation_multiplier",
+        type=float,
+        default=1.0,
+        help="Multiplier for Differential Output Preservation loss (default: 1.0).",
+    )
+    parser.add_argument(
+        "--diff_output_preservation_class",
+        type=str,
+        default="",
+        help="Optional class tokens replacing keep tokens. Empty uses filtered flex tokens only.",
+    )
+    parser.add_argument(
         "--qwen3",
         type=str,
         default=None,

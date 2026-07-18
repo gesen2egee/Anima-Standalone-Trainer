@@ -2161,6 +2161,9 @@ function populateConfig(config) {
   $("cfg-wavelet-loss-gamma").value = t.wavelet_loss_gamma ?? 5.0;
   $("cfg-wavelet-loss-weight").value = t.wavelet_loss_weight ?? 1.0;
   $("cfg-wavelet-loss-prediction-type").value = t.wavelet_loss_prediction_type || "velocity";
+  $("cfg-diff-output-preservation").checked = t.diff_output_preservation ?? false;
+  $("cfg-diff-output-preservation-multiplier").value = t.diff_output_preservation_multiplier ?? 1.0;
+  $("cfg-diff-output-preservation-class").value = t.diff_output_preservation_class ?? "";
   updateLossTypeUI();
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
@@ -2187,7 +2190,8 @@ function populateConfig(config) {
   $("cfg-vae-batch").value = t.vae_batch_size ?? 1;
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
-  $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
+  $("cfg-cache-te").checked = (t.cache_text_encoder_outputs_to_disk ?? true) && !$("cfg-diff-output-preservation").checked;
+  updateDopUI();
   $("cfg-krea2-dynamic-text-encoder").checked = isKrea2Architecture(modelArchitecture) && (
     (a.krea2_dynamic_text_encoder ?? false) ||
     (a.krea2_dynamic_text_encoder_cpu ?? false) ||
@@ -2482,6 +2486,15 @@ function updateAutomaskUI() {
   $("automask-panel").classList.toggle("hidden", !$("cfg-automask").checked && !autoshift);
   $("cfg-flow-shift").disabled = flowShiftAuto;
 }
+
+function updateDopUI({ notify = false } = {}) {
+  const enabled = $("cfg-diff-output-preservation").checked;
+  $("cfg-cache-te").disabled = enabled;
+  if (enabled) {
+    $("cfg-cache-te").checked = false;
+    if (notify) showToast("DOP 已關閉 Text Encoder output cache");
+  }
+}
 // Helpers for safe parsing
 function safeInt(val, fallback = 0) {
   if (val === "" || val === null || val === undefined) return fallback;
@@ -2681,6 +2694,9 @@ function gatherConfig() {
       wavelet_loss_gamma: safeFloat($("cfg-wavelet-loss-gamma").value, 5.0),
       wavelet_loss_weight: safeFloat($("cfg-wavelet-loss-weight").value, 1.0),
       wavelet_loss_prediction_type: $("cfg-wavelet-loss-prediction-type").value,
+      diff_output_preservation: $("cfg-diff-output-preservation").checked,
+      diff_output_preservation_multiplier: safeFloat($("cfg-diff-output-preservation-multiplier").value, 1.0),
+      diff_output_preservation_class: $("cfg-diff-output-preservation-class").value.trim(),
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -2704,7 +2720,7 @@ function gatherConfig() {
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
-      cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder ? false : $("cfg-cache-te").checked,
+      cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder || $("cfg-diff-output-preservation").checked ? false : $("cfg-cache-te").checked,
       masked_loss: $("cfg-masked-loss").checked,
       automask: $("cfg-automask").checked,
       automask_alpha: safeInt($("cfg-automask-alpha").value, 128),
@@ -5131,6 +5147,9 @@ $("cfg-tqa-loss-weighting-schedule").addEventListener("change", () => {
   if ($("cfg-tqa-loss-weighting-schedule").checked) {
     $("cfg-tqa-loss-weighting").checked = true;
   }
+});
+$("cfg-diff-output-preservation").addEventListener("change", () => {
+  updateDopUI({ notify: $("cfg-diff-output-preservation").checked });
 });
 $("new-job-model-architecture")?.addEventListener("change", updateNewJobModelArchitecture);
 $("new-job-trigger-words").addEventListener("input", () => {

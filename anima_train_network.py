@@ -14,6 +14,7 @@ from library import (
     anima_models,
     anima_train_utils,
     anima_utils,
+    differential_output_preservation,
     flow_network_trainer,
     flux_train_utils,
     qwen_image_autoencoder_kl,
@@ -37,6 +38,8 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     def __init__(self):
         super().__init__()
         self.sample_prompts_te_outputs = None
+        self._dop_text_encoder_conds = None
+        self._dop_loss = None
 
     def assert_extra_args(
         self,
@@ -60,6 +63,22 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if args.cache_text_encoder_outputs_to_disk and not args.cache_text_encoder_outputs:
             logger.warning("cache_text_encoder_outputs_to_disk is enabled, so cache_text_encoder_outputs is also enabled")
             args.cache_text_encoder_outputs = True
+
+        if args.diff_output_preservation:
+            if args.cache_text_encoder_outputs:
+                raise ValueError(
+                    "Differential Output Preservation cannot be used with cached Text Encoder outputs. "
+                    "Disable cache_text_encoder_outputs and cache_text_encoder_outputs_to_disk."
+                )
+            if self.is_train_text_encoder(args):
+                raise ValueError("Differential Output Preservation does not support Text Encoder LoRA training.")
+            if args.diff_output_preservation_multiplier < 0:
+                raise ValueError("diff_output_preservation_multiplier must be greater than or equal to 0.")
+            logger.info(
+                "Differential Output Preservation enabled (%s mode, multiplier=%s).",
+                "class" if args.diff_output_preservation_class.strip() else "filtered flex tokens",
+                args.diff_output_preservation_multiplier,
+            )
 
         if args.cache_text_encoder_outputs:
             assert train_dataset_group.is_text_encoder_output_cacheable(
@@ -402,6 +421,49 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             model_pred = model_output
         model_pred = model_pred.squeeze(2)  # 5D to 4D, [B, C, 1, H, W] -> [B, C, H, W]
 
+        self._dop_loss = None
+        if is_train and args.diff_output_preservation:
+            if self._dop_text_encoder_conds is None:
+                raise RuntimeError("Differential Output Preservation text conditions were not prepared.")
+            dop_prompt_embeds, dop_attn_mask, dop_t5_input_ids, dop_t5_attn_mask = [
+                value.to(accelerator.device, dtype=weight_dtype) if value.dtype.is_floating_point else value.to(accelerator.device)
+                for value in self._dop_text_encoder_conds[:4]
+            ]
+            unwrapped_network = accelerator.unwrap_model(network)
+            original_multiplier = float(getattr(unwrapped_network, "multiplier", 1.0))
+            try:
+                unwrapped_network.set_multiplier(0.0)
+                if self.is_swapping_blocks:
+                    anima.prepare_block_swap_before_forward()
+                with torch.no_grad(), accelerator.autocast():
+                    dop_prior_pred = anima(
+                        noisy_model_input,
+                        model_timesteps,
+                        dop_prompt_embeds,
+                        padding_mask=padding_mask,
+                        target_input_ids=dop_t5_input_ids,
+                        target_attention_mask=dop_t5_attn_mask,
+                        source_attention_mask=dop_attn_mask,
+                    ).squeeze(2)
+            finally:
+                unwrapped_network.set_multiplier(original_multiplier)
+
+            if self.is_swapping_blocks:
+                anima.prepare_block_swap_before_forward()
+            with accelerator.autocast():
+                dop_preservation_pred = anima(
+                    noisy_model_input,
+                    model_timesteps,
+                    dop_prompt_embeds,
+                    padding_mask=padding_mask,
+                    target_input_ids=dop_t5_input_ids,
+                    target_attention_mask=dop_t5_attn_mask,
+                    source_attention_mask=dop_attn_mask,
+                ).squeeze(2)
+            self._dop_loss = torch.nn.functional.mse_loss(
+                dop_preservation_pred.float(), dop_prior_pred.float()
+            ) * float(args.diff_output_preservation_multiplier)
+
         model_pred_uncond = None
         if self.should_apply_model_guidance(args, latents.device):
             prompt_embeds_uncond = torch.zeros_like(prompt_embeds)
@@ -463,6 +525,37 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     ) -> torch.Tensor:
         """Override base process_batch for caption dropout with cached text encoder outputs."""
 
+        self._dop_text_encoder_conds = None
+        if is_train and args.diff_output_preservation:
+            keep_tokens_counts = batch.get("keep_tokens_counts")
+            caption_separators = batch.get("caption_separators")
+            if keep_tokens_counts is None:
+                keep_tokens_counts = [0] * len(batch["captions"])
+            if caption_separators is None:
+                caption_separators = [","] * len(batch["captions"])
+            if any(int(keep_tokens) <= 0 for keep_tokens in keep_tokens_counts):
+                raise ValueError(
+                    "Differential Output Preservation requires keep_tokens > 0 for every training subset."
+                )
+            preservation_prompts = [
+                differential_output_preservation.build_preservation_prompt(
+                    caption,
+                    keep_tokens,
+                    separator,
+                    args.diff_output_preservation_class,
+                )
+                for caption, keep_tokens, separator in zip(
+                    batch["captions"], keep_tokens_counts, caption_separators
+                )
+            ]
+            preservation_tokens = tokenize_strategy.tokenize(preservation_prompts)
+            with torch.no_grad(), accelerator.autocast():
+                self._dop_text_encoder_conds = text_encoding_strategy.encode_tokens(
+                    tokenize_strategy,
+                    self.get_models_for_text_encoding(args, accelerator, text_encoders),
+                    preservation_tokens,
+                )
+
         # Text encoder conditions
         text_encoder_outputs_list = batch.get("text_encoder_outputs_list", None)
         anima_text_encoding_strategy: strategy_anima.AnimaTextEncodingStrategy = text_encoding_strategy
@@ -494,6 +587,11 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             train_text_encoder,
             train_unet,
         )
+
+    def post_process_loss(self, loss, args, timesteps, noise_scheduler):
+        if self._dop_loss is not None:
+            loss = loss + self._dop_loss
+        return loss
 
     def get_wavelet_prediction_type(self, args):
         return "velocity"

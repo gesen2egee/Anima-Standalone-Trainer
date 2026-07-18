@@ -786,6 +786,26 @@
                             </div>
                         </div>
 
+                        <h4 style="margin-top: 24px;">Differential Output Preservation</h4>
+                        <small>AI Toolkit style：以關閉 LoRA 的相同 prompt 輸出保護基礎模型知識。啟用後會關閉 Text Encoder output cache。</small>
+                        <div class="form-row" style="margin-top: 12px;">
+                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
+                                <label style="display: flex; align-items: center; gap: 5px;">
+                                    <input type="checkbox" id="cfg-diff-output-preservation" style="margin: 0; width: auto;"> 啟用 DOP
+                                </label>
+                                <small>前 Keep Tokens 個 caption token 視為 Trigger words。</small>
+                            </div>
+                            <div class="form-group">
+                                <label>DOP Loss Multiplier</label>
+                                <input type="number" id="cfg-diff-output-preservation-multiplier" value="1.0" step="0.1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>Preservation Class（選填）</label>
+                                <input type="text" id="cfg-diff-output-preservation-class" value="" placeholder="例如：woman；留空使用過濾後的 flex tokens">
+                            </div>
+                        </div>
+                        <small>Flex token 若包含 Trigger word，會在比較大小寫並將空白／_、跳脫／未跳脫括號視為相同後移除。</small>
+
                         <h4 style="margin-top: 24px;">Model Guidance Training (arXiv:2502.12154)</h4>
                         <small>Guidance loss controls for experimental alignment training. Keep weight at 0 to disable.</small>
                         <div class="form-row" style="margin-top: 12px;">
