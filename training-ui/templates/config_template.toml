@@ -86,7 +86,6 @@ vae_disable_cache = false
 cache_text_encoder_outputs_to_disk = false
 diff_output_preservation = false
 diff_output_preservation_multiplier = 1.0
-diff_output_preservation_class = ""
 automask = true
 automask_alpha = 128
 automask_shrink = 1

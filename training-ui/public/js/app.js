@@ -2163,7 +2163,6 @@ function populateConfig(config) {
   $("cfg-wavelet-loss-prediction-type").value = t.wavelet_loss_prediction_type || "velocity";
   $("cfg-diff-output-preservation").checked = t.diff_output_preservation ?? false;
   $("cfg-diff-output-preservation-multiplier").value = t.diff_output_preservation_multiplier ?? 1.0;
-  $("cfg-diff-output-preservation-class").value = t.diff_output_preservation_class ?? "";
   updateLossTypeUI();
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
@@ -2406,6 +2405,7 @@ function populateDataset(dataset) {
     image_dir: s.image_dir || "",
     num_repeats: s.num_repeats ?? 1,
     keep_tokens: s.keep_tokens ?? 5,
+    class_tokens: s.class_tokens ?? "",
     keep_tags: s.keep_tags ?? DEFAULT_KEEP_TAGS,
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
@@ -2696,7 +2696,6 @@ function gatherConfig() {
       wavelet_loss_prediction_type: $("cfg-wavelet-loss-prediction-type").value,
       diff_output_preservation: $("cfg-diff-output-preservation").checked,
       diff_output_preservation_multiplier: safeFloat($("cfg-diff-output-preservation-multiplier").value, 1.0),
-      diff_output_preservation_class: $("cfg-diff-output-preservation-class").value.trim(),
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -2925,6 +2924,7 @@ function gatherDataset() {
               image_dir: s.image_dir,
               num_repeats: safeInt(s.num_repeats),
               keep_tokens: safeInt(s.keep_tokens),
+              class_tokens: (s.class_tokens ?? "").trim(),
               keep_tags: s.keep_tags ?? "",
               flip_aug: s.flip_aug,
               caption_prefix: s.caption_prefix,
@@ -2965,6 +2965,7 @@ function addSubset(shouldRender = true) {
     image_dir: "",
     num_repeats: 1,
     keep_tokens: 0,
+    class_tokens: "",
     keep_tags: DEFAULT_KEEP_TAGS,
     flip_aug: false,
     caption_prefix: "",
@@ -3052,6 +3053,11 @@ function renderSubsets() {
                     <input type="text" class="sub-caption-prefix" value="${escapeHtml(subset.caption_prefix)}" placeholder="e.g. A photo of,">
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
+                    <label style="font-size: 0.8rem;">DOP Class Token（選填）</label>
+                    <input type="text" class="sub-class-tokens" value="${escapeHtml(subset.class_tokens ?? "")}" placeholder="例如：woman；留空自動辨識 1girl、2boys 等 tag">
+                    <small style="display:block; font-size: 0.7rem; color: var(--text-muted);">有設定時直接作為 DOP class word；留空會從 Caption 自動辨識，沒有符合 tag 時略過該筆 DOP。</small>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">打標輸出成 Caption</label>
                     <div class="form-row" style="align-items: flex-end; gap: 10px;">
                         <div class="form-group" style="min-width: 120px;">
@@ -3136,6 +3142,7 @@ function renderSubsets() {
           card.querySelector(".sub-keep-tokens").value,
         );
         subset.caption_prefix = card.querySelector(".sub-caption-prefix").value;
+        subset.class_tokens = card.querySelector(".sub-class-tokens").value;
         subset.keep_tags = card.querySelector(".sub-keep-tags").value;
         subset.caption_dropout_rate = safeFloat(
           card.querySelector(".sub-caption-dropout").value,

@@ -46,7 +46,7 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         "--diff_output_preservation_class",
         type=str,
         default="",
-        help="Optional class tokens replacing keep tokens. Empty uses filtered flex tokens only.",
+        help="Deprecated compatibility option. Configure class_tokens on each dataset subset instead.",
     )
     parser.add_argument(
         "--qwen3",

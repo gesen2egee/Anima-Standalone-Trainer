@@ -799,12 +799,8 @@
                                 <label>DOP Loss Multiplier</label>
                                 <input type="number" id="cfg-diff-output-preservation-multiplier" value="1.0" step="0.1" min="0">
                             </div>
-                            <div class="form-group">
-                                <label>Preservation Class（選填）</label>
-                                <input type="text" id="cfg-diff-output-preservation-class" value="" placeholder="例如：woman；留空使用過濾後的 flex tokens">
-                            </div>
-                        </div>
-                        <small>Flex token 若包含 Trigger word，會在比較大小寫並將空白／_、跳脫／未跳脫括號視為相同後移除。</small>
+                          </div>
+                          <small>DOP 只使用各 Dataset 的 Class Token；留空時自動從 Caption 辨識 1girl、1boy、1other 或 2–6 boys／girls／others，沒有符合 tag 的樣本會略過。</small>
 
                         <h4 style="margin-top: 24px;">Model Guidance Training (arXiv:2502.12154)</h4>
                         <small>Guidance loss controls for experimental alignment training. Keep weight at 0 to disable.</small>

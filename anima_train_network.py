@@ -39,6 +39,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         super().__init__()
         self.sample_prompts_te_outputs = None
         self._dop_text_encoder_conds = None
+        self._dop_batch_indices = None
         self._dop_loss = None
 
     def assert_extra_args(
@@ -75,10 +76,14 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             if args.diff_output_preservation_multiplier < 0:
                 raise ValueError("diff_output_preservation_multiplier must be greater than or equal to 0.")
             logger.info(
-                "Differential Output Preservation enabled (%s mode, multiplier=%s).",
-                "class" if args.diff_output_preservation_class.strip() else "filtered flex tokens",
+                "Differential Output Preservation enabled (dataset class/auto class-tag mode, multiplier=%s).",
                 args.diff_output_preservation_multiplier,
             )
+            if args.diff_output_preservation_class.strip():
+                logger.warning(
+                    "diff_output_preservation_class is deprecated and ignored. "
+                    "Set class_tokens on each dataset subset instead."
+                )
 
         if args.cache_text_encoder_outputs:
             assert train_dataset_group.is_text_encoder_output_cacheable(
@@ -422,13 +427,17 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         model_pred = model_pred.squeeze(2)  # 5D to 4D, [B, C, 1, H, W] -> [B, C, H, W]
 
         self._dop_loss = None
-        if is_train and args.diff_output_preservation:
-            if self._dop_text_encoder_conds is None:
-                raise RuntimeError("Differential Output Preservation text conditions were not prepared.")
+        if is_train and args.diff_output_preservation and self._dop_text_encoder_conds is not None:
+            if not self._dop_batch_indices:
+                raise RuntimeError("Differential Output Preservation batch indices were not prepared.")
             dop_prompt_embeds, dop_attn_mask, dop_t5_input_ids, dop_t5_attn_mask = [
                 value.to(accelerator.device, dtype=weight_dtype) if value.dtype.is_floating_point else value.to(accelerator.device)
                 for value in self._dop_text_encoder_conds[:4]
             ]
+            dop_indices = torch.tensor(self._dop_batch_indices, device=noisy_model_input.device, dtype=torch.long)
+            dop_noisy_model_input = noisy_model_input.index_select(0, dop_indices)
+            dop_model_timesteps = model_timesteps.index_select(0, dop_indices)
+            dop_padding_mask = padding_mask.index_select(0, dop_indices) if padding_mask is not None else None
             unwrapped_network = accelerator.unwrap_model(network)
             original_multiplier = float(getattr(unwrapped_network, "multiplier", 1.0))
             try:
@@ -437,10 +446,10 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                     anima.prepare_block_swap_before_forward()
                 with torch.no_grad(), accelerator.autocast():
                     dop_prior_pred = anima(
-                        noisy_model_input,
-                        model_timesteps,
+                        dop_noisy_model_input,
+                        dop_model_timesteps,
                         dop_prompt_embeds,
-                        padding_mask=padding_mask,
+                        padding_mask=dop_padding_mask,
                         target_input_ids=dop_t5_input_ids,
                         target_attention_mask=dop_t5_attn_mask,
                         source_attention_mask=dop_attn_mask,
@@ -452,10 +461,10 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
                 anima.prepare_block_swap_before_forward()
             with accelerator.autocast():
                 dop_preservation_pred = anima(
-                    noisy_model_input,
-                    model_timesteps,
+                    dop_noisy_model_input,
+                    dop_model_timesteps,
                     dop_prompt_embeds,
-                    padding_mask=padding_mask,
+                    padding_mask=dop_padding_mask,
                     target_input_ids=dop_t5_input_ids,
                     target_attention_mask=dop_t5_attn_mask,
                     source_attention_mask=dop_attn_mask,
@@ -526,35 +535,26 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         """Override base process_batch for caption dropout with cached text encoder outputs."""
 
         self._dop_text_encoder_conds = None
+        self._dop_batch_indices = None
         if is_train and args.diff_output_preservation:
-            keep_tokens_counts = batch.get("keep_tokens_counts")
             caption_separators = batch.get("caption_separators")
-            if keep_tokens_counts is None:
-                keep_tokens_counts = [0] * len(batch["captions"])
             if caption_separators is None:
                 caption_separators = [","] * len(batch["captions"])
-            if any(int(keep_tokens) <= 0 for keep_tokens in keep_tokens_counts):
-                raise ValueError(
-                    "Differential Output Preservation requires keep_tokens > 0 for every training subset."
-                )
-            preservation_prompts = [
-                differential_output_preservation.build_preservation_prompt(
-                    caption,
-                    keep_tokens,
-                    separator,
-                    args.diff_output_preservation_class,
-                )
-                for caption, keep_tokens, separator in zip(
-                    batch["captions"], keep_tokens_counts, caption_separators
-                )
+            class_tokens = batch.get("dop_class_tokens") or [""] * len(batch["captions"])
+            resolved_prompts = [
+                differential_output_preservation.build_preservation_prompt(caption, separator, subset_class)
+                for caption, separator, subset_class in zip(batch["captions"], caption_separators, class_tokens)
             ]
-            preservation_tokens = tokenize_strategy.tokenize(preservation_prompts)
-            with torch.no_grad(), accelerator.autocast():
-                self._dop_text_encoder_conds = text_encoding_strategy.encode_tokens(
-                    tokenize_strategy,
-                    self.get_models_for_text_encoding(args, accelerator, text_encoders),
-                    preservation_tokens,
-                )
+            self._dop_batch_indices = [index for index, prompt in enumerate(resolved_prompts) if prompt is not None]
+            preservation_prompts = [prompt for prompt in resolved_prompts if prompt is not None]
+            if preservation_prompts:
+                preservation_tokens = tokenize_strategy.tokenize(preservation_prompts)
+                with torch.no_grad(), accelerator.autocast():
+                    self._dop_text_encoder_conds = text_encoding_strategy.encode_tokens(
+                        tokenize_strategy,
+                        self.get_models_for_text_encoding(args, accelerator, text_encoders),
+                        preservation_tokens,
+                    )
 
         # Text encoder conditions
         text_encoder_outputs_list = batch.get("text_encoder_outputs_list", None)

@@ -2175,6 +2175,7 @@ class BaseDataset(torch.utils.data.Dataset):
         custom_attributes = []
         keep_tokens_counts = []
         caption_separators = []
+        dop_class_tokens = []
         masks = []
         masked_images = []
 
@@ -2194,6 +2195,7 @@ class BaseDataset(torch.utils.data.Dataset):
             custom_attributes.append(subset.custom_attributes)
             keep_tokens_counts.append(getattr(subset, "keep_tokens", 0))
             caption_separators.append(getattr(subset, "caption_separator", ",") or ",")
+            dop_class_tokens.append(getattr(subset, "class_tokens", "") or "")
             folder_shifts.append(getattr(subset, "folder_shift", "global"))
             if self.automask_binary_shift_values:
                 automask_shift_values.append(self.automask_binary_shift_values[image_key])
@@ -2427,6 +2429,7 @@ class BaseDataset(torch.utils.data.Dataset):
         example["custom_attributes"] = custom_attributes
         example["keep_tokens_counts"] = keep_tokens_counts
         example["caption_separators"] = caption_separators
+        example["dop_class_tokens"] = dop_class_tokens
         example["folder_shifts"] = folder_shifts  # may be list of empty dict
         if self.automask_binary_shift_values:
             example["automask_shift_values"] = automask_shift_values
