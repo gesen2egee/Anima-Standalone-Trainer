@@ -800,7 +800,7 @@
                                 <input type="number" id="cfg-diff-output-preservation-multiplier" value="1.0" step="0.1" min="0">
                             </div>
                           </div>
-                          <small>DOP 只使用各 Dataset 的 Class Token；留空時自動從 Caption 辨識 1girl、1boy、1other 或 2–6 boys／girls／others，沒有符合 tag 的樣本會略過。</small>
+                          <small>DOP 只使用各 Dataset 的 Class Token；留空時自動從 Caption 辨識 1girl、1boy、1other 或 2–6 boys／girls／others，沒有符合 tag 時改用空 Caption 保護（等同 BPP）。</small>
 
                         <h4 style="margin-top: 24px;">Model Guidance Training (arXiv:2502.12154)</h4>
                         <small>Guidance loss controls for experimental alignment training. Keep weight at 0 to disable.</small>

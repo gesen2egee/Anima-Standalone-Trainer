@@ -35,14 +35,15 @@ def build_preservation_prompt(
     caption: str,
     separator: str = ",",
     class_tokens: str = "",
-) -> str | None:
-    """Build a class-only prompt, or return ``None`` when no class is available.
+) -> str:
+    """Build a class-only prompt, falling back to an empty BPP-style prompt.
 
     An explicitly configured dataset class takes precedence. When it is empty,
     supported person-count tags are detected from the processed caption. Flex
-    tokens are never included in a preservation prompt.
+    tokens are never included in a preservation prompt. If neither source has a
+    class, the empty prompt is returned for unconditional preservation.
     """
 
     configured_tokens = split_caption_tokens(class_tokens, separator)
     resolved_tokens = configured_tokens or find_caption_class_tokens(caption, separator)
-    return f"{separator} ".join(resolved_tokens) if resolved_tokens else None
+    return f"{separator} ".join(resolved_tokens)

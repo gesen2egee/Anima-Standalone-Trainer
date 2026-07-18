@@ -23,8 +23,8 @@ def test_dataset_class_overrides_detected_caption_tags():
     assert build_preservation_prompt("Alice, 1girl, outdoors", class_tokens="woman") == "woman"
 
 
-def test_missing_dataset_and_caption_class_skips_preservation():
-    assert build_preservation_prompt("Alice, outdoors, smiling") is None
+def test_missing_dataset_and_caption_class_uses_empty_bpp_prompt():
+    assert build_preservation_prompt("Alice, outdoors, smiling") == ""
 
 
 def test_custom_separator_is_supported():

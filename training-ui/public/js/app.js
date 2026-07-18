@@ -3055,7 +3055,7 @@ function renderSubsets() {
                 <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">DOP Class Token（選填）</label>
                     <input type="text" class="sub-class-tokens" value="${escapeHtml(subset.class_tokens ?? "")}" placeholder="例如：woman；留空自動辨識 1girl、2boys 等 tag">
-                    <small style="display:block; font-size: 0.7rem; color: var(--text-muted);">有設定時直接作為 DOP class word；留空會從 Caption 自動辨識，沒有符合 tag 時略過該筆 DOP。</small>
+                    <small style="display:block; font-size: 0.7rem; color: var(--text-muted);">有設定時直接作為 DOP class word；留空會從 Caption 自動辨識，沒有符合 tag 時使用空 Caption 保護（等同 BPP）。</small>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">打標輸出成 Caption</label>
