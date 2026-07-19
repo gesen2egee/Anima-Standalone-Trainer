@@ -3,7 +3,10 @@ transformers==4.57.6
 diffusers[torch]==0.32.1
 ftfy==6.3.1
 # albumentations==1.3.0
-opencv-python==4.10.0.84
+# Keep every OpenCV wheel on 5.0. PaddleX 3.7.2 pins contrib 4.10 in its
+# metadata, so PaddleOCR/PaddleX themselves are installed with --no-deps.
+opencv-python==5.0.0.93
+opencv-contrib-python==5.0.0.93
 einops==0.7.0
 # pytorch-lightning==1.9.0
 bitsandbytes
@@ -25,8 +28,24 @@ huggingface-hub==0.34.3
 # for Image utils
 imagesize==1.4.1
 transparent-background==1.3.4
-numpy
-# <=2.0
+numpy>=2,<2.4
+# PP-OCRv6 / PaddleX runtime dependencies. See requirements-ppocr.txt.
+aiohttp>=3.8.0
+aistudio-sdk>=0.3.5
+chardet<6
+colorlog
+modelscope>=1.28.0
+pandas>=1.3
+prettytable
+py-cpuinfo
+pydantic>=2
+PyYAML==6.0.2
+ruamel.yaml
+ujson
+pyclipper
+pypdfium2>=4
+python-bidi
+shapely
 # for BLIP captioning
 # requests==2.28.2
 # timm==0.6.12

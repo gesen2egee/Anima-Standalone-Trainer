@@ -1,0 +1,6 @@
+# Installed with --no-deps by setup.bat / upgrade.bat.
+# PaddleX 3.7.2 declares opencv-contrib-python==4.10.0.84, but its OCR
+# runtime has been verified with OpenCV 5.0.0.93. Supporting dependencies
+# are declared explicitly in requirements.txt to keep OpenCV 5.0 installed.
+paddleocr==3.7.0
+paddlex==3.7.2

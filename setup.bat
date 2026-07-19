@@ -6,6 +6,7 @@ set "ROOT=%~dp0"
 set "VENV_DIR=%ROOT%venv"
 set "VENV_PY=%ROOT%venv\Scripts\python.exe"
 set "REQ_FILE=%ROOT%requirements.txt"
+set "PPOCR_REQ_FILE=%ROOT%requirements-ppocr.txt"
 set "TORCH_REQ_FILE=%ROOT%requirements-cu128.txt"
 set "ACCELERATE_CONFIG=%USERPROFILE%\.cache\huggingface\accelerate\default_config.yaml"
 if defined HF_HOME set "ACCELERATE_CONFIG=%HF_HOME%\accelerate\default_config.yaml"
@@ -30,6 +31,11 @@ if not exist "%TORCH_REQ_FILE%" (
     goto :fail
 )
 
+if not exist "%PPOCR_REQ_FILE%" (
+    echo [ERROR] 找不到 requirements-ppocr.txt，請確認 PPOCR 依賴檔放在專案根目錄。
+    goto :fail
+)
+
 where git >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] 找不到 Git。requirements.txt 包含 Git 依賴，請先安裝 Git。
@@ -37,7 +43,7 @@ if errorlevel 1 (
 )
 
 if not exist "%VENV_PY%" (
-    echo [1/6] 建立 Python venv...
+    echo [1/7] 建立 Python venv...
     set "PYTHON_CMD="
     where py >nul 2>nul
     if not errorlevel 1 (
@@ -62,7 +68,7 @@ if not exist "%VENV_PY%" (
     %PYTHON_CMD% -m venv "%VENV_DIR%"
     if errorlevel 1 goto :fail
 ) else (
-    echo [1/6] 已找到現有 venv，略過建立。
+    echo [1/7] 已找到現有 venv，略過建立。
 )
 
 "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
@@ -71,19 +77,28 @@ if errorlevel 1 (
     goto :fail
 )
 
-echo [2/6] 更新 pip / setuptools / wheel...
+echo [2/7] 更新 pip / setuptools / wheel...
 "%VENV_PY%" -m pip install --upgrade pip setuptools wheel
 if errorlevel 1 goto :fail
 
-echo [3/6] 安裝 CUDA 12.8 PyTorch requirements...
+echo [3/7] 安裝 CUDA 12.8 PyTorch requirements...
 "%VENV_PY%" -m pip install --upgrade -r "%TORCH_REQ_FILE%"
 if errorlevel 1 goto :fail
 
-echo [4/6] 安裝 Python requirements...
+echo [4/7] 安裝 Python requirements...
 "%VENV_PY%" -m pip install --upgrade -r "%REQ_FILE%"
 if errorlevel 1 goto :fail
 
-echo [5/6] 設定 Accelerate...
+echo [5/7] 安裝 PP-OCRv6 requirements 並保留 OpenCV 5.0...
+"%VENV_PY%" -m pip install --upgrade --no-deps -r "%PPOCR_REQ_FILE%"
+if errorlevel 1 goto :fail
+"%VENV_PY%" -c "import cv2, paddleocr, paddlex; raise SystemExit(0 if cv2.__version__ == '5.0.0' else 1)"
+if errorlevel 1 (
+    echo [ERROR] PP-OCRv6 安裝驗證失敗，或實際載入的 OpenCV 不是 5.0.0。
+    goto :fail
+)
+
+echo [6/7] 設定 Accelerate...
 if exist "%ACCELERATE_CONFIG%" (
     echo 已找到 Accelerate 設定，略過互動設定。
 ) else (
@@ -116,7 +131,7 @@ if not exist "%ROOT%training-ui\package.json" (
     goto :fail
 )
 
-echo [6/6] 安裝 Training UI Node dependencies...
+echo [7/7] 安裝 Training UI Node dependencies...
 pushd "%ROOT%training-ui"
 if errorlevel 1 goto :fail
 call npm install
