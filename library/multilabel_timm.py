@@ -40,6 +40,9 @@ KAOMOJIS = {
 
 DEFAULT_REPO_ID = "Makki2104/animetimm/eva02_large_patch14_448.dbv4-full"
 DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
+DEFAULT_PPOCR_DEVICE = os.environ.get("ANIMA_PPOCR_DEVICE", "cpu")
+DEFAULT_PPOCR_MODEL_TIER = "medium"
+DEFAULT_PPOCR_MIN_SCORE = 0.45
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 FMT_UNSET = object()
 _DLL_DIRECTORY_HANDLES = []
@@ -58,6 +61,83 @@ def preload_torch_cuda_dlls() -> None:
     torch_lib = Path(torch.__file__).resolve().parent / "lib"
     if torch_lib.exists() and hasattr(os, "add_dll_directory"):
         _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(torch_lib)))
+
+
+def normalize_ocr_caption_text(value: Any) -> str:
+    text = str(value or "").replace(",", " ").replace("，", " ").replace("、", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def quote_ocr_caption_text(value: Any) -> str:
+    text = normalize_ocr_caption_text(value)
+    return f'"{text.replace(chr(34), chr(34) * 2)}"' if text else ""
+
+
+def append_ocr_caption_text(caption: str, ocr_texts: Iterable[Any]) -> str:
+    parts = [caption] if caption else []
+    parts.extend(quoted for text in ocr_texts if (quoted := quote_ocr_caption_text(text)))
+    return ", ".join(parts)
+
+
+def extract_paddleocr_texts(results: Iterable[Any], min_score: float = DEFAULT_PPOCR_MIN_SCORE) -> list[str]:
+    texts = []
+    for result in results:
+        payload = getattr(result, "json", result)
+        if callable(payload):
+            payload = payload()
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, Mapping):
+            continue
+        payload = payload.get("res", payload)
+        if not isinstance(payload, Mapping):
+            continue
+        rec_texts = payload.get("rec_texts", [])
+        rec_scores = payload.get("rec_scores", [])
+        for index, text in enumerate(rec_texts):
+            score = float(rec_scores[index]) if index < len(rec_scores) else 1.0
+            normalized = normalize_ocr_caption_text(text)
+            if normalized and score >= min_score:
+                texts.append(normalized)
+    return texts
+
+
+class PaddleOcrCaptioner:
+    def __init__(
+        self,
+        device: str = DEFAULT_PPOCR_DEVICE,
+        model_tier: str = DEFAULT_PPOCR_MODEL_TIER,
+        min_score: float = DEFAULT_PPOCR_MIN_SCORE,
+    ):
+        tier = model_tier.strip().lower()
+        if tier not in {"medium", "small"}:
+            raise ValueError("PP-OCRv6 model tier must be medium or small")
+
+        if device.lower().startswith("gpu"):
+            preload_torch_cuda_dlls()
+            import torch  # noqa: F401 - preload CUDA/cuDNN DLLs before ONNX Runtime
+            import onnxruntime as ort
+
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls()
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                raise RuntimeError("ONNX Runtime CUDAExecutionProvider is unavailable")
+
+        from paddleocr import PaddleOCR
+
+        self.min_score = float(min_score)
+        self.pipeline = PaddleOCR(
+            text_detection_model_name=f"PP-OCRv6_{tier}_det",
+            text_recognition_model_name=f"PP-OCRv6_{tier}_rec",
+            engine="onnxruntime",
+            device=device,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+
+    def predict_texts(self, image_path: Union[str, os.PathLike]) -> list[str]:
+        return extract_paddleocr_texts(self.pipeline.predict(str(image_path)), min_score=self.min_score)
 
 
 def remove_underline(tag: str) -> str:
@@ -582,6 +662,10 @@ def write_captions_for_directory(
     include_char: bool = True,
     include_rating: bool = True,
     include_general: bool = True,
+    include_ocr: bool = True,
+    ocr_device: str = DEFAULT_PPOCR_DEVICE,
+    ocr_model_tier: str = DEFAULT_PPOCR_MODEL_TIER,
+    ocr_min_score: float = DEFAULT_PPOCR_MIN_SCORE,
     image_list: Optional[Union[str, os.PathLike]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, int]:
@@ -591,6 +675,11 @@ def write_captions_for_directory(
     failed = 0
     if progress_callback:
         progress_callback({"type": "start", "total": len(image_paths), "written": written, "failed": failed})
+    ocr_captioner = (
+        PaddleOcrCaptioner(device=ocr_device, model_tier=ocr_model_tier, min_score=ocr_min_score)
+        if include_ocr and image_paths
+        else None
+    )
     for index, image_path in enumerate(image_paths, start=1):
         error = None
         try:
@@ -608,6 +697,8 @@ def write_captions_for_directory(
                 include_rating=include_rating,
                 include_general=include_general,
             )
+            if ocr_captioner is not None:
+                caption = append_ocr_caption_text(caption, ocr_captioner.predict_texts(image_path))
             image_path.with_suffix(caption_extension).write_text(caption, encoding="utf-8")
             written += 1
         except Exception as exc:
@@ -636,6 +727,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-char", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-rating", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-general", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-ocr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--ocr-device", default=DEFAULT_PPOCR_DEVICE)
+    parser.add_argument("--ocr-model-tier", choices=("medium", "small"), default=DEFAULT_PPOCR_MODEL_TIER)
+    parser.add_argument("--ocr-min-score", type=float, default=DEFAULT_PPOCR_MIN_SCORE)
     parser.add_argument("--image-list", default=None)
     return parser
 
@@ -655,6 +750,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             include_char=args.include_char,
             include_rating=args.include_rating,
             include_general=args.include_general,
+            include_ocr=args.include_ocr,
+            ocr_device=args.ocr_device,
+            ocr_model_tier=args.ocr_model_tier,
+            ocr_min_score=args.ocr_min_score,
             image_list=args.image_list,
             progress_callback=emit,
         )
