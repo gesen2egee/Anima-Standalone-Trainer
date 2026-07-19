@@ -2409,9 +2409,6 @@ function populateDataset(dataset) {
     keep_tags: s.keep_tags ?? DEFAULT_KEEP_TAGS,
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
-    tagger_caption_mode: ["ocr", "nl", "ocr_nl"].includes(s.tagger_caption_mode)
-      ? s.tagger_caption_mode
-      : "ocr",
     caption_dropout_rate: s.caption_dropout_rate ?? 0.0,
     caption_tag_dropout_rate: s.caption_tag_dropout_rate ?? 0.3,
     caption_dropout_every_n_epochs: s.caption_dropout_every_n_epochs ?? 0,
@@ -2931,9 +2928,6 @@ function gatherDataset() {
               keep_tags: s.keep_tags ?? "",
               flip_aug: s.flip_aug,
               caption_prefix: s.caption_prefix,
-              tagger_caption_mode: ["ocr", "nl", "ocr_nl"].includes(s.tagger_caption_mode)
-                ? s.tagger_caption_mode
-                : "ocr",
               caption_dropout_rate: safeFloat(s.caption_dropout_rate),
               caption_tag_dropout_rate: safeFloat(s.caption_tag_dropout_rate),
               caption_dropout_every_n_epochs: safeInt(

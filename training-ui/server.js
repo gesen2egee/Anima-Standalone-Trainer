@@ -1078,6 +1078,33 @@ function broadcastQueueChanged() {
 }
 
 // Build the full TOML config file for training, merging global model paths + job paths
+function stripTaggerUiFields(datasetConfig) {
+    let changed = false;
+    const datasets = Array.isArray(datasetConfig?.datasets)
+        ? datasetConfig.datasets
+        : datasetConfig?.datasets ? [datasetConfig.datasets] : [];
+    for (const dataset of datasets) {
+        const subsets = Array.isArray(dataset?.subsets)
+            ? dataset.subsets
+            : dataset?.subsets ? [dataset.subsets] : [];
+        for (const subset of subsets) {
+            if (subset && Object.prototype.hasOwnProperty.call(subset, 'tagger_caption_mode')) {
+                delete subset.tagger_caption_mode;
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+function sanitizeDatasetFile(datasetPath) {
+    if (!fs.existsSync(datasetPath)) return;
+    const datasetConfig = TOML.parse(fs.readFileSync(datasetPath, 'utf8'));
+    if (stripTaggerUiFields(datasetConfig)) {
+        fs.writeFileSync(datasetPath, TOML.stringify(datasetConfig), 'utf8');
+    }
+}
+
 function buildTrainingConfig(jobName, jobPath) {
     const globalConfig = getGlobalConfig();
     const configPath = path.join(jobPath, 'config.toml');
@@ -1087,6 +1114,7 @@ function buildTrainingConfig(jobName, jobPath) {
     const loggingDir = outputDir;
     const datasetConfigPath = path.join(jobPath, 'dataset.toml');
     const samplePromptsPath = path.join(jobPath, 'sample_prompts.txt');
+    sanitizeDatasetFile(datasetConfigPath);
 
     // Build the merged config
     const merged = {};
@@ -1619,6 +1647,7 @@ app.put('/api/jobs/:name', (req, res) => {
                 ? TOML.parse(fs.readFileSync(datasetPath, 'utf8'))
                 : {};
             const mergedDataset = mergeDatasetConfigPreservingUnknown(existingDataset, req.body.dataset);
+            stripTaggerUiFields(mergedDataset);
             fs.writeFileSync(datasetPath, TOML.stringify(mergedDataset), 'utf8');
         }
 
