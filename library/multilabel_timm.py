@@ -64,7 +64,7 @@ def preload_torch_cuda_dlls() -> None:
 
 
 def normalize_ocr_caption_text(value: Any) -> str:
-    text = str(value or "").replace(",", " ").replace("，", " ").replace("、", " ")
+    text = str(value or "").replace(",", " ")
     return re.sub(r"\s+", " ", text).strip()
 
 
