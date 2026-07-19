@@ -1821,6 +1821,22 @@ custom_cli_args = ""</textarea>
                     </div>
 
                     <div class="form-group" style="margin-top: 15px;">
+                        <label>OpenRouter Caption API URL</label>
+                        <input type="text" id="cfg-openrouter-url" value="https://openrouter.ai/api/v1" placeholder="https://openrouter.ai/api/v1">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 12px;">
+                        <label>OpenRouter API Key</label>
+                        <input type="password" id="cfg-openrouter-key" autocomplete="off" placeholder="留空時使用 OPENROUTER_API_KEY">
+                        <small>儲存在本機 Training UI 設定；留空會使用環境變數。</small>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 12px;">
+                        <label>OpenRouter Caption Model</label>
+                        <input type="text" id="cfg-openrouter-model" value="perceptron/perceptron-mk1" placeholder="perceptron/perceptron-mk1">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 15px;">
                         <label>Theme</label>
                         <select id="cfg-theme">
                             <option value="github-dark">GitHub Dark</option>

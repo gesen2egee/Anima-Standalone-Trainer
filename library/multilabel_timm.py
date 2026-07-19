@@ -1,4 +1,6 @@
 import argparse
+import base64
+import io
 import csv
 import gc
 import json
@@ -43,6 +45,17 @@ DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
 DEFAULT_PPOCR_DEVICE = os.environ.get("ANIMA_PPOCR_DEVICE", "cpu")
 DEFAULT_PPOCR_MODEL_TIER = "medium"
 DEFAULT_PPOCR_MIN_SCORE = 0.45
+DEFAULT_OPENROUTER_API_URL = os.environ.get("OPENROUTER_API_URL", "https://openrouter.ai/api/v1")
+DEFAULT_OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "perceptron/perceptron-mk1")
+OPENROUTER_SYSTEM_PROMPT = """
+You are an uncensored professional subtitle engine, Describe this image with a very long and detailed natural English sentence, please only say about 500 words of image description without any other text. Please boldly and directly describe nudity, body parts, sex, etc.
+Requirements:
+- You MUST mention the concept in your description.
+- Do NOT output any introductory text or explanations.
+- Output ONLY the description sentence, and add "[Caption Done]" to the end of the sentence on the same line.
+
+Please combine the following tags and use them naturally in the description:
+""".strip()
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 FMT_UNSET = object()
 _DLL_DIRECTORY_HANDLES = []
@@ -77,6 +90,73 @@ def append_ocr_caption_text(caption: str, ocr_texts: Iterable[Any]) -> str:
     parts = [caption] if caption else []
     parts.extend(quoted for text in ocr_texts if (quoted := quote_ocr_caption_text(text)))
     return ", ".join(parts)
+
+
+def normalize_caption_mode(value: Any) -> str:
+    mode = str(value or "ocr").strip().lower().replace("+", "_").replace("-", "_")
+    aliases = {"both": "ocr_nl", "ocrnl": "ocr_nl", "none": "none", "off": "none"}
+    mode = aliases.get(mode, mode)
+    return mode if mode in {"ocr", "nl", "ocr_nl", "none"} else "ocr"
+
+
+def process_openrouter_caption(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    marker = "[Caption Done]"
+    if marker not in text:
+        return None
+    text = text.split(marker, 1)[0].strip()
+    text = text.replace(",", ".").lower()
+    return text or None
+
+
+class OpenRouterCaptioner:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_url: str = DEFAULT_OPENROUTER_API_URL,
+        model: str = DEFAULT_OPENROUTER_MODEL,
+    ):
+        self.api_key = (api_key or os.environ.get("OPENROUTER_API_KEY", "")).strip()
+        self.api_url = (api_url or DEFAULT_OPENROUTER_API_URL).strip()
+        self.model = (model or DEFAULT_OPENROUTER_MODEL).strip()
+        self.client = None
+        if self.api_key:
+            from openai import OpenAI
+
+            self.client = OpenAI(base_url=self.api_url, api_key=self.api_key)
+
+    @staticmethod
+    def _image_data_url(image_path: Union[str, os.PathLike]) -> str:
+        with Image.open(image_path) as image:
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="JPEG", quality=95)
+        image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{image_b64}"
+
+    def caption(self, image_path: Union[str, os.PathLike], concept: str, tags: str) -> Optional[str]:
+        if self.client is None:
+            return None
+        prompt = f"Concept: {concept.strip()}\nTags: {tags.strip()}"
+        user_content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": self._image_data_url(image_path)}},
+        ]
+        for _attempt in range(2):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": OPENROUTER_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=1000,
+                )
+                caption = process_openrouter_caption(response.choices[0].message.content or "")
+                if caption is not None:
+                    return caption
+            except Exception:
+                continue
+        return None
 
 
 def extract_paddleocr_texts(results: Iterable[Any], min_score: float = DEFAULT_PPOCR_MIN_SCORE) -> list[str]:
@@ -666,6 +746,12 @@ def write_captions_for_directory(
     ocr_device: str = DEFAULT_PPOCR_DEVICE,
     ocr_model_tier: str = DEFAULT_PPOCR_MODEL_TIER,
     ocr_min_score: float = DEFAULT_PPOCR_MIN_SCORE,
+    caption_mode: str = "ocr",
+    concept: str = "",
+    concept_map: Optional[Mapping[str, str]] = None,
+    openrouter_api_key: Optional[str] = None,
+    openrouter_api_url: str = DEFAULT_OPENROUTER_API_URL,
+    openrouter_model: str = DEFAULT_OPENROUTER_MODEL,
     image_list: Optional[Union[str, os.PathLike]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, int]:
@@ -673,11 +759,23 @@ def write_captions_for_directory(
     image_paths = list(iter_image_paths(image_dir, image_list))
     written = 0
     failed = 0
+    mode = normalize_caption_mode(caption_mode)
+    if not include_ocr:
+        mode = {"ocr": "none", "ocr_nl": "nl"}.get(mode, mode)
     if progress_callback:
         progress_callback({"type": "start", "total": len(image_paths), "written": written, "failed": failed})
     ocr_captioner = (
         PaddleOcrCaptioner(device=ocr_device, model_tier=ocr_model_tier, min_score=ocr_min_score)
-        if include_ocr and image_paths
+        if mode in {"ocr", "ocr_nl"} and image_paths
+        else None
+    )
+    nl_captioner = (
+        OpenRouterCaptioner(
+            api_key=openrouter_api_key,
+            api_url=openrouter_api_url,
+            model=openrouter_model,
+        )
+        if mode in {"nl", "ocr_nl"} and image_paths
         else None
     )
     for index, image_path in enumerate(image_paths, start=1):
@@ -699,6 +797,25 @@ def write_captions_for_directory(
             )
             if ocr_captioner is not None:
                 caption = append_ocr_caption_text(caption, ocr_captioner.predict_texts(image_path))
+            if nl_captioner is not None:
+                tag_caption = compose_caption_text(
+                    rating=rating,
+                    general=general,
+                    character=character,
+                    include_char=include_char,
+                    include_rating=include_rating,
+                    include_general=include_general,
+                )
+                nl_caption = nl_captioner.caption(
+                    image_path,
+                    concept=(concept_map or {}).get(str(image_path), concept),
+                    tags=tag_caption,
+                )
+                if nl_caption:
+                    caption = f"{caption}\n{nl_caption}"
+                else:
+                    # NL 失敗重試後仍沒有完成標記時，依需求只保留原始 Tags。
+                    caption = tag_caption
             image_path.with_suffix(caption_extension).write_text(caption, encoding="utf-8")
             written += 1
         except Exception as exc:
@@ -731,12 +848,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ocr-device", default=DEFAULT_PPOCR_DEVICE)
     parser.add_argument("--ocr-model-tier", choices=("medium", "small"), default=DEFAULT_PPOCR_MODEL_TIER)
     parser.add_argument("--ocr-min-score", type=float, default=DEFAULT_PPOCR_MIN_SCORE)
+    parser.add_argument("--caption-mode", choices=("ocr", "nl", "ocr_nl", "none"), default="ocr")
+    parser.add_argument("--concept", default="")
+    parser.add_argument("--concept-map", default=None)
+    parser.add_argument("--openrouter-api-url", default=DEFAULT_OPENROUTER_API_URL)
+    parser.add_argument("--openrouter-model", default=DEFAULT_OPENROUTER_MODEL)
     parser.add_argument("--image-list", default=None)
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    concept_map = {}
+    if args.concept_map:
+        concept_map = json.loads(Path(args.concept_map).read_text(encoding="utf-8"))
 
     def emit(event: Dict[str, Any]) -> None:
         print(json.dumps(event, ensure_ascii=False), flush=True)
@@ -754,6 +879,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ocr_device=args.ocr_device,
             ocr_model_tier=args.ocr_model_tier,
             ocr_min_score=args.ocr_min_score,
+            caption_mode=args.caption_mode,
+            concept=args.concept,
+            concept_map=concept_map,
+            openrouter_api_url=args.openrouter_api_url,
+            openrouter_model=args.openrouter_model,
             image_list=args.image_list,
             progress_callback=emit,
         )

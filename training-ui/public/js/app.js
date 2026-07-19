@@ -2409,6 +2409,9 @@ function populateDataset(dataset) {
     keep_tags: s.keep_tags ?? DEFAULT_KEEP_TAGS,
     flip_aug: s.flip_aug ?? false,
     caption_prefix: s.caption_prefix || "",
+    tagger_caption_mode: ["ocr", "nl", "ocr_nl"].includes(s.tagger_caption_mode)
+      ? s.tagger_caption_mode
+      : "ocr",
     caption_dropout_rate: s.caption_dropout_rate ?? 0.0,
     caption_tag_dropout_rate: s.caption_tag_dropout_rate ?? 0.3,
     caption_dropout_every_n_epochs: s.caption_dropout_every_n_epochs ?? 0,
@@ -2928,6 +2931,9 @@ function gatherDataset() {
               keep_tags: s.keep_tags ?? "",
               flip_aug: s.flip_aug,
               caption_prefix: s.caption_prefix,
+              tagger_caption_mode: ["ocr", "nl", "ocr_nl"].includes(s.tagger_caption_mode)
+                ? s.tagger_caption_mode
+                : "ocr",
               caption_dropout_rate: safeFloat(s.caption_dropout_rate),
               caption_tag_dropout_rate: safeFloat(s.caption_tag_dropout_rate),
               caption_dropout_every_n_epochs: safeInt(
@@ -2969,6 +2975,7 @@ function addSubset(shouldRender = true) {
     keep_tags: DEFAULT_KEEP_TAGS,
     flip_aug: false,
     caption_prefix: "",
+    tagger_caption_mode: "ocr",
     caption_dropout_rate: 0.1,
     caption_tag_dropout_rate: 0.0,
     caption_dropout_every_n_epochs: 0,
@@ -3008,6 +3015,9 @@ function renderSubsets() {
       ? subset.image_dir.split(/[\\/]/).pop()
       : "Empty Path";
     const taggerCaptionExtension = escapeHtml($("cfg-caption-ext")?.value || ".txt");
+    const taggerCaptionMode = ["ocr", "nl", "ocr_nl"].includes(subset.tagger_caption_mode)
+      ? subset.tagger_caption_mode
+      : "ocr";
     card.innerHTML = `
             <div class="prompt-card-header" style="justify-content: space-between; align-items: center; border-bottom: ${isCollapsed ? "none" : "1px solid var(--border)"}; padding-bottom: ${isCollapsed ? "0" : "8px"}; margin-bottom: ${isCollapsed ? "0" : "12px"};">
                 <div style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;" class="subset-toggle">
@@ -3067,6 +3077,14 @@ function renderSubsets() {
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-char" checked> CHAR</label>
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-rating" checked> RATING</label>
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-general" checked> GENERAL</label>
+                        <div class="form-group" style="min-width: 135px; margin: 0 0 0 4px;">
+                            <label style="font-size: 0.75rem;">輸出模式</label>
+                            <select class="sub-tagger-caption-mode">
+                                <option value="ocr" ${taggerCaptionMode === "ocr" ? "selected" : ""}>OCR</option>
+                                <option value="nl" ${taggerCaptionMode === "nl" ? "selected" : ""}>NL</option>
+                                <option value="ocr_nl" ${taggerCaptionMode === "ocr_nl" ? "selected" : ""}>OCR + NL</option>
+                            </select>
+                        </div>
                         <button type="button" class="btn btn-secondary btn-run-subset-tagger">打標輸出成 Caption</button>
                     </div>
                     <progress class="sub-tagger-progress" value="0" max="1" style="width: 100%; margin-top: 8px;"></progress>
@@ -3143,6 +3161,7 @@ function renderSubsets() {
         );
         subset.caption_prefix = card.querySelector(".sub-caption-prefix").value;
         subset.class_tokens = card.querySelector(".sub-class-tokens").value;
+        subset.tagger_caption_mode = card.querySelector(".sub-tagger-caption-mode").value;
         subset.keep_tags = card.querySelector(".sub-keep-tags").value;
         subset.caption_dropout_rate = safeFloat(
           card.querySelector(".sub-caption-dropout").value,
@@ -3212,6 +3231,8 @@ async function runSubsetTagger(card, idx) {
   const includeChar = !!card.querySelector(".sub-tagger-enable-char")?.checked;
   const includeRating = !!card.querySelector(".sub-tagger-enable-rating")?.checked;
   const includeGeneral = !!card.querySelector(".sub-tagger-enable-general")?.checked;
+  const captionMode = card.querySelector(".sub-tagger-caption-mode")?.value || "ocr";
+  const concept = card.querySelector(".sub-caption-prefix")?.value.trim() || "";
   const button = card.querySelector(".btn-run-subset-tagger");
   const status = card.querySelector(".sub-tagger-status");
   const progress = card.querySelector(".sub-tagger-progress");
@@ -3273,6 +3294,8 @@ async function runSubsetTagger(card, idx) {
           include_char: includeChar,
           include_rating: includeRating,
           include_general: includeGeneral,
+          caption_mode: captionMode,
+          concept,
         }),
       },
     );
@@ -4724,6 +4747,9 @@ async function loadGlobalSettings() {
     }
   }
   $("cfg-global-venv").value = config.venv_path || "";
+  $("cfg-openrouter-url").value = config.openrouter?.api_url || "https://openrouter.ai/api/v1";
+  $("cfg-openrouter-key").value = config.openrouter?.api_key || "";
+  $("cfg-openrouter-model").value = config.openrouter?.model || "perceptron/perceptron-mk1";
   const jobsDirInput = $("cfg-global-jobs-dir");
   if (jobsDirInput) jobsDirInput.value = config.jobs_dir || "";
   // Theme
@@ -4788,6 +4814,12 @@ async function saveGlobalSettings() {
     model_paths,
     venv_path: $("cfg-global-venv").value,
     jobs_dir: jobsDirInput?.value || "",
+    openrouter: {
+      ...(existingConfig.openrouter || {}),
+      api_url: $("cfg-openrouter-url").value.trim() || "https://openrouter.ai/api/v1",
+      api_key: $("cfg-openrouter-key").value.trim(),
+      model: $("cfg-openrouter-model").value.trim() || "perceptron/perceptron-mk1",
+    },
     ui: {
       ...(existingConfig.ui || {}),
       theme: $("cfg-theme").value,

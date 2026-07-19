@@ -661,10 +661,18 @@ function getJobPath(name) {
 }
 
 function getGlobalConfig() {
+    const defaultOpenRouter = {
+        api_url: process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1',
+        api_key: process.env.OPENROUTER_API_KEY || '',
+        model: process.env.OPENROUTER_MODEL || 'perceptron/perceptron-mk1'
+    };
     if (fs.existsSync(GLOBAL_CONFIG_PATH)) {
         try {
             const config = TOML.parse(fs.readFileSync(GLOBAL_CONFIG_PATH, 'utf8'));
-            return config;
+            return {
+                ...config,
+                openrouter: { ...defaultOpenRouter, ...(config.openrouter || {}) },
+            };
         } catch (err) {
             console.error('Failed to parse global config:', err.message);
         }
@@ -681,7 +689,8 @@ function getGlobalConfig() {
             krea2_vae_path: ''
         },
         venv_path: path.join(ROOT_DIR, 'venv'),
-        jobs_dir: DEFAULT_JOBS_DIR
+        jobs_dir: DEFAULT_JOBS_DIR,
+        openrouter: defaultOpenRouter
     };
 }
 
@@ -1279,6 +1288,11 @@ app.put('/api/global-config', (req, res) => {
                 body.model_paths[key] = stripQuotes(body.model_paths[key]);
             }
         }
+        if (body.openrouter) {
+            body.openrouter.api_url = String(body.openrouter.api_url || 'https://openrouter.ai/api/v1').trim();
+            body.openrouter.model = String(body.openrouter.model || 'perceptron/perceptron-mk1').trim();
+            body.openrouter.api_key = String(body.openrouter.api_key || '').trim();
+        }
         const tomlStr = TOML.stringify(body);
         fs.writeFileSync(GLOBAL_CONFIG_PATH, tomlStr, 'utf8');
         res.json({ success: true });
@@ -1398,7 +1412,6 @@ app.post('/api/jobs', (req, res) => {
         if (network_module && !requestedArchitecture.network_modules.includes(network_module)) {
             return res.status(400).json({ error: `${network_module} is not supported by ${requestedArchitecture.display_name}` });
         }
-
         const jobsDir = getJobsDir();
         const existingNames = fs.existsSync(jobsDir)
             ? fs.readdirSync(jobsDir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)
@@ -1627,8 +1640,9 @@ function summarizeMatchedFolders(folders) {
     }));
 }
 
-function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '') {
+function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '', requestedConcept = '') {
     const requested = stripQuotes(String(requestedImageDir || '').trim());
+    const cleanRequestedConcept = String(requestedConcept || '').trim().replace(/,\s*$/, '');
     const folders = [];
 
     if (requested) {
@@ -1636,7 +1650,8 @@ function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '') {
         folders.push({
             imageDir: requested,
             nativeImageDir: nativeDir,
-            imagePaths: listSdScriptsImages(nativeDir)
+            imagePaths: listSdScriptsImages(nativeDir),
+            concept: cleanRequestedConcept
         });
     } else {
         const datasetPath = path.join(jobPath, 'dataset.toml');
@@ -1651,7 +1666,12 @@ function resolveTaggerTargetsForJob(jobPath, requestedImageDir = '') {
                 const nativeDir = toNativePath(imageDir);
                 const imagePaths = listSdScriptsImages(nativeDir);
                 if (imagePaths.length < 1) continue;
-                folders.push({ imageDir, nativeImageDir: nativeDir, imagePaths });
+                folders.push({
+                    imageDir,
+                    nativeImageDir: nativeDir,
+                    imagePaths,
+                    concept: String(subset.caption_prefix || '').trim().replace(/,\s*$/, '')
+                });
             }
         }
     }
@@ -1827,13 +1847,17 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
         }
 
         const requestedImageDir = stripQuotes(String(req.body.image_dir || '').trim());
+        const requestedConcept = String(req.body.concept || '').trim();
         const caption_extension = normalizeCaptionExtension(req.body.caption_extension || '.txt');
         const include_char = req.body.include_char !== false;
         const include_rating = req.body.include_rating !== false;
         const include_general = req.body.include_general !== false;
+        const captionMode = ['ocr', 'nl', 'ocr_nl', 'none'].includes(String(req.body.caption_mode || 'ocr'))
+            ? String(req.body.caption_mode || 'ocr')
+            : 'ocr';
         const repoId = String(req.body.repo_id || 'Makki2104/animetimm/eva02_large_patch14_448.dbv4-full').trim();
 
-        const targets = resolveTaggerTargetsForJob(jobPath, requestedImageDir);
+        const targets = resolveTaggerTargetsForJob(jobPath, requestedImageDir, requestedConcept);
         if (requestedImageDir) {
             const nativeRequestedDir = toNativePath(requestedImageDir);
             if (!fs.existsSync(nativeRequestedDir) || !fs.statSync(nativeRequestedDir).isDirectory()) {
@@ -1862,7 +1886,15 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
         const taggerLogsDir = path.join(jobPath, 'logs');
         fs.mkdirSync(taggerLogsDir, { recursive: true });
         const imageListPath = path.join(taggerLogsDir, `tagger_images_${Date.now()}.txt`);
+        const conceptMapPath = path.join(taggerLogsDir, `tagger_concepts_${Date.now()}.json`);
         fs.writeFileSync(imageListPath, targets.imagePaths.join('\n'), 'utf8');
+        const conceptMap = {};
+        for (const folder of targets.folders) {
+            for (const imagePath of folder.imagePaths) {
+                conceptMap[imagePath] = folder.concept || '';
+            }
+        }
+        fs.writeFileSync(conceptMapPath, JSON.stringify(conceptMap), 'utf8');
 
         const args = [
             taggerScript,
@@ -1870,6 +1902,8 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
             '--image-list', imageListPath,
             '--caption-extension', caption_extension,
             '--repo-id', repoId,
+            '--caption-mode', captionMode,
+            '--concept-map', conceptMapPath,
         ];
         if (!include_char) args.push('--no-include-char');
         if (!include_rating) args.push('--no-include-rating');
@@ -1881,6 +1915,9 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
                 ...process.env,
                 PYTHONIOENCODING: 'utf-8',
                 PYTHONUTF8: '1',
+                OPENROUTER_API_KEY: globalConfig.openrouter?.api_key || process.env.OPENROUTER_API_KEY || '',
+                OPENROUTER_API_URL: globalConfig.openrouter?.api_url || 'https://openrouter.ai/api/v1',
+                OPENROUTER_MODEL: globalConfig.openrouter?.model || 'perceptron/perceptron-mk1',
             },
             windowsHide: true,
         });
@@ -1922,6 +1959,7 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
         });
         child.on('close', code => {
             fs.promises.unlink(imageListPath).catch(() => {});
+            fs.promises.unlink(conceptMapPath).catch(() => {});
             if (stdoutBuffer.trim()) {
                 try {
                     const event = JSON.parse(stdoutBuffer.trim());

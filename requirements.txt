@@ -25,6 +25,7 @@ safetensors==0.4.5
 toml==0.10.2
 voluptuous==0.15.2
 huggingface-hub==0.34.3
+openai>=1.40.0
 # for Image utils
 imagesize==1.4.1
 transparent-background==1.3.4
