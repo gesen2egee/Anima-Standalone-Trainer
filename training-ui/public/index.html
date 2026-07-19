@@ -1821,18 +1821,19 @@ custom_cli_args = ""</textarea>
                     </div>
 
                     <div class="form-group" style="margin-top: 15px;">
-                        <label>OpenRouter Caption API URL</label>
+                        <label>Caption API URL（OpenAI 相容）</label>
                         <input type="text" id="cfg-openrouter-url" value="https://openrouter.ai/api/v1" placeholder="https://openrouter.ai/api/v1">
+                        <small>OpenRouter 或本地 llama.cpp，例如 http://127.0.0.1:8080/v1。</small>
                     </div>
 
                     <div class="form-group" style="margin-top: 12px;">
-                        <label>OpenRouter API Key</label>
+                        <label>Caption API Key</label>
                         <input type="password" id="cfg-openrouter-key" autocomplete="off" placeholder="留空時使用 OPENROUTER_API_KEY">
-                        <small>儲存在本機 Training UI 設定；留空會使用環境變數。</small>
+                        <small>儲存在本機 Training UI 設定；本地 llama.cpp 通常可填任意非空值。</small>
                     </div>
 
                     <div class="form-group" style="margin-top: 12px;">
-                        <label>OpenRouter Caption Model</label>
+                        <label>Caption Model</label>
                         <input type="text" id="cfg-openrouter-model" value="perceptron/perceptron-mk1" placeholder="perceptron/perceptron-mk1">
                     </div>
 

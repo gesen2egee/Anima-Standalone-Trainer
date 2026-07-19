@@ -2969,7 +2969,8 @@ function addSubset(shouldRender = true) {
     keep_tags: DEFAULT_KEEP_TAGS,
     flip_aug: false,
     caption_prefix: "",
-    tagger_caption_mode: "ocr",
+    tagger_include_ocr: true,
+    tagger_include_nl: false,
     caption_dropout_rate: 0.1,
     caption_tag_dropout_rate: 0.0,
     caption_dropout_every_n_epochs: 0,
@@ -3009,9 +3010,8 @@ function renderSubsets() {
       ? subset.image_dir.split(/[\\/]/).pop()
       : "Empty Path";
     const taggerCaptionExtension = escapeHtml($("cfg-caption-ext")?.value || ".txt");
-    const taggerCaptionMode = ["ocr", "nl", "ocr_nl"].includes(subset.tagger_caption_mode)
-      ? subset.tagger_caption_mode
-      : "ocr";
+    const taggerIncludeOcr = subset.tagger_include_ocr !== false;
+    const taggerIncludeNl = subset.tagger_include_nl === true;
     card.innerHTML = `
             <div class="prompt-card-header" style="justify-content: space-between; align-items: center; border-bottom: ${isCollapsed ? "none" : "1px solid var(--border)"}; padding-bottom: ${isCollapsed ? "0" : "8px"}; margin-bottom: ${isCollapsed ? "0" : "12px"};">
                 <div style="display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1;" class="subset-toggle">
@@ -3071,14 +3071,8 @@ function renderSubsets() {
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-char" checked> CHAR</label>
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-rating" checked> RATING</label>
                         <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-general" checked> GENERAL</label>
-                        <div class="form-group" style="min-width: 135px; margin: 0 0 0 4px;">
-                            <label style="font-size: 0.75rem;">輸出模式</label>
-                            <select class="sub-tagger-caption-mode">
-                                <option value="ocr" ${taggerCaptionMode === "ocr" ? "selected" : ""}>OCR</option>
-                                <option value="nl" ${taggerCaptionMode === "nl" ? "selected" : ""}>NL</option>
-                                <option value="ocr_nl" ${taggerCaptionMode === "ocr_nl" ? "selected" : ""}>OCR + NL</option>
-                            </select>
-                        </div>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-ocr" ${taggerIncludeOcr ? "checked" : ""}> OCR</label>
+                        <label style="font-size: 0.8rem;"><input type="checkbox" class="sub-tagger-enable-nl" ${taggerIncludeNl ? "checked" : ""}> NL</label>
                         <button type="button" class="btn btn-secondary btn-run-subset-tagger">打標輸出成 Caption</button>
                     </div>
                     <progress class="sub-tagger-progress" value="0" max="1" style="width: 100%; margin-top: 8px;"></progress>
@@ -3155,7 +3149,8 @@ function renderSubsets() {
         );
         subset.caption_prefix = card.querySelector(".sub-caption-prefix").value;
         subset.class_tokens = card.querySelector(".sub-class-tokens").value;
-        subset.tagger_caption_mode = card.querySelector(".sub-tagger-caption-mode").value;
+        subset.tagger_include_ocr = card.querySelector(".sub-tagger-enable-ocr").checked;
+        subset.tagger_include_nl = card.querySelector(".sub-tagger-enable-nl").checked;
         subset.keep_tags = card.querySelector(".sub-keep-tags").value;
         subset.caption_dropout_rate = safeFloat(
           card.querySelector(".sub-caption-dropout").value,
@@ -3225,7 +3220,9 @@ async function runSubsetTagger(card, idx) {
   const includeChar = !!card.querySelector(".sub-tagger-enable-char")?.checked;
   const includeRating = !!card.querySelector(".sub-tagger-enable-rating")?.checked;
   const includeGeneral = !!card.querySelector(".sub-tagger-enable-general")?.checked;
-  const captionMode = card.querySelector(".sub-tagger-caption-mode")?.value || "ocr";
+  const includeOcr = !!card.querySelector(".sub-tagger-enable-ocr")?.checked;
+  const includeNl = !!card.querySelector(".sub-tagger-enable-nl")?.checked;
+  const captionMode = includeOcr ? (includeNl ? "ocr_nl" : "ocr") : (includeNl ? "nl" : "none");
   const concept = card.querySelector(".sub-caption-prefix")?.value.trim() || "";
   const button = card.querySelector(".btn-run-subset-tagger");
   const status = card.querySelector(".sub-tagger-status");
