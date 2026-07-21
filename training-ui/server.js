@@ -5,6 +5,7 @@ const path = require('path');
 const TOML = require('@iarna/toml');
 const net = require('net');
 const http = require('http');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const { createJobQueue } = require('./lib/jobQueue');
 const { createQueueCoordinator } = require('./lib/queueCoordinator');
@@ -795,6 +796,21 @@ function updateRuntimeControl(jobName, patch) {
     return next;
 }
 
+function enqueueRuntimeGeneration(jobName, request) {
+    const controlPath = getRuntimeControlPath(jobName);
+    let current = {};
+    try {
+        if (fs.existsSync(controlPath)) current = JSON.parse(fs.readFileSync(controlPath, 'utf8')) || {};
+    } catch (_) {
+        current = {};
+    }
+    const generationQueue = Array.isArray(current.generation_queue) ? current.generation_queue : [];
+    generationQueue.push(request);
+    return updateRuntimeControl(jobName, {
+        generation_queue: generationQueue,
+    });
+}
+
 function findLatestPeftPath(jobName) {
     const outputDir = path.join(getJobPath(jobName), 'output');
     if (!fs.existsSync(outputDir)) return '';
@@ -805,7 +821,7 @@ function findLatestPeftPath(jobName) {
     return candidates[0]?.path || '';
 }
 
-function writeRuntimeGenerationPrompt(jobName, body = {}) {
+function writeRuntimeGenerationPrompt(jobName, body = {}, requestId = crypto.randomUUID()) {
     const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
     if (!clean(body.prompt)) return null;
     const seed = body.seed_mode === 'random'
@@ -824,9 +840,11 @@ function writeRuntimeGenerationPrompt(jobName, body = {}) {
         + (Number.isFinite(flowShift) ? ` --fs ${flowShift}` : '')
         + (Number.isFinite(y1) ? ` --y1 ${y1}` : '')
         + (Number.isFinite(y2) ? ` --y2 ${y2}` : '');
-    const promptPath = path.join(getJobPath(jobName), 'runtime_generation_prompt.txt');
+    const requestDir = path.join(getJobPath(jobName), 'runtime', 'generation_prompts');
+    fs.mkdirSync(requestDir, { recursive: true });
+    const promptPath = path.join(requestDir, `${requestId}.txt`);
     fs.writeFileSync(promptPath, `${line}\n`, 'utf8');
-    return { promptPath, seed };
+    return { promptPath, seed, requestId };
 }
 
 const queueCoordinator = createQueueCoordinator({
@@ -1124,6 +1142,15 @@ function broadcastStatus(jobName, status) {
     broadcastQueueChanged();
 }
 
+function broadcastGenerationQueue(jobName) {
+    const clients = wsClients.get(jobName);
+    if (!clients) return;
+    const data = JSON.stringify({ job: jobName, type: 'generation_queue', data: getGenerationQueueState(jobName) });
+    clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    });
+}
+
 function broadcastQueueChanged() {
     const data = JSON.stringify({ type: 'queue' });
     wss.clients.forEach(ws => {
@@ -1331,6 +1358,11 @@ wss.on('connection', (ws) => {
                     job: msg.job,
                     type: 'status',
                     data: isRunning ? 'running' : 'idle'
+                }));
+                ws.send(JSON.stringify({
+                    job: msg.job,
+                    type: 'generation_queue',
+                    data: getGenerationQueueState(msg.job)
                 }));
 
                 // Send buffered logs
@@ -2170,6 +2202,39 @@ app.put('/api/jobs/:name/prompts', (req, res) => {
 let persistentGenProcess = null; // { process, port, jobName }
 const GEN_SERVER_PORT = 5000; // Fixed port for now
 let pythonParentMonitor = null;
+const generationQueues = new Map();
+
+function getGenerationQueue(jobName) {
+    if (!generationQueues.has(jobName)) generationQueues.set(jobName, []);
+    return generationQueues.get(jobName);
+}
+
+function getGenerationQueueState(jobName) {
+    const queue = getGenerationQueue(jobName);
+    const publicItem = item => ({
+        id: item.id,
+        prompt: item.prompt,
+        state: item.state,
+        mode: item.mode,
+        error: item.error || null,
+        createdAt: item.createdAt,
+        startedAt: item.startedAt || null,
+        finishedAt: item.finishedAt || null,
+    });
+    const active = queue.find(item => item.state === 'generating');
+    return {
+        active: active ? publicItem(active) : null,
+        pending: queue.filter(item => item.state === 'pending').map(publicItem),
+        recent: queue.filter(item => ['completed', 'failed', 'cancelled'].includes(item.state)).slice(-5).reverse().map(publicItem),
+    };
+}
+
+function updateGenerationItem(jobName, requestId, patch) {
+    const item = getGenerationQueue(jobName).find(entry => entry.id === requestId);
+    if (item) Object.assign(item, patch);
+    broadcastGenerationQueue(jobName);
+    return item;
+}
 
 // Kill all running jobs when the Node server itself exits
 function killAllJobs() {
@@ -2520,233 +2585,213 @@ app.get('/api/jobs/:name/checkpoints', (req, res) => {
     }
 });
 
+async function runStandaloneGeneration(jobName, item) {
+    const body = { ...item.body };
+    const jobPath = getJobPath(jobName);
+    const configPath = path.join(jobPath, 'config.toml');
+    const mergedConfig = buildTrainingConfig(jobName, jobPath);
+    const outputDir = body.generation_workspace === true
+        ? path.join(jobPath, 'generated_images')
+        : path.join(jobPath, 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    let promptsPath = path.join(jobPath, 'sample_prompts.txt');
+    if (typeof body.prompt === 'string' && body.prompt.trim()) {
+        const runtimePrompt = writeRuntimeGenerationPrompt(jobName, body, item.id);
+        promptsPath = runtimePrompt.promptPath;
+        body.seed = runtimePrompt.seed;
+    }
+    if (!fs.existsSync(promptsPath) || fs.readFileSync(promptsPath, 'utf8').trim().length === 0) {
+        throw new Error('No prompts found');
+    }
+
+    const globalConfig = getGlobalConfig();
+    const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
+    const venv = getVenvPaths(venvPath);
+    const genArch = getArchForJob(mergedConfig);
+    const genScript = path.join(ROOT_DIR, genArch.scripts.generate);
+    const mArgs = mergedConfig.model_arguments;
+    const tArgs = mergedConfig.training_arguments;
+    const archSection = mergedConfig[genArch.training_section] || {};
+    const rawConfig = TOML.parse(fs.readFileSync(configPath, 'utf8'));
+    const currentGpuIdsRaw = body.gen_gpu_ids || (rawConfig.gpu_ids ? rawConfig.gpu_ids.toString().trim() : '');
+    const normalizedGpuIds = currentGpuIdsRaw.split(',').map(value => value.trim()).filter(Boolean).sort().join(',');
+    if (normalizedGpuIds && !/^[\d\s,]+$/.test(normalizedGpuIds)) throw new Error('Invalid generation GPU IDs');
+    if (normalizedGpuIds.split(',').filter(Boolean).length > 1) {
+        throw new Error('Select one GPU for generation');
+    }
+    const gpuEnv = normalizedGpuIds ? buildEnvVar('CUDA_VISIBLE_DEVICES', normalizedGpuIds) : '';
+
+    const args = [];
+    const missingPaths = [];
+    for (const [configKey, pathDef] of Object.entries(genArch.global_paths)) {
+        const value = mArgs[pathDef.cli_flag] || '';
+        if (!value) missingPaths.push(configKey);
+        else args.push(`--${pathDef.gen_flag || pathDef.cli_flag}="${value}"`);
+    }
+    if (missingPaths.length) throw new Error(`Missing model path(s): ${missingPaths.join(', ')}`);
+    args.push(
+        `--from_file="${promptsPath}"`,
+        `--save_path="${outputDir}"`,
+        '--output_type=images',
+        `--seed=${body.seed ?? tArgs.seed ?? 42}`
+    );
+    for (const [paramKey, paramDef] of Object.entries(genArch.gen_params || {})) {
+        const value = body[paramKey] ?? archSection[paramKey] ?? paramDef.default;
+        if (paramDef.type !== 'text' || value) args.push(`--${paramDef.cli_flag}=${paramDef.type === 'text' ? `"${value}"` : value}`);
+    }
+    if (body.flash_attn) args.push('--attn_mode=flash');
+    else if (body.sage_attn) args.push('--attn_mode=sageattn');
+
+    // Resolve this immediately before model loading so an idle generation always uses the newest save.
+    if (!body.network_weights && body.use_latest_peft === true) body.network_weights = findLatestPeftPath(jobName);
+    if (isKrea2Architecture(genArch.id)) {
+        if (genArch.id === 'krea2_bypass') args.push('--krea2_bypass');
+        const blocksToSwap = Number(body.blocks_to_swap ?? tArgs.blocks_to_swap ?? 0);
+        if (Number.isInteger(blocksToSwap) && blocksToSwap > 0) args.push(`--blocks_to_swap=${blocksToSwap}`);
+        const networkModule = mergedConfig.network_arguments?.network_module || 'networks.lora_krea2';
+        const hasPostHocAdapter = Boolean(body.network_weights) && new Set(['networks.cdka', 'networks.krona']).has(networkModule);
+        if (archSection.fp8_scaled && !hasPostHocAdapter) args.push('--fp8_scaled');
+    }
+    if (body.network_weights) {
+        if (mergedConfig.network_arguments?.network_module) {
+            args.push(`--network_module=${mergedConfig.network_arguments.network_module}`);
+        }
+        args.push(`--lora_weight="${stripQuotes(body.network_weights)}"`);
+        args.push(`--lora_multiplier=${body.network_mul || 1.0}`);
+    }
+
+    const logsDir = path.join(jobPath, 'logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+    if (persistentGenProcess) await killPersistentGenAndWait();
+    if (item.cancelRequested) throw new Error('Training start released VRAM');
+    const envVars = [buildEnvVar('PYTHONIOENCODING', 'utf-8'), gpuEnv].filter(Boolean).join('\n');
+    const command = `python "${genScript}" ${args.join(' ')}`;
+    const proc = spawnShell(buildShellScript(venv.activate, envVars, command), ROOT_DIR);
+    const logName = `gen_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+    const logStream = fs.createWriteStream(path.join(logsDir, logName), { flags: 'a' });
+    const appendLog = data => {
+        const value = data.toString();
+        logStream.write(value);
+        broadcastLog(jobName, value);
+    };
+    proc.stdout.on('data', appendLog);
+    proc.stderr.on('data', appendLog);
+    proc.stdout.on('error', err => console.error(`[Gen/stdout] ${err.message}`));
+    proc.stderr.on('error', err => console.error(`[Gen/stderr] ${err.message}`));
+    logStream.on('error', err => console.error(`[Gen/LogFile] ${err.message}`));
+    runningJobs.set(jobName, {
+        process: proc,
+        pid: proc.pid,
+        startTime: Date.now(),
+        type: 'generation',
+        requestId: item.id,
+        gpuIds: currentGpuIdsRaw,
+    });
+    broadcastStatus(jobName, 'generating');
+    return new Promise(resolve => {
+        proc.on('error', error => resolve({ code: -1, error }));
+        proc.on('close', code => {
+            const message = `\n--- Generation finished (exit code: ${code}) ---\n`;
+            logStream.write(message);
+            logStream.end();
+            broadcastLog(jobName, message);
+            resolve({ code });
+        });
+    });
+}
+
+async function processGenerationQueue(jobName) {
+    if (runningJobs.get(jobName)?.type === 'generation' || getGenerationQueue(jobName).some(item => item.state === 'generating')) return;
+    const next = getGenerationQueue(jobName).find(item => item.state === 'pending' && item.mode === 'standalone');
+    if (!next) {
+        broadcastGenerationQueue(jobName);
+        broadcastStatus(jobName, 'idle');
+        return;
+    }
+    updateGenerationItem(jobName, next.id, { state: 'generating', startedAt: Date.now() });
+    try {
+        const result = await runStandaloneGeneration(jobName, next);
+        const active = runningJobs.get(jobName);
+        if (active?.requestId === next.id) runningJobs.delete(jobName);
+        updateGenerationItem(jobName, next.id, {
+            state: next.cancelRequested ? 'cancelled' : (result.code === 0 ? 'completed' : 'failed'),
+            error: next.cancelRequested ? 'Training start released VRAM' : (result.error?.message || (result.code === 0 ? null : `Exit code ${result.code}`)),
+            finishedAt: Date.now(),
+        });
+    } catch (error) {
+        runningJobs.delete(jobName);
+        updateGenerationItem(jobName, next.id, {
+            state: next.cancelRequested ? 'cancelled' : 'failed',
+            error: error.message,
+            finishedAt: Date.now(),
+        });
+        broadcastLog(jobName, `\n--- Generation failed: ${error.message} ---\n`);
+    }
+    await processGenerationQueue(jobName);
+}
+
+app.get('/api/jobs/:name/generation-queue', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(getGenerationQueueState(sanitizeName(req.params.name)));
+});
+
 app.post('/api/jobs/:name/generate', async (req, res) => {
     try {
         const jobName = sanitizeName(req.params.name);
+        const jobPath = getJobPath(jobName);
+        if (!fs.existsSync(path.join(jobPath, 'config.toml'))) return res.status(404).json({ error: 'Job not found' });
+        const body = { ...(req.body || {}) };
+        if (body.generation_workspace === true && !String(body.prompt || '').trim()) {
+            return res.status(400).json({ error: 'A positive prompt is required' });
+        }
         const activeJob = runningJobs.get(jobName);
+        if (!activeJob && await isJobTrainingFresh(jobName)) {
+            return res.status(409).json({ error: 'Training is external to this server session; restart it once before queued generation' });
+        }
+        const item = {
+            id: crypto.randomUUID(),
+            prompt: String(body.prompt || '').trim(),
+            state: 'pending',
+            mode: activeJob?.type === 'training' ? 'training' : 'standalone',
+            createdAt: Date.now(),
+            body,
+        };
+        getGenerationQueue(jobName).push(item);
+
         if (activeJob?.type === 'training') {
-            if (!fs.existsSync(getRuntimeControlPath(jobName))) {
-                return res.status(409).json({ error: 'Restart training once to enable safe-step sampling' });
-            }
-            const runtimePrompt = writeRuntimeGenerationPrompt(jobName, req.body || {});
-            if (!runtimePrompt) {
-                return res.status(400).json({ error: 'A positive prompt is required for an inserted training sample' });
-            }
-            const outputDir = path.resolve(getJobPath(jobName), 'output');
-            const requestedWeights = stripQuotes(req.body?.network_weights || '');
+            const runtimePrompt = writeRuntimeGenerationPrompt(jobName, body, item.id);
+            const outputDir = path.resolve(jobPath, 'output');
+            const requestedWeights = stripQuotes(body.network_weights || '');
             const resolvedWeights = requestedWeights ? path.resolve(requestedWeights) : '';
             if (resolvedWeights && !resolvedWeights.startsWith(`${outputDir}${path.sep}`)) {
+                updateGenerationItem(jobName, item.id, { state: 'failed', error: 'Invalid training PEFT' });
                 return res.status(400).json({ error: 'Training-time PEFT must be one of this job output saves' });
             }
             if (resolvedWeights && !fs.existsSync(resolvedWeights)) {
+                updateGenerationItem(jobName, item.id, { state: 'failed', error: 'Selected PEFT no longer exists' });
                 return res.status(400).json({ error: 'The selected training PEFT save no longer exists' });
             }
-            updateRuntimeControl(jobName, {
-                sample_requested: true,
+            enqueueRuntimeGeneration(jobName, {
+                request_id: item.id,
                 sample_prompts: runtimePrompt.promptPath,
+                output_dir: path.join(jobPath, 'generated_images'),
                 network_weights: resolvedWeights,
-                network_multiplier: Number.parseFloat(req.body?.network_mul) || 1.0,
+                network_multiplier: Number.parseFloat(body.network_mul) || 1.0,
             });
             broadcastStatus(jobName, 'sample-pending');
-            return res.json({
-                success: true,
-                queued: true,
-                in_training: true,
-                message: 'Training sample queued for the next optimizer step',
-            });
+        } else {
+            processGenerationQueue(jobName).catch(error => console.error(`[Gen/Queue] ${error.message}`));
         }
-        if (!activeJob && await isJobTrainingFresh(jobName)) {
-            return res.status(409).json({ error: 'Training is external to this server session; restart it once before safe-step sampling' });
-        }
-        if (activeJob) {
-            return res.status(400).json({ error: 'Job is running. Stop it first.' });
-        }
-
-        const jobPath = getJobPath(jobName);
-        const configPath = path.join(jobPath, 'config.toml');
-
-        if (!fs.existsSync(configPath)) {
-            return res.status(404).json({ error: 'Job not found' });
-        }
-
-        // Merged config for paths/args
-        const mergedConfig = buildTrainingConfig(jobName, jobPath);
-
-        const outputDir = path.join(jobPath, 'output');
-        let promptsPath = path.join(jobPath, 'sample_prompts.txt');
-
-        if (typeof req.body.prompt === 'string' && req.body.prompt.trim()) {
-            const runtimePrompt = writeRuntimeGenerationPrompt(jobName, req.body);
-            promptsPath = runtimePrompt.promptPath;
-            req.body.seed = runtimePrompt.seed;
-        }
-
-        if (!fs.existsSync(promptsPath) || fs.readFileSync(promptsPath, 'utf8').trim().length === 0) {
-            return res.status(400).json({ error: 'No sample prompts found. Add prompts in the Prompts tab.' });
-        }
-
-        const globalConfig = getGlobalConfig();
-        const venvPath = toNativePath(globalConfig.venv_path || path.join(ROOT_DIR, 'venv'));
-        const venv = getVenvPaths(venvPath);
-
-        // Resolve architecture from job config
-        const genArch = getArchForJob(mergedConfig);
-        const genScript = path.join(ROOT_DIR, genArch.scripts.generate);
-
-        // Extract args
-        const mArgs = mergedConfig.model_arguments;
-        const tArgs = mergedConfig.training_arguments;
-        const archSection = mergedConfig[genArch.training_section] || {};
-
-        // Read config to check for GPU IDs - prefer gen-specific GPU selection
-        let gpuEnv = '';
-        const genGpuIds = req.body.gen_gpu_ids || '';
-        const rawConfig = TOML.parse(fs.readFileSync(configPath, 'utf8'));
-        const configGpuIds = rawConfig.gpu_ids ? rawConfig.gpu_ids.toString().trim() : '';
-
-        const currentGpuIdsRaw = genGpuIds || configGpuIds;
-        const genGpuIdsNormalized = currentGpuIdsRaw.split(',').map(s => s.trim()).filter(s => s.length > 0).sort().join(',');
-
-        if (genGpuIdsNormalized) {
-            if (/^[\d\s,]+$/.test(genGpuIdsNormalized)) {
-                gpuEnv = buildEnvVar('CUDA_VISIBLE_DEVICES', genGpuIdsNormalized);
-                console.log(`[Gen] Using GPU isolation: ${gpuEnv}`);
-            }
-        }
-
-        const genGpuCount = genGpuIdsNormalized ? genGpuIdsNormalized.split(',').length : 0;
-        if (genGpuCount > 1) {
-            return res.status(400).json({
-                error: 'The sd-scripts NEW backend is wired for single-process generation here. Select one GPU for generation.'
-            });
-        }
-
-        // Build model path args from registry. Training and inference use different flag names.
-        const args = [];
-        const missingPaths = [];
-        for (const [configKey, pathDef] of Object.entries(genArch.global_paths)) {
-            const val = mArgs[pathDef.cli_flag] || '';
-            if (!val) {
-                missingPaths.push(configKey);
-                continue;
-            }
-            const genFlag = pathDef.gen_flag || pathDef.cli_flag;
-            args.push(`--${genFlag}="${val}"`);
-        }
-        if (missingPaths.length > 0) {
-            return res.status(400).json({
-                error: `Missing model path(s) in Global Settings: ${missingPaths.join(', ')}`
-            });
-        }
-
-        // anima_minimal_inference.py consumes the same prompt-file syntax used by the UI.
-        args.push(
-            `--from_file="${promptsPath}"`,
-            `--save_path="${outputDir}"`,
-            '--output_type=images',
-            `--seed=${req.body.seed ?? tArgs.seed ?? 42}`
-        );
-
-        // Add architecture-specific gen params from registry defaults + job overrides
-        for (const [paramKey, paramDef] of Object.entries(genArch.gen_params || {})) {
-            const val = req.body[paramKey] ?? archSection[paramKey] ?? paramDef.default;
-            if (paramDef.type === 'text') {
-                if (val) args.push(`--${paramDef.cli_flag}="${val}"`);
-            } else {
-                args.push(`--${paramDef.cli_flag}=${val}`);
-            }
-        }
-
-        // Attention support for anima_minimal_inference.py
-        if (req.body.flash_attn) {
-            args.push('--attn_mode=flash');
-        } else if (req.body.sage_attn) {
-            args.push('--attn_mode=sageattn');
-        }
-
-        if (!req.body.network_weights && req.body.use_latest_peft === true) {
-            req.body.network_weights = findLatestPeftPath(jobName);
-        }
-
-        if (isKrea2Architecture(genArch.id)) {
-            if (genArch.id === 'krea2_bypass') {
-                args.push('--krea2_bypass');
-            }
-            const blocksToSwap = Number(req.body.blocks_to_swap ?? tArgs.blocks_to_swap ?? 0);
-            if (Number.isInteger(blocksToSwap) && blocksToSwap > 0) {
-                args.push(`--blocks_to_swap=${blocksToSwap}`);
-            }
-
-            const networkModule = mergedConfig.network_arguments?.network_module || 'networks.lora_krea2';
-            const postHocMergeModules = new Set(['networks.cdka', 'networks.krona']);
-            const hasPostHocAdapter = Boolean(req.body.network_weights) && postHocMergeModules.has(networkModule);
-            if (archSection.fp8_scaled && !hasPostHocAdapter) {
-                args.push('--fp8_scaled');
-            }
-        }
-
-        // LoRA support
-        if (req.body.network_weights) {
-            const nw = stripQuotes(req.body.network_weights);
-            if (mergedConfig.network_arguments?.network_module) {
-                args.push(`--network_module=${mergedConfig.network_arguments.network_module}`);
-            }
-            args.push(`--lora_weight="${nw}"`);
-            args.push(`--lora_multiplier=${req.body.network_mul || 1.0}`);
-        }
-
-        // Ensure logs dir exists
-        const logsDir = path.join(jobPath, 'logs');
-        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-
-        if (persistentGenProcess) {
-            await killPersistentGenAndWait();
-        }
-
-        const oneShotEnvVars = [
-            buildEnvVar('PYTHONIOENCODING', 'utf-8'),
-            gpuEnv
-        ].filter(Boolean).join('\n');
-        const oneShotCmd = `python "${genScript}" ${args.join(' ')}`;
-        const oneShotScript = buildShellScript(venv.activate, oneShotEnvVars, oneShotCmd);
-
-        const oneShotProc = spawnShell(oneShotScript, ROOT_DIR);
-
-        const oneShotLogFileName = `gen_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
-        const oneShotLogStream = fs.createWriteStream(path.join(logsDir, oneShotLogFileName), { flags: 'a' });
-
-        const oneShotAppendLog = (data) => {
-            const text = data.toString();
-            oneShotLogStream.write(text);
-            broadcastLog(jobName, text);
-        };
-
-        oneShotProc.stdout.on('data', oneShotAppendLog);
-        oneShotProc.stderr.on('data', oneShotAppendLog);
-
-        oneShotProc.stdout.on('error', (err) => console.error(`[Gen/stdout] ${err.message}`));
-        oneShotProc.stderr.on('error', (err) => console.error(`[Gen/stderr] ${err.message}`));
-        oneShotLogStream.on('error', (err) => console.error(`[Gen/LogFile] ${err.message}`));
-
-        oneShotProc.on('close', (code) => {
-            const msg = `\n--- Generation finished (exit code: ${code}) ---\n`;
-            oneShotLogStream.write(msg);
-            oneShotLogStream.end();
-            broadcastLog(jobName, msg);
-            runningJobs.delete(jobName);
-            broadcastStatus(jobName, 'idle');
+        broadcastGenerationQueue(jobName);
+        res.json({
+            success: true,
+            queued: true,
+            in_training: item.mode === 'training',
+            request_id: item.id,
+            queue: getGenerationQueueState(jobName),
+            message: item.mode === 'training' ? 'Generation queued for the next safe training step' : 'Generation queued',
         });
-
-        runningJobs.set(jobName, {
-            process: oneShotProc,
-            pid: oneShotProc.pid,
-            startTime: Date.now(),
-            type: 'generation',
-            gpuIds: currentGpuIdsRaw
-        });
-
-        broadcastStatus(jobName, 'generating');
-        res.json({ success: true, pid: oneShotProc.pid });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -2907,12 +2952,22 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             trainingQueue.enqueue(jobName);
         }
 
-        // Release every generation process before loading the training model.
-        const activeGeneration = runningJobs.get(jobName);
-        if (activeGeneration?.type === 'generation') {
+        // Training owns the GPU. Cancel queued and active standalone generation before loading its model.
+        for (const [generationJobName, queue] of generationQueues.entries()) {
+            for (const item of queue) {
+                if (item.mode !== 'standalone' || !['pending', 'generating'].includes(item.state)) continue;
+                item.cancelRequested = true;
+                if (item.state === 'pending') {
+                    Object.assign(item, { state: 'cancelled', error: 'Training start released VRAM', finishedAt: Date.now() });
+                }
+            }
+            broadcastGenerationQueue(generationJobName);
+        }
+        for (const [generationJobName, activeGeneration] of runningJobs.entries()) {
+            if (activeGeneration?.type !== 'generation') continue;
             activeGeneration.suppressAutoResume = true;
             if (activeGeneration.pid) await killProcess(activeGeneration.pid, 2000);
-            if (runningJobs.get(jobName) === activeGeneration) runningJobs.delete(jobName);
+            if (runningJobs.get(generationJobName) === activeGeneration) runningJobs.delete(generationJobName);
         }
 
         // Auto-kill persistent gen server to free VRAM
@@ -3001,6 +3056,19 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             if (cliStream) cliStream.write(text);
             logStream.write(text);
             broadcastLog(jobName, text);
+            for (const match of text.matchAll(/UI_GENERATION_(START|DONE|FAILED)\s+([0-9a-f-]+)/gi)) {
+                const state = match[1].toUpperCase() === 'START'
+                    ? 'generating'
+                    : (match[1].toUpperCase() === 'DONE' ? 'completed' : 'failed');
+                updateGenerationItem(jobName, match[2], {
+                    state,
+                    ...(state === 'generating' ? { startedAt: Date.now() } : { finishedAt: Date.now() }),
+                });
+                if (state !== 'generating') {
+                    const remaining = getGenerationQueue(jobName).some(item => ['pending', 'generating'].includes(item.state));
+                    if (!remaining) broadcastStatus(jobName, 'running');
+                }
+            }
         };
 
         proc.stdout.on('data', (data) => appendLog(data, process.stdout));
@@ -3038,6 +3106,12 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             appendLog(Buffer.from(msg));
             logStream.end();
             runningJobs.delete(jobName);
+            for (const item of getGenerationQueue(jobName)) {
+                if (item.mode === 'training' && ['pending', 'generating'].includes(item.state)) {
+                    Object.assign(item, { state: 'failed', error: 'Training ended before generation completed', finishedAt: Date.now() });
+                }
+            }
+            broadcastGenerationQueue(jobName);
             clearTrainingProcessState(jobName);
             invalidateDetectedTrainingProcesses();
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
@@ -3066,6 +3140,12 @@ app.post('/api/jobs/:name/train/start', async (req, res) => {
             appendLog(Buffer.from(`\nERROR: ${err.message}\n`));
             const stoppedByRequest = runningJobs.get(jobName)?.stopRequested === true;
             runningJobs.delete(jobName);
+            for (const item of getGenerationQueue(jobName)) {
+                if (item.mode === 'training' && ['pending', 'generating'].includes(item.state)) {
+                    Object.assign(item, { state: 'failed', error: err.message, finishedAt: Date.now() });
+                }
+            }
+            broadcastGenerationQueue(jobName);
             if (!isPidAlive(proc.pid)) clearTrainingProcessState(jobName);
             invalidateDetectedTrainingProcesses();
             const isQueuedJob = trainingQueue.getState().items.includes(jobName);
@@ -3241,14 +3321,14 @@ app.get('/api/jobs/:name/tensorboard/status', (req, res) => {
 
 // --- Samples API ---
 
-function collectImages(dir, relBase, jobName) {
+function collectImages(dir, relBase, jobName, apiCollection = 'samples') {
     const images = [];
     if (!fs.existsSync(dir)) return images;
     fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
             // Recurse into subdirectories (e.g. output/sample/)
-            images.push(...collectImages(fullPath, path.join(relBase, entry.name), jobName));
+            images.push(...collectImages(fullPath, path.join(relBase, entry.name), jobName, apiCollection));
         } else if (/\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
             const stat = fs.statSync(fullPath);
             const relPath = path.join(relBase, entry.name).replace(/\\/g, '/');
@@ -3256,7 +3336,7 @@ function collectImages(dir, relBase, jobName) {
                 name: entry.name,
                 dir: relBase.replace(/\\/g, '/'),
                 mtime: stat.mtimeMs,
-                path: `/api/jobs/${jobName}/samples/${relPath}`
+                path: `/api/jobs/${jobName}/${apiCollection}/${relPath}`
             });
         }
     });
@@ -3276,6 +3356,30 @@ app.get('/api/jobs/:name/samples', (req, res) => {
         images.sort((a, b) => b.mtime - a.mtime);
         res.set('Cache-Control', 'no-store');
         res.json(images);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:name/generated-images', (req, res) => {
+    try {
+        const generatedDir = path.join(getJobPath(req.params.name), 'generated_images');
+        const images = collectImages(generatedDir, '', req.params.name, 'generated-images')
+            .sort((a, b) => b.mtime - a.mtime);
+        res.set('Cache-Control', 'no-store');
+        res.json(images);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:name/generated-images/*', (req, res) => {
+    try {
+        const generatedDir = path.resolve(getJobPath(req.params.name), 'generated_images');
+        const filePath = path.resolve(generatedDir, req.params[0]);
+        if (!filePath.startsWith(`${generatedDir}${path.sep}`)) return res.status(403).json({ error: 'Invalid path' });
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return res.sendFile(filePath);
+        res.status(404).json({ error: 'File not found' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

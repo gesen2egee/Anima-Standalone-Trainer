@@ -1434,22 +1434,30 @@ function connectWS() {
         return;
       }
       if (msg.job !== currentJob) return;
+      if (msg.type === "generation_queue") {
+        renderGenerationQueue(msg.data);
+        if (msg.data?.recent?.some((item) => item.state === "completed")) loadGeneratedImages();
+        return;
+      }
       if (msg.type === "log") {
         appendConsole(msg.data);
         scheduleSamplesRefresh();
       } else if (msg.type === "status") {
         if (msg.data === "generating") {
           $("generation-runtime-status").textContent = "產生中";
-          scheduleSamplesRefresh(0);
+          loadGeneratedImages();
           return; // Ignore generation status for Training button
         }
         if (msg.data === "sample-pending") {
           $("generation-runtime-status").textContent = "等待下一個安全步驟採樣";
         }
+        if (msg.data === "running") {
+          $("generation-runtime-status").textContent = "訓練中";
+        }
         if (msg.data === "completed") scheduleSamplesRefresh(0);
         if (["completed", "idle"].includes(msg.data)) {
           $("generation-runtime-status").textContent = "待命";
-          if (msg.data === "idle") scheduleSamplesRefresh(0);
+          if (msg.data === "idle") loadGeneratedImages();
         }
         updateRunningState(["running", "sample-pending", "stopping"].includes(msg.data));
         loadJobs();
@@ -2017,6 +2025,8 @@ async function selectJob(name) {
     loadJobs();
     // Load samples
     loadSamples();
+    loadGeneratedImages();
+    loadGenerationQueue();
     loadCheckpoints();
     loadPromptTransientSettings();
     loadGenerationWorkspaceSettings();
@@ -3752,17 +3762,13 @@ async function loadCheckpoints() {
     opt.textContent = `${f.name} (${new Date(f.mtime).toLocaleString()})`;
     select.appendChild(opt);
   });
-  pageSelect.innerHTML = "";
+  pageSelect.innerHTML = '<option value="">自動｜訓練中目前權重／閒置最新 PEFT</option>';
   files.forEach((f, index) => {
       const opt = document.createElement("option");
       opt.value = f.path;
       opt.textContent = `${index === 0 ? "最新｜" : ""}${f.name} (${new Date(f.mtime).toLocaleString()})`;
       pageSelect.appendChild(opt);
   });
-  const currentWeightsOption = document.createElement("option");
-  currentWeightsOption.value = "";
-  currentWeightsOption.textContent = "目前訓練權重／Base Model";
-  pageSelect.appendChild(currentWeightsOption);
   // Restore selection if exists
   const data = localStorage.getItem(`prompt_transient_${currentJob}`);
   let savedLora = null;
@@ -3782,7 +3788,7 @@ async function loadCheckpoints() {
   try {
     generationSettings = JSON.parse(localStorage.getItem(`generation_workspace_${currentJob}`) || "{}");
   } catch (_) { }
-  const pageValue = currentPageVal || generationSettings.peft || files[0]?.path || "";
+  const pageValue = currentPageVal || generationSettings.peft || "";
   if (Array.from(pageSelect.options).some((option) => option.value === pageValue)) {
     pageSelect.value = pageValue;
   }
@@ -3803,21 +3809,68 @@ function scheduleSamplesRefresh(delay = 1200) {
     loadSamples(true).catch((err) => console.warn("Failed to refresh samples:", err));
   }, delay);
 }
+
+async function loadGeneratedImages() {
+  if (!currentJob) return;
+  const jobAtStart = currentJob;
+  try {
+    const images = await api(`/api/jobs/${currentJob}/generated-images`);
+    if (currentJob !== jobAtStart) return;
+    const preview = $("generation-preview-image");
+    const previewEmpty = $("generation-preview-empty");
+    if (images?.length) {
+      const newest = images[0];
+      preview.src = `${newest.path}?v=${newest.mtime}`;
+      preview.classList.remove("hidden");
+      previewEmpty.classList.add("hidden");
+    } else {
+      preview.removeAttribute("src");
+      preview.classList.add("hidden");
+      previewEmpty.classList.remove("hidden");
+    }
+  } catch (error) {
+    console.warn("Failed to load generated images:", error);
+  }
+}
+
+function renderGenerationQueue(state = {}) {
+  const active = state.active ? [state.active] : [];
+  const pending = Array.isArray(state.pending) ? state.pending : [];
+  const recent = Array.isArray(state.recent) ? state.recent : [];
+  const visibleItems = [...active, ...pending, ...recent.slice(0, 3)];
+  $("generation-queue-count").textContent = `${pending.length} 個等待中${active.length ? "，1 個產生中" : ""}`;
+  if (!visibleItems.length) {
+    $("generation-queue-list").innerHTML = '<div class="generation-queue-empty">目前沒有排程</div>';
+    return;
+  }
+  const stateLabels = {
+    pending: "⏳",
+    generating: "🎨",
+    completed: "✅",
+    failed: "⚠️",
+    cancelled: "⛔",
+  };
+  $("generation-queue-list").innerHTML = visibleItems.map((item) => `
+    <div class="generation-queue-item">
+      <span class="generation-queue-state">${stateLabels[item.state] || "•"}</span>
+      <span class="generation-queue-prompt">${escapeHtml(item.prompt || "樣本提示詞")}</span>
+      <span class="generation-queue-meta">${item.state === "generating" ? "產生中" : item.state === "pending" ? "等待中" : item.state === "completed" ? "已完成" : escapeHtml(item.error || "失敗")}</span>
+    </div>
+  `).join("");
+}
+
+async function loadGenerationQueue() {
+  if (!currentJob) return;
+  try {
+    renderGenerationQueue(await api(`/api/jobs/${currentJob}/generation-queue`));
+  } catch (error) {
+    console.warn("Failed to load generation queue:", error);
+  }
+}
+
 async function loadSamples(isUpdate = false) {
   if (!currentJob) return;
   const images = await api(`/api/jobs/${currentJob}/samples`);
-  const preview = $("generation-preview-image");
-  const previewEmpty = $("generation-preview-empty");
-  if (images?.length) {
-    const newest = [...images].sort((a, b) => b.mtime - a.mtime)[0];
-    preview.src = `${newest.path}?v=${newest.mtime}`;
-    preview.classList.remove("hidden");
-    previewEmpty.classList.add("hidden");
-  } else {
-    preview.removeAttribute("src");
-    preview.classList.add("hidden");
-    previewEmpty.classList.remove("hidden");
-  }
   const container = $("samples-grid");
   const empty = $("samples-empty");
   if (!images || images.length === 0) {
@@ -5643,6 +5696,7 @@ function gatherGenerationWorkspaceSettings() {
     peft: $("generation-peft-select").value,
     network_mul: safeFloat($("generation-peft-multiplier").value, 1),
     use_latest_peft: !$("generation-peft-select").value,
+    generation_workspace: true,
   };
 }
 
@@ -5664,9 +5718,10 @@ $("generation-run").addEventListener("click", async () => {
   $("generation-runtime-status").textContent = "準備產生…";
   try {
     const result = await api(`/api/jobs/${currentJob}/generate`, { method: "POST", body: payload });
-    $("generation-runtime-status").textContent = result.queued
-      ? "等待下一個完整步驟採樣，訓練不會中斷"
-      : "產生中";
+    if (result.queue) renderGenerationQueue(result.queue);
+    $("generation-runtime-status").textContent = result.in_training
+      ? "等待安全步驟，完成排程後恢復訓練"
+      : "已加入生成排程";
     showToast(result.message || "Generation started");
   } catch (error) {
     $("generation-runtime-status").textContent = `失敗：${error.message}`;

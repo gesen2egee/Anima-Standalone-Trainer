@@ -256,6 +256,7 @@ class NetworkTrainer:
         original_every_steps = args.sample_every_n_steps
         original_every_epochs = args.sample_every_n_epochs
         original_sample_prompts = args.sample_prompts
+        original_output_dir = args.output_dir
         unwrapped_network = accelerator.unwrap_model(network)
         selected_weights = runtime_control.get("network_weights")
         original_multiplier = getattr(unwrapped_network, "multiplier", 1.0)
@@ -266,6 +267,8 @@ class NetworkTrainer:
             if runtime_control.get("sample_prompts"):
                 args.sample_prompts = runtime_control["sample_prompts"]
                 self._runtime_sample_active = True
+            if runtime_control.get("output_dir"):
+                args.output_dir = runtime_control["output_dir"]
             if accelerator.is_main_process and selected_weights and os.path.isfile(selected_weights):
                 logger.info("Temporarily sampling PEFT weights: %s", selected_weights)
                 current_network_state = {
@@ -292,6 +295,7 @@ class NetworkTrainer:
                     unwrapped_network.set_multiplier(original_multiplier)
             self._runtime_sample_active = False
             args.sample_prompts = original_sample_prompts
+            args.output_dir = original_output_dir
             args.sample_every_n_steps = original_every_steps
             args.sample_every_n_epochs = original_every_epochs
 
@@ -301,15 +305,21 @@ class NetworkTrainer:
         commands = [{}]
         control_path = getattr(args, "runtime_control_file", None)
         if accelerator.is_main_process and control_path and os.path.isfile(control_path):
+            processing_path = f"{control_path}.processing"
             try:
-                with open(control_path, "r", encoding="utf-8") as file:
+                os.replace(control_path, processing_path)
+                with open(processing_path, "r", encoding="utf-8") as file:
                     loaded = json.load(file)
                 if isinstance(loaded, dict):
                     commands[0] = loaded
-                with open(control_path, "w", encoding="utf-8") as file:
-                    json.dump({}, file)
             except (OSError, json.JSONDecodeError) as error:
                 logger.warning("Unable to read runtime control file %s: %s", control_path, error)
+            finally:
+                try:
+                    if os.path.isfile(processing_path):
+                        os.remove(processing_path)
+                except OSError as error:
+                    logger.warning("Unable to remove processed runtime control file %s: %s", processing_path, error)
         if accelerator.num_processes > 1:
             broadcast_object_list(commands)
         return commands[0]
@@ -1731,7 +1741,10 @@ class NetworkTrainer:
                     global_step += 1
 
                     runtime_control = self.consume_runtime_control(args, accelerator)
-                    sample_requested = runtime_control.get("sample_requested") is True
+                    queued_generations = runtime_control.get("generation_queue")
+                    if not isinstance(queued_generations, list):
+                        queued_generations = []
+                    sample_requested = runtime_control.get("sample_requested") is True or bool(queued_generations)
                     stop_requested = runtime_control.get("stop_requested") is True
                     scheduled_save = args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0
 
@@ -1763,31 +1776,45 @@ class NetworkTrainer:
 
                     optimizer_eval_fn()
                     if sample_requested:
-                        logger.info("Running UI-requested sample at safe step %s", global_step)
-                        self.sample_images_immediately(
-                            accelerator,
-                            args,
+                        generation_commands = list(queued_generations)
+                        if runtime_control.get("sample_requested") is True:
+                            generation_commands.append(runtime_control)
+                        logger.info(
+                            "Running %s UI-requested generation(s) at safe step %s before resuming training",
+                            len(generation_commands),
                             global_step,
-                            accelerator.device,
-                            vae,
-                            tokenizers,
-                            text_encoder,
-                            unet,
-                            network,
-                            runtime_control,
                         )
-                    else:
-                        self.sample_images(
-                            accelerator,
-                            args,
-                            None,
-                            global_step,
-                            accelerator.device,
-                            vae,
-                            tokenizers,
-                            text_encoder,
-                            unet,
-                        )
+                        for generation_command in generation_commands:
+                            request_id = str(generation_command.get("request_id", "legacy"))
+                            logger.info("UI_GENERATION_START %s", request_id)
+                            try:
+                                self.sample_images_immediately(
+                                    accelerator,
+                                    args,
+                                    global_step,
+                                    accelerator.device,
+                                    vae,
+                                    tokenizers,
+                                    text_encoder,
+                                    unet,
+                                    network,
+                                    generation_command,
+                                )
+                                logger.info("UI_GENERATION_DONE %s", request_id)
+                            except Exception:
+                                logger.exception("UI_GENERATION_FAILED %s", request_id)
+                    # Keep configured training Samples independent from the manual image queue.
+                    self.sample_images(
+                        accelerator,
+                        args,
+                        None,
+                        global_step,
+                        accelerator.device,
+                        vae,
+                        tokenizers,
+                        text_encoder,
+                        unet,
+                    )
                     progress_bar.unpause()
                     optimizer_train_fn()
 

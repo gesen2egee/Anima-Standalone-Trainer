@@ -1578,6 +1578,61 @@ body {
     font-size: 1rem;
 }
 
+.generation-queue-panel {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+.generation-queue-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.generation-queue-title span,
+.generation-queue-empty {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+.generation-queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.generation-queue-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-primary);
+}
+
+.generation-queue-state {
+    grid-row: 1 / span 2;
+}
+
+.generation-queue-prompt {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.generation-queue-meta {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+
 @media (max-width: 1050px) {
     .generation-workspace {
         grid-template-columns: 1fr;
