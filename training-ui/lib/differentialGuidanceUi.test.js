@@ -9,13 +9,14 @@ function read(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), "utf8");
 }
 
-test("UI loads and saves Differential Guidance scale", () => {
+test("Differential Guidance is not exposed as a misleading UI setting", () => {
+  const html = read("public/index.html");
   const appJs = read("public/js/app.js");
-  assert.match(appJs, /cfg-differential-guidance-scale/);
-  assert.match(appJs, /differential_guidance_scale/);
+  assert.doesNotMatch(html, /cfg-differential-guidance-scale/);
+  assert.doesNotMatch(appJs, /cfg-differential-guidance-scale/);
 });
 
-test("default training template contains Differential Guidance default", () => {
+test("default training template relies on the neutral parser default", () => {
   const template = read("templates/config_template.toml");
-  assert.match(template, /differential_guidance_scale = 3/);
+  assert.doesNotMatch(template, /differential_guidance_scale/);
 });

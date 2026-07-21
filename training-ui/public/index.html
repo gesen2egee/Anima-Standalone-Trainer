@@ -141,7 +141,7 @@
                                 <label>Learning Rate</label>
                                 <input type="text" id="cfg-learning-rate" value="1e-4" placeholder="1e-4">
                             </div>
-                            <div class="form-group">
+                            <div class="form-group network-training-only">
                                 <label>Text Encoder LR</label>
                                 <input type="text" id="cfg-text-encoder-lr" value="0" placeholder="0">
                             </div>
@@ -504,9 +504,9 @@
 
                     <!-- Advanced Tab -->
                     <div id="tab-advanced" class="tab-pane hidden">
-                        <h4>Batch and Noise</h4>
-                        <small>Specialized sampling and noise controls. Leave defaults unless you are comparing training behavior.</small>
-                        <div class="form-row" style="margin-top: 12px;">
+                        <h4 class="network-training-only">Batch and Noise</h4>
+                        <small class="network-training-only">Specialized sampling and noise controls. Leave defaults unless you are comparing training behavior.</small>
+                        <div class="form-row network-training-only" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>KNN Noise K</label>
                                 <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
@@ -515,114 +515,6 @@
                             <div class="form-group">
                                 <label>CEP Noise</label>
                                 <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
-                            </div>
-                        </div>
-
-                        <h4 style="margin-top: 24px;">CDC-FM Geometry</h4>
-                        <small>ANIMA 與 KREA 2 的 Geometry-aware Flow Matching；同一步與 KNN Noise 互斥，但可按訓練比例自動切換。</small>
-                        <div class="form-row" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-use-cdc-fm"> Enable CDC-FM</label>
-                            </div>
-                            <div class="form-group">
-                                <label>Neighbors</label>
-                                <input type="number" id="cfg-cdc-k-neighbors" value="64" min="2" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Bandwidth K</label>
-                                <input type="number" id="cfg-cdc-k-bandwidth" value="8" min="1" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>CDC Rank</label>
-                                <input type="number" id="cfg-cdc-dim" value="8" min="1" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Switch Ratio</label>
-                                <input type="number" id="cfg-cdc-switch-ratio" value="0" min="0" max="0.99" step="0.05">
-                                <small>前段模式占總 optimizer steps 的比例；0 表示不切換。</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Switch Direction</label>
-                                <select id="cfg-cdc-switch-direction">
-                                    <option value="knn_to_cdc">KNN → CDC</option>
-                                    <option value="cdc_to_knn">CDC → KNN</option>
-                                </select>
-                                <small>例如 CDC → KNN 搭配 0.7：前 70% CDC，後 30% KNN。</small>
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-cdc-combine-knn"> Combine KNN + CDC</label>
-                                <small>同一步先選 KNN noise，再套用 CDC geometry；啟用時不使用比例切換。</small>
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-cdc-alternate-knn"> Alternate KNN / CDC</label>
-                                <small>第 1 步 KNN、第 2 步 CDC，依 optimizer step 持續交替。</small>
-                            </div>
-                            <div class="form-group">
-                                <label>KNN Pairing Metric</label>
-                                <select id="cfg-cdc-knn-metric">
-                                    <option value="l2">Original L2</option>
-                                    <option value="mahalanobis">CDC Mahalanobis</option>
-                                </select>
-                                <small>Mahalanobis 使用每張圖的低秩 CDC covariance 選擇 noise。</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Mahalanobis Regularization</label>
-                                <input type="number" id="cfg-cdc-knn-regularization" value="0.1" min="0.001" step="0.05">
-                                <small>相對於最大 eigenvalue 的 τ；越小越強調 CDC 幾何。</small>
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Gamma</label>
-                                <input type="number" id="cfg-cdc-gamma" value="1.0" min="0.01" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label>Bandwidth Scale</label>
-                                <input type="number" id="cfg-cdc-bandwidth-rescale" value="1.0" min="0.01" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label>Minimum Bucket</label>
-                                <input type="number" id="cfg-cdc-min-bucket-size" value="8" min="3" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-cdc-force-recache"> Force CDC Recache</label>
-                            </div>
-                        </div>
-
-                        <h4 style="margin-top: 24px;">Self-Flow</h4>
-                        <small>ANIMA 與 KREA 2 的 Dual-Timestep 自監督 Flow Matching。僅支援 DiT adapter，與 CDC-FM、adapter dropout 互斥。</small>
-                        <div class="form-row" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-use-self-flow"> Enable Self-Flow</label>
-                            </div>
-                            <div class="form-group">
-                                <label>Mask Ratio</label>
-                                <input type="number" id="cfg-self-flow-mask-ratio" value="0.25" min="0.01" max="0.5" step="0.01">
-                            </div>
-                            <div class="form-group">
-                                <label>Representation Weight</label>
-                                <input type="number" id="cfg-self-flow-representation-weight" value="0.8" min="0" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label>EMA Decay</label>
-                                <input type="number" id="cfg-self-flow-ema-decay" value="0.9999" min="0" max="0.999999" step="0.0001">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Student Layer</label>
-                                <input type="number" id="cfg-self-flow-student-layer" value="8" min="0" max="27" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Teacher Layer</label>
-                                <input type="number" id="cfg-self-flow-teacher-layer" value="20" min="1" max="27" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Projection Dim</label>
-                                <input type="number" id="cfg-self-flow-projection-dim" value="768" min="1" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="cfg-self-flow-save-ema" checked> Save EMA Adapter</label>
                             </div>
                         </div>
 
@@ -704,13 +596,13 @@
                                     <option value="l1">L1</option>
                                     <option value="huber">Huber</option>
                                     <option value="smooth_l1">Smooth L1</option>
-                                    <option value="cwmi">CWMI</option>
+                                    <option value="cwmi" id="loss-option-cwmi">CWMI</option>
                                     <option value="wavelet">AIT Wavelet</option>
                                     <option value="snr_aware_huber_wavelet">SNR-Aware Huber Wavelet</option>
                                     <option value="wavelet_l2">Wavelet L2</option>
                                 </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group network-training-only">
                                 <label>P&P Loss Weight</label>
                                 <input type="number" id="cfg-pnp-loss-weight" value="" placeholder="e.g. 0.0001 (LoRA) or 500 (DreamBooth)" min="0" step="0.0001">
                                 <small>Preserve-and-Personalize L2 weight. Leave blank or 0 to disable.</small>
@@ -786,99 +678,6 @@
                             </div>
                         </div>
 
-                        <h4 style="margin-top: 24px;">Differential Output Preservation</h4>
-                        <small>AI Toolkit style：以關閉 LoRA 的相同 prompt 輸出保護基礎模型知識。啟用後會關閉 Text Encoder output cache。</small>
-                        <div class="form-row" style="margin-top: 12px;">
-                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
-                                <label style="display: flex; align-items: center; gap: 5px;">
-                                    <input type="checkbox" id="cfg-diff-output-preservation" style="margin: 0; width: auto;"> 啟用 DOP
-                                </label>
-                                <small>前 Keep Tokens 個 caption token 視為 Trigger words。</small>
-                            </div>
-                            <div class="form-group">
-                                <label>DOP Loss Multiplier</label>
-                                <input type="number" id="cfg-diff-output-preservation-multiplier" value="1.0" step="0.1" min="0">
-                            </div>
-                          </div>
-                          <small>DOP 只使用各 Dataset 的 Class Token；留空時自動從 Caption 辨識 1girl、1boy、1other 或 2–6 boys／girls／others，沒有符合 tag 時改用空 Caption 保護（等同 BPP）。</small>
-
-                        <h4 style="margin-top: 24px;">Model Guidance Training (arXiv:2502.12154)</h4>
-                        <small>Guidance loss controls for experimental alignment training. Keep weight at 0 to disable.</small>
-                        <div class="form-row" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label>Model Guidance Weight</label>
-                                <input type="number" id="cfg-model-guidance-weight" value="0.0" step="0.05" min="0">
-                                <small>Set > 0.0 to enable Model Guidance.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Warmup Steps</label>
-                                <input type="number" id="cfg-model-guidance-warmup-steps" value="500" min="0" step="1">
-                                <small>Linear warmup steps for weight.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Activation Probability</label>
-                                <input type="number" id="cfg-model-guidance-prob" value="1.0" step="0.05" min="0" max="1">
-                                <small>Probability of applying (0.0 ~ 1.0).</small>
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>End Step</label>
-                                <input type="number" id="cfg-model-guidance-end-step" value="0" min="0" step="1">
-                                <small>0 means active for all steps.</small>
-                            </div>
-                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
-                                <label style="display: flex; align-items: center; gap: 5px;">
-                                    <input type="checkbox" id="cfg-model-guidance-timestep-scaling" style="margin: 0; width: auto;"> Timestep Scaling
-                                </label>
-                                <small>Beta-curve adaptive scaling.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Min Weight</label>
-                                <input type="number" id="cfg-model-guidance-min-weight" value="0.0" step="0.05" min="0">
-                                <small>Used for Timestep Scaling.</small>
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group" style="display: flex; flex-direction: column; justify-content: center;">
-                                <label style="display: flex; align-items: center; gap: 5px;">
-                                    <input type="checkbox" id="cfg-model-guidance-cfg-zero" style="margin: 0; width: auto;"> CFG-Zero* Scaling
-                                </label>
-                                <small>Dynamic projection scaling.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>CFG-Zero* Threshold</label>
-                                <input type="number" id="cfg-model-guidance-zero-init-threshold" value="1.0" step="0.01" min="0" max="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Differential Guidance Scale</label>
-                                <input type="number" id="cfg-differential-guidance-scale" value="1.0" step="0.05" min="0">
-                                <small>1.0 keeps the target unchanged.</small>
-                            </div>
-                        </div>
-
-                        <h4 style="margin-top: 24px;">Coordinated Input-Output Perturbation (CIOP, AAAI-26)</h4>
-                        <small>Input/output perturbation controls for robustness experiments. Probability 0 disables CIOP.</small>
-                        <div class="form-row" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label>CIOP Probability</label>
-                                <input type="number" id="cfg-ciop-prob" value="0.0" step="0.05" min="0" max="1">
-                                <small>Probability of applying CIOP (0.0 to 1.0).</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Noise Magnitude</label>
-                                <input type="number" id="cfg-ciop-noise-magnitude" value="0.1" step="0.01" min="0">
-                                <small>Standard deviation or boundary of perturbation noise.</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Noise Type</label>
-                                <select id="cfg-ciop-noise-type" style="width: 100%; box-sizing: border-box; background: var(--bg-input); color: var(--text-normal); border: 1px solid var(--border-color); border-radius: 4px; height: 35px; padding: 0 10px;">
-                                    <option value="gaussian">Gaussian</option>
-                                    <option value="uniform">Uniform</option>
-                                </select>
-                                <small>Noise distribution type.</small>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Dataset Tab -->
@@ -897,17 +696,6 @@
                             </div>
                         </div>
 
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-progressive-reso"> Progressive Resolution Schedule</label>
-                            <small>Train at each resolution sequentially (low → high) instead of mixing them. Requires at least 2 resolutions above. Works with both epochs and max steps.</small>
-
-                            <div id="progressive-reso-panel" class="hidden" style="margin-left: 20px; margin-top: 15px; display: flex; flex-direction: column; gap: 12px; padding-left: 15px; border-left: 2px solid var(--border);">
-                                <div id="progressive-reso-phases">
-                                    <!-- Populated dynamically -->
-                                </div>
-                                <small id="progressive-reso-sum-hint">Each fraction is the portion of total steps for that resolution. Must sum to 1.0.</small>
-                            </div>
-                        </div>
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Gradient Accumulation</label>
@@ -995,11 +783,6 @@
                             <label>Bucket Resolution Steps</label>
                             <input type="number" id="cfg-bucket-steps" value="64" min="8" step="8">
                         </div>
-                        <div class="form-group">
-                            <label><input type="checkbox" id="cfg-disable-bucket-shuffle"> Disable Bucket Shuffle</label>
-                            <small>Keeps DataLoader order within resolution buckets.</small>
-                        </div>
-
                         <div
                             style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px;">
                             <h4>Dataset Folders</h4>
@@ -1050,6 +833,11 @@
                                     <input type="number" id="cfg-network-alpha" value="16" min="1">
                                     <small>Scaling factor. Usually same as dim.</small>
                                 </div>
+                            </div>
+                            <div class="form-group hidden" id="group-lokr-factor">
+                                <label>LoKr FACTOR</label>
+                                <input type="number" id="cfg-lokr-factor" value="-1" min="-1" step="1">
+                                <small>-1 會自動尋找平衡因數；正整數會指定 LoKr 權重維度的分解因數。</small>
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="cfg-unet-only" checked> <span id="cfg-unet-only-label">Train DiT Only</span></label>

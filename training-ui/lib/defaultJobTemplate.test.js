@@ -42,11 +42,14 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift");
   assert.strictEqual(config.training_arguments.sample_at_first, true);
   assert.strictEqual(config.training_arguments.sample_every_n_steps, 200);
-  assert.strictEqual(config.anima_arguments.differential_guidance_scale, 3);
   assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
   assert.strictEqual(config.training_arguments.masked_loss_random_strength, 0);
-  assert.strictEqual(config.anima_arguments.ciop_prob, 0);
-  assert.strictEqual(config.anima_arguments.ciop_noise_magnitude, 0);
+  assert.strictEqual(Object.hasOwn(config.anima_arguments, "differential_guidance_scale"), false);
+  assert.strictEqual(Object.hasOwn(config.anima_arguments, "ciop_prob"), false);
+  assert.strictEqual(Object.hasOwn(config.anima_arguments, "model_guidance_weight"), false);
+  assert.strictEqual(Object.hasOwn(config.training_arguments, "use_cdc_fm"), false);
+  assert.strictEqual(Object.hasOwn(config.training_arguments, "use_self_flow"), false);
+  assert.strictEqual(Object.hasOwn(config.training_arguments, "diff_output_preservation"), false);
 });
 
 test("default dataset template follows my_job_v1 dataset defaults", () => {

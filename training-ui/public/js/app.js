@@ -156,7 +156,6 @@ function applyArchitecturePresetToEditor(architecture) {
     $("cfg-krea2-text-encoder-layer-offload").checked = true;
     $("cfg-krea2-text-encoder-offload-percent").value = 100;
   }
-  renderProgressivePhases();
 }
 
 function updateModelArchitectureUI({ applyDefaults = false } = {}) {
@@ -464,7 +463,6 @@ const UI_TRANSLATIONS = {
   "Global Dataset Settings": { "zh-TW": "資料集全域設定", "zh-CN": "数据集全局设置" },
   "Resolution(s)": { "zh-TW": "解析度", "zh-CN": "分辨率" },
   "Batch Size(s)": { "zh-TW": "Batch Size", "zh-CN": "Batch Size" },
-  "Progressive Resolution Schedule": { "zh-TW": "漸進式解析度排程", "zh-CN": "渐进式分辨率调度" },
   "Gradient Accumulation": { "zh-TW": "Gradient Accumulation", "zh-CN": "Gradient Accumulation" },
   "Caption Extension": { "zh-TW": "Caption 副檔名", "zh-CN": "Caption 扩展名" },
   "Alpha Mask": { "zh-TW": "Alpha Mask", "zh-CN": "Alpha Mask" },
@@ -2118,36 +2116,6 @@ function populateConfig(config) {
   $("cfg-blocks-to-swap").value = t.blocks_to_swap ?? 0;
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
   $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
-  $("cfg-use-cdc-fm").checked = t.use_cdc_fm ?? false;
-  $("cfg-cdc-switch-ratio").value = t.cdc_switch_ratio ?? 0;
-  $("cfg-cdc-switch-direction").value = t.cdc_switch_reverse ? "cdc_to_knn" : "knn_to_cdc";
-  $("cfg-cdc-combine-knn").checked = t.cdc_combine_knn ?? false;
-  $("cfg-cdc-alternate-knn").checked = t.cdc_alternate_knn ?? false;
-  if ($("cfg-cdc-combine-knn").checked) {
-    $("cfg-cdc-alternate-knn").checked = false;
-    $("cfg-cdc-switch-ratio").value = 0;
-  }
-  if ($("cfg-cdc-alternate-knn").checked) {
-    $("cfg-cdc-combine-knn").checked = false;
-    $("cfg-cdc-switch-ratio").value = 0;
-  }
-  $("cfg-cdc-knn-metric").value = t.cdc_knn_metric ?? "l2";
-  $("cfg-cdc-knn-regularization").value = t.cdc_knn_regularization ?? 0.1;
-  $("cfg-cdc-k-neighbors").value = t.cdc_k_neighbors ?? 64;
-  $("cfg-cdc-k-bandwidth").value = t.cdc_k_bandwidth ?? 8;
-  $("cfg-cdc-dim").value = t.cdc_dim ?? 8;
-  $("cfg-cdc-gamma").value = t.cdc_gamma ?? 1.0;
-  $("cfg-cdc-bandwidth-rescale").value = t.cdc_bandwidth_rescale ?? 1.0;
-  $("cfg-cdc-min-bucket-size").value = t.cdc_min_bucket_size ?? 8;
-  $("cfg-cdc-force-recache").checked = t.cdc_force_recache ?? false;
-  $("cfg-use-self-flow").checked = t.use_self_flow ?? false;
-  $("cfg-self-flow-mask-ratio").value = t.self_flow_mask_ratio ?? 0.25;
-  $("cfg-self-flow-representation-weight").value = t.self_flow_representation_weight ?? 0.8;
-  $("cfg-self-flow-ema-decay").value = t.self_flow_ema_decay ?? 0.9999;
-  $("cfg-self-flow-student-layer").value = t.self_flow_student_layer ?? 8;
-  $("cfg-self-flow-teacher-layer").value = t.self_flow_teacher_layer ?? 20;
-  $("cfg-self-flow-projection-dim").value = t.self_flow_projection_dim ?? 768;
-  $("cfg-self-flow-save-ema").checked = t.self_flow_save_ema ?? true;
   $("cfg-loss-type").value = t.loss_type || "l2";
   $("cfg-pnp-loss-weight").value = t.pnp_loss_weight ?? "";
   $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;
@@ -2161,8 +2129,6 @@ function populateConfig(config) {
   $("cfg-wavelet-loss-gamma").value = t.wavelet_loss_gamma ?? 5.0;
   $("cfg-wavelet-loss-weight").value = t.wavelet_loss_weight ?? 1.0;
   $("cfg-wavelet-loss-prediction-type").value = t.wavelet_loss_prediction_type || "velocity";
-  $("cfg-diff-output-preservation").checked = t.diff_output_preservation ?? false;
-  $("cfg-diff-output-preservation-multiplier").value = t.diff_output_preservation_multiplier ?? 1.0;
   updateLossTypeUI();
   // Activation offload mode
   if (t.unsloth_offload_checkpointing) {
@@ -2182,15 +2148,10 @@ function populateConfig(config) {
   $("cfg-tqa-loss-weighting").checked = (t.tqa_loss_weighting ?? false) || (t.tqa_loss_weighting_schedule ?? false);
   $("cfg-tqa-loss-weighting-mode").value = t.tqa_loss_weighting_mode ?? "timestep";
   $("cfg-tqa-loss-weighting-schedule").checked = t.tqa_loss_weighting_schedule ?? false;
-  if ($("cfg-use-cdc-fm").checked) {
-    $("cfg-cache-latents").checked = true;
-    $("cfg-cache-latents-to-disk").checked = true;
-  }
   $("cfg-vae-batch").value = t.vae_batch_size ?? 1;
   $("cfg-vae-chunk-size").value = t.vae_chunk_size ?? 64;
   $("cfg-vae-disable-cache").checked = t.vae_disable_cache ?? false;
-  $("cfg-cache-te").checked = (t.cache_text_encoder_outputs_to_disk ?? true) && !$("cfg-diff-output-preservation").checked;
-  updateDopUI();
+  $("cfg-cache-te").checked = t.cache_text_encoder_outputs_to_disk ?? true;
   $("cfg-krea2-dynamic-text-encoder").checked = isKrea2Architecture(modelArchitecture) && (
     (a.krea2_dynamic_text_encoder ?? false) ||
     (a.krea2_dynamic_text_encoder_cpu ?? false) ||
@@ -2209,18 +2170,6 @@ function populateConfig(config) {
   $("cfg-masked-loss-random").checked =
     t.masked_loss_random_strength !== undefined && t.masked_loss_random_strength !== null;
   $("cfg-masked-loss").checked = t.masked_loss ?? false;
-  $("cfg-disable-bucket-shuffle").checked = t.disable_bucket_shuffle ?? false;
-  // Progressive resolution schedule
-  if (t.resolution_schedule) {
-    $("cfg-progressive-reso").checked = true;
-    $("progressive-reso-panel").classList.remove("hidden");
-    // Parse schedule string and populate fraction inputs after rendering phases
-    window._pendingProgressiveSchedule = t.resolution_schedule;
-  } else {
-    $("cfg-progressive-reso").checked = false;
-    $("progressive-reso-panel").classList.add("hidden");
-    window._pendingProgressiveSchedule = null;
-  }
   $("cfg-use-cuda-direct").checked = t.use_cuda_direct ?? false;
   $("cfg-ddp-gradient-as-bucket-view").checked =
     t.ddp_gradient_as_bucket_view ?? false;
@@ -2331,20 +2280,6 @@ function populateConfig(config) {
     ? (a.krea2_max_token_length ?? a.qwen3_max_token_length ?? 512)
     : (a.qwen3_max_token_length ?? 512);
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
-  // Model Guidance
-  $("cfg-model-guidance-weight").value = a.model_guidance_weight ?? 0.0;
-  $("cfg-model-guidance-warmup-steps").value = a.model_guidance_warmup_steps ?? 500;
-  $("cfg-model-guidance-timestep-scaling").checked = a.model_guidance_timestep_scaling ?? false;
-  $("cfg-model-guidance-min-weight").value = a.model_guidance_min_weight ?? 0.0;
-  $("cfg-model-guidance-cfg-zero").checked = a.model_guidance_cfg_zero ?? false;
-  $("cfg-model-guidance-zero-init-threshold").value = a.model_guidance_zero_init_threshold ?? 1.0;
-  $("cfg-model-guidance-end-step").value = a.model_guidance_end_step ?? 0;
-  $("cfg-model-guidance-prob").value = a.model_guidance_prob ?? 1.0;
-  $("cfg-differential-guidance-scale").value = a.differential_guidance_scale ?? 1.0;
-  // CIOP
-  $("cfg-ciop-prob").value = a.ciop_prob ?? 0.0;
-  $("cfg-ciop-noise-magnitude").value = a.ciop_noise_magnitude ?? 0.1;
-  $("cfg-ciop-noise-type").value = a.ciop_noise_type ?? "gaussian";
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
@@ -2362,7 +2297,12 @@ function populateConfig(config) {
   $("cfg-resume").value = n.resume || "";
   $("cfg-resume").disabled = $("cfg-auto-resume").checked;
   $("cfg-network-dropout").value = n.network_dropout ?? 0;
-  $("cfg-network-args").value = (n.network_args || []).join(" ");
+  const savedNetworkArgs = Array.isArray(n.network_args) ? n.network_args : [];
+  const lokrFactorArg = savedNetworkArgs.find((arg) => String(arg).startsWith("factor="));
+  $("cfg-lokr-factor").value = lokrFactorArg ? normalizeLokrFactor(String(lokrFactorArg).split("=")[1]) : -1;
+  $("cfg-network-args").value = savedNetworkArgs
+    .filter((arg) => networkModule !== "networks.lokr" || !String(arg).startsWith("factor="))
+    .join(" ");
 }
 function populateDataset(dataset) {
   const g = dataset.general || {};
@@ -2431,8 +2371,6 @@ function populateDataset(dataset) {
   $("cfg-alpha-mask").indeterminate = alphaMaskStates.some((value) => value) && !alphaMaskStates.every((value) => value);
   renderSubsets();
   syncKrea2DynamicCaptionEncoding();
-  // Rebuild progressive phase rows now that resolution field is populated
-  if ($("cfg-progressive-reso").checked) renderProgressivePhases();
 }
 function updateOptimizerOptions() {
   const optimizer = $("cfg-optimizer").value;
@@ -2487,19 +2425,15 @@ function updateAutomaskUI() {
   $("cfg-flow-shift").disabled = flowShiftAuto;
 }
 
-function updateDopUI({ notify = false } = {}) {
-  const enabled = $("cfg-diff-output-preservation").checked;
-  $("cfg-cache-te").disabled = enabled;
-  if (enabled) {
-    $("cfg-cache-te").checked = false;
-    if (notify) showToast("DOP 已關閉 Text Encoder output cache");
-  }
-}
 // Helpers for safe parsing
 function safeInt(val, fallback = 0) {
   if (val === "" || val === null || val === undefined) return fallback;
   const p = parseInt(val);
   return isNaN(p) ? fallback : p;
+}
+function normalizeLokrFactor(value) {
+  const factor = safeInt(value, -1);
+  return factor > 0 ? factor : -1;
 }
 function safeFloat(val, fallback = 0.0) {
   if (val === "" || val === null || val === undefined) return fallback;
@@ -2579,11 +2513,6 @@ function gatherConfig() {
   );
   const krea2DynamicTextEncoderCpu = krea2DynamicTextEncoder && $("cfg-krea2-dynamic-text-encoder-cpu").checked;
   const krea2TextEncoderLayerOffload = krea2DynamicTextEncoder && !krea2DynamicTextEncoderCpu && $("cfg-krea2-text-encoder-layer-offload").checked;
-  const useCdcFm = $("cfg-use-cdc-fm").checked;
-  const cdcSwitchRatio = safeFloat($("cfg-cdc-switch-ratio").value, 0);
-  const cdcCombineKnn = $("cfg-cdc-combine-knn").checked;
-  const cdcAlternateKnn = $("cfg-cdc-alternate-knn").checked;
-  const useSelfFlow = $("cfg-use-self-flow").checked;
   const optimizerArgs = [];
   const wdValue = $("cfg-weight-decay").value;
   if (wdValue !== "") {
@@ -2659,28 +2588,6 @@ function gatherConfig() {
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
       knn_noise_k: safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
-      use_cdc_fm: useCdcFm,
-      cdc_combine_knn: cdcCombineKnn,
-      cdc_alternate_knn: cdcAlternateKnn,
-      cdc_knn_metric: $("cfg-cdc-knn-metric").value,
-      cdc_knn_regularization: safeFloat($("cfg-cdc-knn-regularization").value, 0.1),
-      cdc_switch_ratio: cdcSwitchRatio,
-      cdc_switch_reverse: $("cfg-cdc-switch-direction").value === "cdc_to_knn",
-      cdc_k_neighbors: safeInt($("cfg-cdc-k-neighbors").value, 64),
-      cdc_k_bandwidth: safeInt($("cfg-cdc-k-bandwidth").value, 8),
-      cdc_dim: safeInt($("cfg-cdc-dim").value, 8),
-      cdc_gamma: safeFloat($("cfg-cdc-gamma").value, 1.0),
-      cdc_bandwidth_rescale: safeFloat($("cfg-cdc-bandwidth-rescale").value, 1.0),
-      cdc_min_bucket_size: safeInt($("cfg-cdc-min-bucket-size").value, 8),
-      cdc_force_recache: $("cfg-cdc-force-recache").checked,
-      use_self_flow: useSelfFlow,
-      self_flow_mask_ratio: safeFloat($("cfg-self-flow-mask-ratio").value, 0.25),
-      self_flow_representation_weight: safeFloat($("cfg-self-flow-representation-weight").value, 0.8),
-      self_flow_ema_decay: safeFloat($("cfg-self-flow-ema-decay").value, 0.9999),
-      self_flow_student_layer: safeInt($("cfg-self-flow-student-layer").value, 8),
-      self_flow_teacher_layer: safeInt($("cfg-self-flow-teacher-layer").value, 20),
-      self_flow_projection_dim: safeInt($("cfg-self-flow-projection-dim").value, 768),
-      self_flow_save_ema: $("cfg-self-flow-save-ema").checked,
       loss_type: $("cfg-loss-type").value,
       pnp_loss_weight: $("cfg-pnp-loss-weight").value !== "" ? safeFloat($("cfg-pnp-loss-weight").value) : 0.0,
       cwmi_lambda: safeFloat($("cfg-cwmi-lambda").value),
@@ -2694,8 +2601,6 @@ function gatherConfig() {
       wavelet_loss_gamma: safeFloat($("cfg-wavelet-loss-gamma").value, 5.0),
       wavelet_loss_weight: safeFloat($("cfg-wavelet-loss-weight").value, 1.0),
       wavelet_loss_prediction_type: $("cfg-wavelet-loss-prediction-type").value,
-      diff_output_preservation: $("cfg-diff-output-preservation").checked,
-      diff_output_preservation_multiplier: safeFloat($("cfg-diff-output-preservation-multiplier").value, 1.0),
       gradient_checkpointing: $("cfg-gradient-checkpointing").checked,
       flash_attn: $("cfg-flash-attn").checked,
       torch_compile: $("cfg-torch-compile").checked,
@@ -2709,8 +2614,8 @@ function gatherConfig() {
       }),
       persistent_data_loader_workers: $("cfg-persistent-workers").checked,
       seed: safeInt($("cfg-seed").value),
-      cache_latents: useCdcFm || $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked || $("cfg-aes-loss-weighting").checked || $("cfg-tqa-loss-weighting").checked || $("cfg-timestep-method").value === "autoshift_tqa",
-      cache_latents_to_disk: useCdcFm || $("cfg-cache-latents-to-disk").checked,
+      cache_latents: $("cfg-cache-latents").checked || $("cfg-cache-latents-to-disk").checked || $("cfg-aes-loss-weighting").checked || $("cfg-tqa-loss-weighting").checked || $("cfg-timestep-method").value === "autoshift_tqa",
+      cache_latents_to_disk: $("cfg-cache-latents-to-disk").checked,
       aes_loss_weighting: $("cfg-aes-loss-weighting").checked || $("cfg-aes-loss-weighting-schedule").checked,
       aes_loss_weighting_schedule: $("cfg-aes-loss-weighting-schedule").checked,
       tqa_loss_weighting: $("cfg-tqa-loss-weighting").checked || $("cfg-tqa-loss-weighting-schedule").checked,
@@ -2719,7 +2624,7 @@ function gatherConfig() {
       vae_batch_size: safeInt($("cfg-vae-batch").value),
       vae_chunk_size: safeInt($("cfg-vae-chunk-size").value),
       vae_disable_cache: $("cfg-vae-disable-cache").checked,
-      cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder || $("cfg-diff-output-preservation").checked ? false : $("cfg-cache-te").checked,
+      cache_text_encoder_outputs_to_disk: krea2DynamicTextEncoder ? false : $("cfg-cache-te").checked,
       masked_loss: $("cfg-masked-loss").checked,
       automask: $("cfg-automask").checked,
       automask_alpha: safeInt($("cfg-automask-alpha").value, 128),
@@ -2727,9 +2632,6 @@ function gatherConfig() {
       automask_blur: safeFloat($("cfg-automask-blur").value, 3),
       automask_model: $("cfg-automask-model").value.trim() || "base-nightly",
       masked_loss_random_strength: $("cfg-masked-loss-random").checked ? 0.0 : undefined,
-      ...($("cfg-disable-bucket-shuffle").checked && {
-        disable_bucket_shuffle: true,
-      }),
       multigpu_mode: isMultiGpu ? multiGpuMode : "ddp",
       ...(multiGpuMode === "tp_sp" && isMultiGpu
           ? {
@@ -2807,18 +2709,6 @@ function gatherConfig() {
       // Diagnostics
       step_profile: $("cfg-step-profile").checked,
       profile_microbatch: $("cfg-profile-microbatch").checked,
-      // Progressive resolution schedule
-      ...(() => {
-        if (!$("cfg-progressive-reso").checked) return {};
-        const resList = ($("cfg-resolution").value || "1024").split(",").map(r => parseInt(r.trim())).filter(Boolean);
-        const inputs = document.querySelectorAll(".prog-reso-frac");
-        if (inputs.length === 0 || resList.length < 2) return {};
-        const parts = resList.map((r, i) => {
-          const frac = parseFloat(inputs[i]?.value || 0);
-          return `${r}:${frac.toFixed(2)}`;
-        });
-        return { resolution_schedule: parts.join(",") };
-      })(),
     },
     network_arguments: $("cfg-training-type").value === "full_finetune"
       ? {
@@ -2830,13 +2720,19 @@ function gatherConfig() {
           network_module: $("cfg-network-module").value,
           network_dim: safeInt($("cfg-network-dim").value),
           network_alpha: safeInt($("cfg-network-alpha").value),
-          network_train_unet_only: useSelfFlow || $("cfg-unet-only").checked,
-          ...(!useSelfFlow && safeFloat($("cfg-network-dropout").value) > 0 && {
+          network_train_unet_only: $("cfg-unet-only").checked,
+          ...(safeFloat($("cfg-network-dropout").value) > 0 && {
             network_dropout: safeFloat($("cfg-network-dropout").value),
           }),
-          ...($("cfg-network-args").value.trim() && {
-            network_args: $("cfg-network-args").value.trim().split(/\s+/),
-          }),
+          ...(() => {
+            const networkArgs = $("cfg-network-args").value.trim()
+              ? $("cfg-network-args").value.trim().split(/\s+/)
+              : [];
+            if ($("cfg-network-module").value === "networks.lokr") {
+              networkArgs.push(`factor=${normalizeLokrFactor($("cfg-lokr-factor").value)}`);
+            }
+            return networkArgs.length > 0 ? { network_args: networkArgs } : {};
+          })(),
           ...($("cfg-network-weights").value && {
             network_weights: $("cfg-network-weights").value,
           }),
@@ -2853,18 +2749,6 @@ function gatherConfig() {
         t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
       }),
       weighting_scheme: $("cfg-weighting-scheme").value,
-      model_guidance_weight: safeFloat($("cfg-model-guidance-weight").value),
-      model_guidance_warmup_steps: safeInt($("cfg-model-guidance-warmup-steps").value),
-      model_guidance_timestep_scaling: $("cfg-model-guidance-timestep-scaling").checked,
-      model_guidance_min_weight: safeFloat($("cfg-model-guidance-min-weight").value),
-      model_guidance_cfg_zero: $("cfg-model-guidance-cfg-zero").checked,
-      model_guidance_zero_init_threshold: safeFloat($("cfg-model-guidance-zero-init-threshold").value),
-      model_guidance_end_step: safeInt($("cfg-model-guidance-end-step").value),
-      model_guidance_prob: safeFloat($("cfg-model-guidance-prob").value),
-      differential_guidance_scale: safeFloat($("cfg-differential-guidance-scale").value, 1.0),
-      ciop_prob: safeFloat($("cfg-ciop-prob").value),
-      ciop_noise_magnitude: safeFloat($("cfg-ciop-noise-magnitude").value),
-      ciop_noise_type: $("cfg-ciop-noise-type").value,
     },
     krea2_arguments: isKrea2
       ? {
@@ -3057,11 +2941,6 @@ function renderSubsets() {
                     <input type="text" class="sub-caption-prefix" value="${escapeHtml(subset.caption_prefix)}" placeholder="e.g. A photo of,">
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
-                    <label style="font-size: 0.8rem;">DOP Class Token（選填）</label>
-                    <input type="text" class="sub-class-tokens" value="${escapeHtml(subset.class_tokens ?? "")}" placeholder="例如：woman；留空自動辨識 1girl、2boys 等 tag">
-                    <small style="display:block; font-size: 0.7rem; color: var(--text-muted);">有設定時直接作為 DOP class word；留空會從 Caption 自動辨識，沒有符合 tag 時使用空 Caption 保護（等同 BPP）。</small>
-                </div>
-                <div class="form-group" style="margin-top: 10px;">
                     <label style="font-size: 0.8rem;">打標輸出成 Caption</label>
                     <div class="form-row" style="align-items: flex-end; gap: 10px;">
                         <div class="form-group" style="min-width: 120px;">
@@ -3148,7 +3027,6 @@ function renderSubsets() {
           card.querySelector(".sub-keep-tokens").value,
         );
         subset.caption_prefix = card.querySelector(".sub-caption-prefix").value;
-        subset.class_tokens = card.querySelector(".sub-class-tokens").value;
         subset.tagger_include_ocr = card.querySelector(".sub-tagger-enable-ocr").checked;
         subset.tagger_include_nl = card.querySelector(".sub-tagger-enable-nl").checked;
         subset.keep_tags = card.querySelector(".sub-keep-tags").value;
@@ -3436,11 +3314,20 @@ function updateTrainingTypeUI(type) {
   const isLora = type === "lora";
   $("lora-config-section").classList.toggle("hidden", !isLora);
   $("fft-config-section").classList.toggle("hidden", isLora);
+  document.querySelectorAll(".network-training-only").forEach((element) => {
+    element.classList.toggle("hidden", !isLora);
+  });
+  $("loss-option-cwmi").disabled = !isLora;
+  if (!isLora && $("cfg-loss-type").value === "cwmi") {
+    $("cfg-loss-type").value = "l2";
+    updateLossTypeUI();
+  }
 }
 function updateNetworkModuleUI() {
   const moduleName = $("cfg-network-module").value;
   const hidesRankAlpha = moduleName === "networks.cdka" || moduleName === "networks.krona";
   $("network-rank-alpha-row").classList.toggle("hidden", hidesRankAlpha);
+  $("group-lokr-factor").classList.toggle("hidden", moduleName !== "networks.lokr");
 }
 function applyNetworkModulePreset(moduleName) {
   const architecture = $("cfg-model-architecture")?.value || "anima";
@@ -3448,6 +3335,7 @@ function applyNetworkModulePreset(moduleName) {
   $("cfg-network-args").value = moduleName === defaults.networkModule
     ? defaults.networkArgs.join(" ")
     : "";
+  if (moduleName === "networks.lokr") $("cfg-lokr-factor").value = -1;
 }
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
@@ -5178,9 +5066,6 @@ $("cfg-tqa-loss-weighting-schedule").addEventListener("change", () => {
     $("cfg-tqa-loss-weighting").checked = true;
   }
 });
-$("cfg-diff-output-preservation").addEventListener("change", () => {
-  updateDopUI({ notify: $("cfg-diff-output-preservation").checked });
-});
 $("new-job-model-architecture")?.addEventListener("change", updateNewJobModelArchitecture);
 $("new-job-trigger-words").addEventListener("input", () => {
   if ($("new-job-trigger-words").value !== $("new-job-trigger-words").dataset.autoValue) {
@@ -5946,112 +5831,6 @@ document.querySelectorAll(".modal").forEach((modal) => {
   });
 });
 // ==========================================
-//  Progressive Resolution Schedule
-// ==========================================
-function renderProgressivePhases() {
-  const resList = ($("cfg-resolution").value || "")
-    .split(",").map(r => parseInt(r.trim())).filter(r => r > 0);
-  const container = $("progressive-reso-phases");
-  if (!container) return;
-
-  // Preserve existing fraction values by index before clearing
-  const existing = Array.from(container.querySelectorAll(".prog-reso-frac"))
-    .map(el => parseFloat(el.value) || 0);
-
-  container.innerHTML = "";
-
-  if (resList.length < 2) {
-    container.innerHTML = '<small>Enter at least 2 resolutions above to configure phases.</small>';
-    updateProgressiveSum();
-    return;
-  }
-
-  const defaultFrac = +(1 / resList.length).toFixed(2);
-
-  // All phases go in a single form-row so they appear side-by-side
-  const row = document.createElement("div");
-  row.className = "form-row";
-
-  resList.forEach((r, i) => {
-    const group = document.createElement("div");
-    group.className = "form-group";
-
-    const label = document.createElement("label");
-    label.textContent = `${r}px`;
-
-    const input = document.createElement("input");
-    input.type = "number";
-    input.className = "prog-reso-frac";
-    input.min = "0.01";
-    input.max = "0.99";
-    input.step = "0.01";
-    input.value = (existing[i] !== undefined && existing[i] > 0)
-      ? existing[i].toFixed(2) : defaultFrac.toFixed(2);
-
-    const hint = document.createElement("small");
-    hint.textContent = `${Math.round(parseFloat(input.value) * 100)}% of steps`;
-
-    input.addEventListener("input", () => {
-      hint.textContent = `${Math.round(parseFloat(input.value) * 100)}% of steps`;
-      updateProgressiveSum();
-    });
-
-    group.appendChild(label);
-    group.appendChild(input);
-    group.appendChild(hint);
-    row.appendChild(group);
-  });
-
-  container.appendChild(row);
-
-  // Restore fractions when loading from a saved config
-  if (window._pendingProgressiveSchedule) {
-    const fracs = window._pendingProgressiveSchedule
-      .split(",").map(p => parseFloat(p.split(":")[1]) || 0);
-    container.querySelectorAll(".prog-reso-frac").forEach((inp, i) => {
-      if (fracs[i] !== undefined) {
-        inp.value = fracs[i].toFixed(2);
-        inp.dispatchEvent(new Event("input"));
-      }
-    });
-    window._pendingProgressiveSchedule = null;
-  }
-
-  updateProgressiveSum();
-}
-
-function updateProgressiveSum() {
-  const inputs = document.querySelectorAll(".prog-reso-frac");
-  const sum = Array.from(inputs).reduce((acc, el) => acc + (parseFloat(el.value) || 0), 0);
-  const hint = $("progressive-reso-sum-hint");
-  if (!hint) return;
-  const ok = Math.abs(sum - 1.0) < 0.015;
-  const sumStr = `Sum: ${sum.toFixed(2)}`;
-  // Show sum inline in the hint text with colour
-  hint.innerHTML = `Each fraction is the portion of total steps for that resolution. Must sum to 1.0. &nbsp;<span style="font-weight:600;color:${ok ? "var(--success,#4caf50)" : "var(--error,#f44336)"}">${sumStr}</span>`;
-}
-
-// Toggle panel visibility and re-render phases
-document.addEventListener("change", (e) => {
-  if (e.target.id === "cfg-progressive-reso") {
-    const panel = $("progressive-reso-panel");
-    if (e.target.checked) {
-      panel.classList.remove("hidden");
-      renderProgressivePhases();
-    } else {
-      panel.classList.add("hidden");
-    }
-  }
-});
-
-// Re-render phases when the resolution list changes
-document.addEventListener("input", (e) => {
-  if (e.target.id === "cfg-resolution" && $("cfg-progressive-reso")?.checked) {
-    renderProgressivePhases();
-  }
-});
-
-// ==========================================
 //  Init
 // ==========================================
 async function init() {
@@ -6105,49 +5884,6 @@ async function init() {
     updateActivationOffloadUI,
   );
   $("cfg-loss-type").addEventListener("change", updateLossTypeUI);
-  // Switch and alternate modes keep KNN/CDC on separate steps. Combined mode
-  // intentionally feeds the selected noise through the CDC path in one step.
-  $("cfg-use-cdc-fm").addEventListener("change", (event) => {
-    if (!event.target.checked) return;
-    $("cfg-use-self-flow").checked = false;
-    $("cfg-cache-latents").checked = true;
-    $("cfg-cache-latents-to-disk").checked = true;
-  });
-  $("cfg-use-self-flow").addEventListener("change", (event) => {
-    if (!event.target.checked) return;
-    $("cfg-use-cdc-fm").checked = false;
-    $("cfg-unet-only").checked = true;
-    $("cfg-network-dropout").value = 0;
-  });
-  $("cfg-cdc-switch-ratio").addEventListener("input", (event) => {
-    const ratio = safeFloat(event.target.value, 0);
-    if (ratio > 0) {
-      $("cfg-use-cdc-fm").checked = true;
-      $("cfg-use-self-flow").checked = false;
-      $("cfg-cdc-combine-knn").checked = false;
-      $("cfg-cdc-alternate-knn").checked = false;
-      $("cfg-cache-latents").checked = true;
-      $("cfg-cache-latents-to-disk").checked = true;
-    }
-  });
-  $("cfg-cdc-combine-knn").addEventListener("change", (event) => {
-    if (!event.target.checked) return;
-    $("cfg-use-cdc-fm").checked = true;
-    $("cfg-use-self-flow").checked = false;
-    $("cfg-cdc-alternate-knn").checked = false;
-    $("cfg-cdc-switch-ratio").value = 0;
-    $("cfg-cache-latents").checked = true;
-    $("cfg-cache-latents-to-disk").checked = true;
-  });
-  $("cfg-cdc-alternate-knn").addEventListener("change", (event) => {
-    if (!event.target.checked) return;
-    $("cfg-use-cdc-fm").checked = true;
-    $("cfg-use-self-flow").checked = false;
-    $("cfg-cdc-combine-knn").checked = false;
-    $("cfg-cdc-switch-ratio").value = 0;
-    $("cfg-cache-latents").checked = true;
-    $("cfg-cache-latents-to-disk").checked = true;
-  });
   // Discard Button
   $("btn-discard").addEventListener("click", discardChanges);
   // Mutual exclusivity for Flash/Sage Attention

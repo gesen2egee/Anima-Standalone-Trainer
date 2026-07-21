@@ -6,17 +6,35 @@ const assert = require("node:assert/strict");
 const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "public", "index.html"), "utf8");
 const appJs = fs.readFileSync(path.join(root, "public", "js", "app.js"), "utf8");
+const serverJs = fs.readFileSync(path.join(root, "server.js"), "utf8");
 
-test("DOP controls expose class-only preservation options", () => {
-  assert.match(html, /id="cfg-diff-output-preservation"/);
-  assert.match(html, /id="cfg-diff-output-preservation-multiplier"/);
-  assert.doesNotMatch(html, /cfg-diff-output-preservation-class/);
-  assert.match(html, /DOP 只使用各 Dataset 的 Class Token/);
-  assert.match(appJs, /class="sub-class-tokens"/);
-  assert.match(appJs, /class_tokens:\s*\(s\.class_tokens \?\? ""\)\.trim\(\)/);
+test("removed experimental controls are absent from the UI", () => {
+  [
+    "cfg-diff-output-preservation",
+    "cfg-use-cdc-fm",
+    "cfg-use-self-flow",
+    "cfg-model-guidance-weight",
+    "cfg-differential-guidance-scale",
+    "cfg-ciop-prob",
+    "cfg-progressive-reso",
+    "cfg-disable-bucket-shuffle",
+  ].forEach((id) => {
+    assert.doesNotMatch(html, new RegExp(`id="${id}"`));
+    assert.doesNotMatch(appJs, new RegExp(id));
+  });
 });
 
-test("DOP persists settings and disables text encoder cache", () => {
-  assert.match(appJs, /diff_output_preservation:\s*\$\("cfg-diff-output-preservation"\)\.checked/);
-  assert.match(appJs, /\$\("cfg-cache-te"\)\.checked = false/);
+test("stale hidden experimental settings are stripped before training", () => {
+  assert.match(serverJs, /function stripRemovedExperimentalArgs\(merged\)/);
+  [
+    "use_cdc_fm",
+    "use_self_flow",
+    "diff_output_preservation",
+    "resolution_schedule",
+    "disable_bucket_shuffle",
+    "model_guidance_weight",
+    "differential_guidance_scale",
+    "ciop_prob",
+  ].forEach((key) => assert.match(serverJs, new RegExp(`'${key}'`)));
+  assert.match(serverJs, /stripRemovedExperimentalArgs\(merged\)/);
 });

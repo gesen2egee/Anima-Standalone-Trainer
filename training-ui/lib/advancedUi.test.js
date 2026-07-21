@@ -54,29 +54,26 @@ test("advanced tab contains research-oriented training controls", () => {
     "cfg-pnp-loss-weight",
     "group-cwmi-fields",
     "group-wavelet-loss-fields",
-    "cfg-model-guidance-weight",
-    "cfg-model-guidance-warmup-steps",
-    "cfg-model-guidance-prob",
-    "cfg-model-guidance-end-step",
-    "cfg-model-guidance-timestep-scaling",
-    "cfg-model-guidance-min-weight",
-    "cfg-model-guidance-cfg-zero",
-    "cfg-model-guidance-zero-init-threshold",
-    "cfg-differential-guidance-scale",
-    "cfg-ciop-prob",
-    "cfg-ciop-noise-magnitude",
-    "cfg-ciop-noise-type",
   ].forEach((id) => assert.match(advanced, new RegExp(`id="${id}"`)));
 
   assert.match(advanced, /Batch and Noise/);
   assert.match(advanced, /Loss Experiments/);
-  assert.match(advanced, /Model Guidance/);
-  assert.match(advanced, /Differential Guidance Scale/);
-  assert.match(advanced, /CIOP/);
+  assert.doesNotMatch(advanced, /Model Guidance|Differential Guidance Scale|CIOP/);
 
   const dataset = extractElementById(html, "tab-dataset");
   assert.match(dataset, /id="cfg-batch-size"/);
   assert.doesNotMatch(advanced, /id="cfg-batch-size"/);
+});
+
+test("LoKr exposes FACTOR as a real network argument", () => {
+  const html = read("public/index.html");
+  const appJs = read("public/js/app.js");
+
+  assert.match(html, /id="group-lokr-factor"/);
+  assert.match(html, /id="cfg-lokr-factor"[^>]*value="-1"/);
+  assert.match(appJs, /group-lokr-factor"\)\.classList\.toggle\("hidden", moduleName !== "networks\.lokr"\)/);
+  assert.match(appJs, /networkArgs\.push\(`factor=\$\{normalizeLokrFactor/);
+  assert.match(appJs, /return factor > 0 \? factor : -1/);
 });
 
 test("resume training is shown in training tab below checkpoint management", () => {

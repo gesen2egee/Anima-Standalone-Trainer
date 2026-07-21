@@ -260,6 +260,62 @@ function invalidateDetectedTrainingProcesses() {
     detectedTrainingCache = { time: 0, jobs: new Map() };
 }
 
+function stripRemovedExperimentalArgs(merged) {
+    const trainingArgs = merged.training_arguments;
+    if (trainingArgs) {
+        [
+            'use_cdc_fm',
+            'cdc_combine_knn',
+            'cdc_alternate_knn',
+            'cdc_knn_metric',
+            'cdc_knn_regularization',
+            'cdc_switch_ratio',
+            'cdc_switch_reverse',
+            'cdc_k_neighbors',
+            'cdc_k_bandwidth',
+            'cdc_dim',
+            'cdc_gamma',
+            'cdc_bandwidth_rescale',
+            'cdc_min_bucket_size',
+            'cdc_cache_dir',
+            'cdc_cache_memory_entries',
+            'cdc_force_recache',
+            'use_self_flow',
+            'self_flow_mask_ratio',
+            'self_flow_representation_weight',
+            'self_flow_ema_decay',
+            'self_flow_student_layer',
+            'self_flow_teacher_layer',
+            'self_flow_projection_dim',
+            'self_flow_projection_lr',
+            'self_flow_save_ema',
+            'diff_output_preservation',
+            'diff_output_preservation_multiplier',
+            'diff_output_preservation_class',
+            'resolution_schedule',
+            'disable_bucket_shuffle'
+        ].forEach(key => delete trainingArgs[key]);
+    }
+
+    const animaArgs = merged.anima_arguments;
+    if (animaArgs) {
+        [
+            'model_guidance_weight',
+            'model_guidance_warmup_steps',
+            'model_guidance_timestep_scaling',
+            'model_guidance_min_weight',
+            'model_guidance_cfg_zero',
+            'model_guidance_zero_init_threshold',
+            'model_guidance_end_step',
+            'model_guidance_prob',
+            'differential_guidance_scale',
+            'ciop_prob',
+            'ciop_noise_magnitude',
+            'ciop_noise_type'
+        ].forEach(key => delete animaArgs[key]);
+    }
+}
+
 // WebSocket clients per job
 const wsClients = new Map(); // jobName -> Set<ws>
 
@@ -1231,6 +1287,8 @@ function buildTrainingConfig(jobName, jobPath) {
     if (jobConfig.krea2_arguments) {
         merged.krea2_arguments = { ...jobConfig.krea2_arguments };
     }
+
+    stripRemovedExperimentalArgs(merged);
 
     return merged;
 }
