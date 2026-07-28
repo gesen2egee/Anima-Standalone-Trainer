@@ -821,9 +821,12 @@ function findLatestPeftPath(jobName) {
     return candidates[0]?.path || '';
 }
 
-function buildRuntimeGenerationPromptLine(body = {}, seed = 1) {
+function writeRuntimeGenerationPrompt(jobName, body = {}, requestId = crypto.randomUUID()) {
     const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
     if (!clean(body.prompt)) return null;
+    const seed = body.seed_mode === 'random'
+        ? Math.floor(Math.random() * 2147483646) + 1
+        : Number.parseInt(body.seed, 10) || 1;
     const width = Number.parseInt(body.width, 10) || 1024;
     const height = Number.parseInt(body.height, 10) || 1024;
     const steps = Number.parseInt(body.steps, 10) || 28;
@@ -832,25 +835,16 @@ function buildRuntimeGenerationPromptLine(body = {}, seed = 1) {
     const y1 = Number.parseFloat(body.y1);
     const y2 = Number.parseFloat(body.y2);
     const negative = clean(body.negative_prompt);
-    return `${clean(body.prompt)} --w ${width} --h ${height} --s ${steps} --d ${seed} --l ${scale}`
+    const line = `${clean(body.prompt)} --w ${width} --h ${height} --s ${steps} --d ${seed} --l ${scale}`
         + (negative ? ` --n ${negative}` : '')
         + (Number.isFinite(flowShift) ? ` --fs ${flowShift}` : '')
         + (Number.isFinite(y1) ? ` --y1 ${y1}` : '')
         + (Number.isFinite(y2) ? ` --y2 ${y2}` : '');
-}
-
-function writeRuntimeGenerationPrompt(jobName, body = {}, requestId = crypto.randomUUID(), count = 1) {
-    const clean = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
-    if (!clean(body.prompt)) return null;
-    const firstSeed = body.seed_mode === 'random'
-        ? Math.floor(Math.random() * 2147483646) + 1
-        : Number.parseInt(body.seed, 10) || 1;
     const requestDir = path.join(getJobPath(jobName), 'runtime', 'generation_prompts');
     fs.mkdirSync(requestDir, { recursive: true });
     const promptPath = path.join(requestDir, `${requestId}.txt`);
-    const lines = Array.from({ length: count }, (_, index) => buildRuntimeGenerationPromptLine(body, firstSeed + index));
-    fs.writeFileSync(promptPath, `${lines.join('\n')}\n`, 'utf8');
-    return { promptPath, seed: firstSeed, requestId };
+    fs.writeFileSync(promptPath, `${line}\n`, 'utf8');
+    return { promptPath, seed, requestId };
 }
 
 const queueCoordinator = createQueueCoordinator({
@@ -1980,7 +1974,7 @@ app.post('/api/jobs/:name/tag-captions', async (req, res) => {
         const captionMode = ['ocr', 'nl', 'ocr_nl', 'none'].includes(String(req.body.caption_mode || 'ocr'))
             ? String(req.body.caption_mode || 'ocr')
             : 'ocr';
-        const repoId = String(req.body.repo_id || 'Mooshie/mobilenetv4_conv_aa_large.dbv4-full').trim();
+        const repoId = String(req.body.repo_id || 'Makki2104/animetimm/eva02_large_patch14_448.dbv4-full').trim();
 
         const targets = resolveTaggerTargetsForJob(jobPath, requestedImageDir, requestedConcept);
         if (requestedImageDir) {
@@ -2596,23 +2590,14 @@ async function runStandaloneGeneration(jobName, item) {
     const jobPath = getJobPath(jobName);
     const configPath = path.join(jobPath, 'config.toml');
     const mergedConfig = buildTrainingConfig(jobName, jobPath);
-    const capture = body.capture_grid === true ? {
-        count: 25,
-        rating: String(body.capture_rating || '').trim(),
-        ratingMinConfidence: Math.min(1, Math.max(0, Number(body.capture_rating_min_confidence) || 0.5)),
-        requiredTag: String(body.capture_required_tag || '').trim(),
-        tagMinConfidence: Math.min(1, Math.max(0, Number(body.capture_tag_min_confidence) || 0.5)),
-    } : null;
-    const outputDir = capture
-        ? path.join(jobPath, 'generated_images', `capture_${item.id}`)
-        : body.generation_workspace === true
+    const outputDir = body.generation_workspace === true
         ? path.join(jobPath, 'generated_images')
         : path.join(jobPath, 'output');
     fs.mkdirSync(outputDir, { recursive: true });
 
     let promptsPath = path.join(jobPath, 'sample_prompts.txt');
     if (typeof body.prompt === 'string' && body.prompt.trim()) {
-        const runtimePrompt = writeRuntimeGenerationPrompt(jobName, body, item.id, capture?.count || 1);
+        const runtimePrompt = writeRuntimeGenerationPrompt(jobName, body, item.id);
         promptsPath = runtimePrompt.promptPath;
         body.seed = runtimePrompt.seed;
     }
@@ -2695,29 +2680,6 @@ async function runStandaloneGeneration(jobName, item) {
     proc.stdout.on('error', err => console.error(`[Gen/stdout] ${err.message}`));
     proc.stderr.on('error', err => console.error(`[Gen/stderr] ${err.message}`));
     logStream.on('error', err => console.error(`[Gen/LogFile] ${err.message}`));
-    let captureFilter = null;
-    let captureFilterResult = null;
-    if (capture && (capture.rating || capture.requiredTag)) {
-        const filterScript = path.join(ROOT_DIR, 'tools', 'filter_generated_grid.py');
-        const filterArgs = [
-            filterScript, '--image-dir', outputDir, '--expected-count', String(capture.count),
-            '--repo-id', 'Mooshie/mobilenetv4_conv_aa_large.dbv4-full',
-            '--rating', capture.rating, '--rating-min-confidence', String(capture.ratingMinConfidence),
-            '--required-tag', capture.requiredTag, '--tag-min-confidence', String(capture.tagMinConfidence),
-        ];
-        captureFilter = spawn(venv.python, filterArgs, {
-            cwd: ROOT_DIR,
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-            windowsHide: true,
-        });
-        captureFilter.stdout.on('data', appendLog);
-        captureFilter.stderr.on('data', appendLog);
-        captureFilter.on('error', err => appendLog(`\n[Capture filter] ${err.message}\n`));
-        captureFilterResult = new Promise(resolve => {
-            captureFilter.once('close', filterCode => resolve(filterCode));
-            captureFilter.once('error', () => resolve(1));
-        });
-    }
     runningJobs.set(jobName, {
         process: proc,
         pid: proc.pid,
@@ -2734,9 +2696,7 @@ async function runStandaloneGeneration(jobName, item) {
             logStream.write(message);
             logStream.end();
             broadcastLog(jobName, message);
-            if (!captureFilterResult) return resolve({ code });
-            if (code !== 0 && captureFilter && captureFilter.exitCode === null) captureFilter.kill();
-            captureFilterResult.then(filterCode => resolve({ code: code === 0 && filterCode === 0 ? 0 : 1 }));
+            resolve({ code });
         });
     });
 }
@@ -2786,9 +2746,6 @@ app.post('/api/jobs/:name/generate', async (req, res) => {
             return res.status(400).json({ error: 'A positive prompt is required' });
         }
         const activeJob = runningJobs.get(jobName);
-        if (body.capture_grid === true && activeJob?.type === 'training') {
-            return res.status(409).json({ error: '25 張下載與篩選需在訓練停止時執行' });
-        }
         if (!activeJob && await isJobTrainingFresh(jobName)) {
             return res.status(409).json({ error: 'Training is external to this server session; restart it once before queued generation' });
         }
