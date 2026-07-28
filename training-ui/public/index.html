@@ -1354,8 +1354,17 @@
                                     <label>PEFT 強度</label>
                                     <input id="generation-peft-multiplier" type="number" value="1" step="0.1">
                                 </div>
-                                <button id="generation-run" class="btn btn-primary generation-run-button">產生圖片</button>
-                                <small>圖片會存入獨立的 generated_images 目錄。可連續按下按鈕加入排程；訓練中會在安全步驟依序完成全部圖片，再恢復訓練。</small>
+                                <div class="form-group">
+                                    <label>5×5 篩選條件（全部 25 張都必須通過）</label>
+                                    <div class="form-row generation-parameter-grid">
+                                        <div class="form-group"><label>RATING</label><input id="capture-rating" type="text" placeholder="general"></div>
+                                        <div class="form-group"><label>RATING 最低信心 %</label><input id="capture-rating-confidence" type="number" value="50" min="0" max="100"></div>
+                                        <div class="form-group"><label>必須 TAG</label><input id="capture-required-tag" type="text" placeholder="smile"></div>
+                                        <div class="form-group"><label>TAG 最低信心 %</label><input id="capture-tag-confidence" type="number" value="50" min="0" max="100"></div>
+                                    </div>
+                                </div>
+                                <button id="generation-run" class="btn btn-primary generation-run-button">下載並篩選 5×5（25 張）</button>
+                                <small>每次下載會存入獨立 25 張目錄；有圖片就立即打標。若任一張不符合已填條件，整個 5×5 目錄會自動刪除。條件留白即保留全部圖片。</small>
                                 <div class="generation-queue-panel">
                                     <div class="generation-queue-title">
                                         <strong>生成排程</strong>

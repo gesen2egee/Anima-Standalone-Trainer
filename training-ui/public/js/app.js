@@ -5675,6 +5675,10 @@ function loadGenerationWorkspaceSettings() {
   $("generation-seed-mode").value = settings.seed_mode || "fixed";
   $("generation-seed").value = settings.seed || 42;
   $("generation-peft-multiplier").value = settings.network_mul || 1;
+  $("capture-rating").value = settings.capture_rating || "";
+  $("capture-rating-confidence").value = settings.capture_rating_min_confidence ?? 50;
+  $("capture-required-tag").value = settings.capture_required_tag || "";
+  $("capture-tag-confidence").value = settings.capture_tag_min_confidence ?? 50;
   updateGenerationSeedMode();
 }
 
@@ -5697,6 +5701,11 @@ function gatherGenerationWorkspaceSettings() {
     network_mul: safeFloat($("generation-peft-multiplier").value, 1),
     use_latest_peft: !$("generation-peft-select").value,
     generation_workspace: true,
+    capture_grid: true,
+    capture_rating: $("capture-rating").value.trim(),
+    capture_rating_min_confidence: Math.min(100, Math.max(0, safeFloat($("capture-rating-confidence").value, 50))) / 100,
+    capture_required_tag: $("capture-required-tag").value.trim(),
+    capture_tag_min_confidence: Math.min(100, Math.max(0, safeFloat($("capture-tag-confidence").value, 50))) / 100,
   };
 }
 
@@ -5715,13 +5724,13 @@ $("generation-run").addEventListener("click", async () => {
   }
   localStorage.setItem(`generation_workspace_${currentJob}`, JSON.stringify(payload));
   $("generation-run").disabled = true;
-  $("generation-runtime-status").textContent = "準備產生…";
+  $("generation-runtime-status").textContent = "準備下載 25 張並篩選…";
   try {
     const result = await api(`/api/jobs/${currentJob}/generate`, { method: "POST", body: payload });
     if (result.queue) renderGenerationQueue(result.queue);
     $("generation-runtime-status").textContent = result.in_training
       ? "等待安全步驟，完成排程後恢復訓練"
-      : "已加入生成排程";
+      : "已加入 5×5 下載與篩選排程";
     showToast(result.message || "Generation started");
   } catch (error) {
     $("generation-runtime-status").textContent = `失敗：${error.message}`;

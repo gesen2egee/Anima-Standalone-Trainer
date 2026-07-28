@@ -40,7 +40,7 @@ KAOMOJIS = {
     "||_||",
 }
 
-DEFAULT_REPO_ID = "Makki2104/animetimm/eva02_large_patch14_448.dbv4-full"
+DEFAULT_REPO_ID = "Mooshie/mobilenetv4_conv_aa_large.dbv4-full"
 DEFAULT_THRESHOLDS = {"general": 0.25, "character": 0.85}
 DEFAULT_PPOCR_DEVICE = os.environ.get("ANIMA_PPOCR_DEVICE", "cpu")
 DEFAULT_PPOCR_MODEL_TIER = "medium"

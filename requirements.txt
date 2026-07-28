@@ -25,6 +25,8 @@ safetensors==0.4.5
 toml==0.10.2
 voluptuous==0.15.2
 huggingface-hub==0.34.3
+# MultiLabel TIMM tagger used by 5×5 capture filtering.
+timm==1.0.27
 openai>=1.40.0
 # for Image utils
 imagesize==1.4.1
