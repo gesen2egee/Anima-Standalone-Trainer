@@ -1475,35 +1475,14 @@ class BaseDataset(torch.utils.data.Dataset):
 
         return caption
 
-    def _deduplicate_self_caption(self, subset: BaseSubset, captions: List[str]) -> str:
-        """Merge all Self wildcard captions without assuming a special tag line."""
-        separator = subset.caption_separator or ","
-        unique_tokens = []
-        seen_tokens = set()
-        for caption in captions:
-            caption = re.sub(r"\s+", " ", caption).strip()
-            if not caption:
-                continue
-            for token in caption.split(separator):
-                token = token.strip()
-                if not token:
-                    continue
-                key = re.sub(r"[.,;:!?]+$", "", token.casefold()).strip()
-                if key in seen_tokens:
-                    continue
-                seen_tokens.add(key)
-                unique_tokens.append(token)
-        return separator.join(unique_tokens)
-
     def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None, caption_mode: str = "normal"):
         """Process a caption for the normal path or the self-attention path.
 
         ``caption_mode="normal"`` preserves the existing dataset behavior.
         The self path keeps only the configured tag shuffle.  It intentionally
-        disables caption dropout, tag dropout, FAD, and token warmup.  When
-        ``enable_wildcard`` is active, Cross keeps the original one-line and
-        one-choice behavior while Self merges every line and every ``{|}``
-        choice with exact-token deduplication.
+        disables caption dropout, tag dropout, FAD, and token warmup.  Both
+        paths use the original wildcard behavior: choose one line and one
+        choice from each ``{|}`` expression.
         """
         is_self_caption = caption_mode == "self"
 
@@ -1526,44 +1505,23 @@ class BaseDataset(torch.utils.data.Dataset):
             caption = ""
         else:
             # process wildcards
-            if is_self_caption and subset.enable_wildcard:
-                # Wildcard lines and brace choices are alternatives in the
-                # normal path. Self keeps every expanded alternative and then
-                # merges exact caption units without assigning a special role
-                # to the first line.
-                self_captions = []
-                for line in caption.splitlines():
-                    if not line.strip():
-                        continue
-                    for expanded_line, _ in self.expand_wildcards(line):
-                        self_captions.append(
-                            self._process_caption_tokens(
-                                subset,
-                                expanded_line,
-                                t_val=None,
-                                allow_tag_dropout=False,
-                                allow_fad=False,
-                                allow_token_warmup=False,
-                            )
-                        )
-                caption = self._deduplicate_self_caption(subset, self_captions)
+            if subset.enable_wildcard:
+                # Keep the original behavior for both Cross and Self:
+                # choose one caption line, then choose one brace option.
+                if "\n" in caption:
+                    caption = random.choice(caption.split("\n"))
+                caption = self._replace_caption_wildcards(caption)
             else:
-                if subset.enable_wildcard:
-                    # Cross keeps the original one-line and one-choice path.
-                    if "\n" in caption:
-                        caption = random.choice(caption.split("\n"))
-                    caption = self._replace_caption_wildcards(caption)
-                else:
-                    # Without enable_wildcard, preserve the original first-line behavior.
-                    caption = caption.split("\n")[0]
-                caption = self._process_caption_tokens(
-                    subset,
-                    caption,
-                    t_val,
-                    allow_tag_dropout=not is_self_caption,
-                    allow_fad=not is_self_caption,
-                    allow_token_warmup=not is_self_caption,
-                )
+                # Without enable_wildcard, preserve the original first-line behavior.
+                caption = caption.split("\n")[0]
+            caption = self._process_caption_tokens(
+                subset,
+                caption,
+                t_val,
+                allow_tag_dropout=not is_self_caption,
+                allow_fad=not is_self_caption,
+                allow_token_warmup=not is_self_caption,
+            )
 
             # process secondary separator
             if subset.secondary_separator:
