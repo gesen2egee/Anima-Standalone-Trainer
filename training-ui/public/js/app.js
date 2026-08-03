@@ -98,11 +98,6 @@ function isKrea2Architecture(architecture) {
   return architecture === "krea2" || architecture === "krea2_bypass";
 }
 
-function areCrossSelfWildcardsEnabled() {
-  const controls = Array.from(document.querySelectorAll(".sub-enable-wildcard"));
-  return controls.length === 0 || controls.every((control) => control.checked);
-}
-
 function updateCrossSelfUI() {
   const master = $("cfg-cross-self-alternating");
   const cross = $("cfg-cross-self-train-cross");
@@ -132,9 +127,6 @@ function updateCrossSelfUI() {
   if (enabled && !cross.checked && !self.checked) {
     hint.textContent = "錯誤：至少要選擇 Cross 或 Self 訓練階段。";
     hint.style.color = "var(--danger, #e05d5d)";
-  } else if (enabled && !areCrossSelfWildcardsEnabled()) {
-    hint.textContent = "錯誤：Cross / Self 交替訓練需要所有 dataset subset 開啟 Enable Wildcard。";
-    hint.style.color = "var(--danger, #e05d5d)";
   } else if (enabled && cross.checked && self.checked) {
     hint.textContent = "目前設定：Cross → Self → Cross → Self，依 optimizer step 交替。";
     hint.style.color = "";
@@ -156,11 +148,6 @@ function validateCrossSelfUI() {
   if (!(cross?.checked || self?.checked)) {
     updateCrossSelfUI();
     showToast("Cross / Self 交替訓練至少要選擇 Cross 或 Self。", "danger");
-    return false;
-  }
-  if (!areCrossSelfWildcardsEnabled()) {
-    updateCrossSelfUI();
-    showToast("Cross / Self 交替訓練需要所有 dataset subset 開啟 Enable Wildcard。", "danger");
     return false;
   }
   return true;

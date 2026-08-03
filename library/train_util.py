@@ -1169,15 +1169,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_cross_self_caption_training(self, enabled: bool):
         """Prepare both normal and self-attention caption variants per item."""
-        enabled = bool(enabled)
-        if enabled:
-            disabled_wildcard_subsets = [subset for subset in self.subsets if not subset.enable_wildcard]
-            if disabled_wildcard_subsets:
-                raise ValueError(
-                    "Cross/Self 交替訓練需要所有訓練 subset 開啟 enable_wildcard，"
-                    "才能讓 Cross 抽一行、Self 展開全部 wildcard 選項。"
-                )
-        self.cross_self_caption_training = enabled
+        self.cross_self_caption_training = bool(enabled)
 
     def set_max_train_steps(self, max_train_steps):
         self.max_train_steps = max_train_steps
