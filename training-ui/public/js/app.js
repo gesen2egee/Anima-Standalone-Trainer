@@ -98,6 +98,59 @@ function isKrea2Architecture(architecture) {
   return architecture === "krea2" || architecture === "krea2_bypass";
 }
 
+function updateCrossSelfUI() {
+  const master = $("cfg-cross-self-alternating");
+  const cross = $("cfg-cross-self-train-cross");
+  const self = $("cfg-cross-self-train-self");
+  const hint = $("cfg-cross-self-hint");
+  if (!master || !cross || !self) return;
+
+  const architecture = $("cfg-model-architecture")?.value || "anima";
+  const isNetworkTraining = $("cfg-training-type")?.value !== "full_finetune";
+  const enabled = master.checked && !isKrea2Architecture(architecture) && isNetworkTraining;
+  cross.disabled = !enabled;
+  self.disabled = !enabled;
+  const cache = $("cfg-cache-te");
+  if (cache && !isKrea2Architecture(architecture)) {
+    if (enabled) {
+      if (!cache.disabled) cache.dataset.crossSelfPrevious = String(cache.checked);
+      cache.checked = false;
+      cache.disabled = true;
+    } else if (cache.disabled && cache.dataset.crossSelfPrevious !== undefined) {
+      cache.checked = cache.dataset.crossSelfPrevious === "true";
+      cache.disabled = false;
+      delete cache.dataset.crossSelfPrevious;
+    }
+  }
+  if (!hint) return;
+
+  if (enabled && !cross.checked && !self.checked) {
+    hint.textContent = "錯誤：至少要選擇 Cross 或 Self 訓練階段。";
+    hint.style.color = "var(--danger, #e05d5d)";
+  } else if (enabled && cross.checked && self.checked) {
+    hint.textContent = "目前設定：Cross → Self → Cross → Self，依 optimizer step 交替。";
+    hint.style.color = "";
+  } else if (enabled) {
+    hint.textContent = "目前只更新已勾選的階段，不會切換到未勾選的階段。";
+    hint.style.color = "";
+  } else {
+    hint.textContent = "功能關閉，不會改變原本訓練流程。";
+    hint.style.color = "";
+  }
+}
+
+function validateCrossSelfUI() {
+  const architecture = $("cfg-model-architecture")?.value || "anima";
+  const master = $("cfg-cross-self-alternating");
+  if (isKrea2Architecture(architecture) || $("cfg-training-type")?.value === "full_finetune" || !master?.checked) return true;
+  const cross = $("cfg-cross-self-train-cross");
+  const self = $("cfg-cross-self-train-self");
+  if (cross?.checked || self?.checked) return true;
+  updateCrossSelfUI();
+  showToast("Cross / Self 交替訓練至少要選擇 Cross 或 Self。", "danger");
+  return false;
+}
+
 function inferModelArchitecture(config = {}) {
   const explicit = config.ui_arguments?.architecture || config.model_architecture;
   if (MODEL_ARCHITECTURE_DEFAULTS[explicit]) return explicit;
@@ -165,6 +218,9 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
   document.querySelectorAll(".generation-krea-only").forEach((element) => {
     element.classList.toggle("hidden", !isKrea2Architecture(architecture));
   });
+  document.querySelectorAll(".anima-training-only").forEach((element) => {
+    element.classList.toggle("hidden", isKrea2Architecture(architecture));
+  });
   const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture];
   const hint = $("cfg-model-architecture-hint");
   if (hint) hint.textContent = defaults.hint;
@@ -192,6 +248,7 @@ function updateModelArchitectureUI({ applyDefaults = false } = {}) {
       ? "Krea 2：2.5 為建議倍率；Autoshift 會乘上每張圖片的 Mask Shift，Krea 2 Shift 也會套用相對倍率。"
       : "Anima：1.0 為中性倍率；Autoshift 會乘上每張圖片計算出的 Mask Shift。";
   }
+  updateCrossSelfUI();
   const unetOnlyLabel = $("cfg-unet-only-label");
   if (unetOnlyLabel) unetOnlyLabel.textContent = architecture === "krea2" ? "Train DiT Only" : "Train DiT Only";
   const unetOnlyHint = $("cfg-unet-only-hint");
@@ -2290,6 +2347,10 @@ function populateConfig(config) {
     ? (a.krea2_max_token_length ?? a.qwen3_max_token_length ?? 512)
     : (a.qwen3_max_token_length ?? 512);
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
+  $("cfg-cross-self-alternating").checked = !isKrea2Architecture(modelArchitecture) && a.cross_self_alternating === true;
+  $("cfg-cross-self-train-cross").checked = a.cross_self_train_cross ?? true;
+  $("cfg-cross-self-train-self").checked = a.cross_self_train_self ?? true;
+  updateCrossSelfUI();
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
@@ -2759,6 +2820,13 @@ function gatherConfig() {
         t5_max_token_length: safeInt($("cfg-t5-max-token-length").value),
       }),
       weighting_scheme: $("cfg-weighting-scheme").value,
+      ...(!isKrea2 && $("cfg-training-type").value !== "full_finetune" && $("cfg-cross-self-alternating").checked
+        ? {
+            cross_self_alternating: true,
+            cross_self_train_cross: $("cfg-cross-self-train-cross").checked,
+            cross_self_train_self: $("cfg-cross-self-train-self").checked,
+          }
+        : {}),
     },
     krea2_arguments: isKrea2
       ? {
@@ -3241,7 +3309,8 @@ async function runSubsetTagger(card, idx) {
 //  Save
 // ==========================================
 async function saveJob() {
-  if (!currentJob) return;
+  if (!currentJob) return false;
+  if (!validateCrossSelfUI()) return false;
   const config = gatherConfig();
   const dataset = gatherDataset();
   // Prevent duplicate directories
@@ -3253,7 +3322,7 @@ async function saveJob() {
     showToast(
       "Error: Duplicate Image Directories detected. Each subset must have a unique path.",
     );
-    return;
+    return false;
   }
   // Save Config & Dataset
   await api(`/api/jobs/${currentJob}`, {
@@ -3270,6 +3339,7 @@ async function saveJob() {
   lastSavedNegativePrompt = $("global-negative-prompt").value;
   checkDirty();
   showToast("Job saved");
+  return true;
 }
 function checkDirty() {
   if (!currentJob) return;
@@ -3349,6 +3419,7 @@ function applyNetworkModulePreset(moduleName) {
 }
 $("cfg-training-type").addEventListener("change", (e) => {
   updateTrainingTypeUI(e.target.value);
+  updateCrossSelfUI();
   checkDirty();
 });
 $("cfg-network-module").addEventListener("change", () => {
@@ -3358,6 +3429,18 @@ $("cfg-network-module").addEventListener("change", () => {
 });
 $("cfg-model-architecture")?.addEventListener("change", () => {
   updateModelArchitectureUI({ applyDefaults: true });
+  checkDirty();
+});
+$("cfg-cross-self-alternating")?.addEventListener("change", () => {
+  updateCrossSelfUI();
+  checkDirty();
+});
+$("cfg-cross-self-train-cross")?.addEventListener("change", () => {
+  updateCrossSelfUI();
+  checkDirty();
+});
+$("cfg-cross-self-train-self")?.addEventListener("change", () => {
+  updateCrossSelfUI();
   checkDirty();
 });
 $("cfg-unet-only")?.addEventListener("change", () => {
@@ -5468,6 +5551,7 @@ document.addEventListener("DOMContentLoaded", () => {
   updateDeepspeedOffloadUI();
   // Initial reconcile call
   reconcileFSDPConflicts();
+  updateCrossSelfUI();
 });
 // Load GPUs for generation (separate from training GPU selection)
 async function loadGenGPUs() {
@@ -5635,6 +5719,7 @@ $("btn-delete").addEventListener("click", () => {
 // Train
 $("btn-run").addEventListener("click", async () => {
   if (!currentJob) return;
+  if (!validateCrossSelfUI()) return;
   let warningMsg = "";
   // Check sampling Logic
   if (($("cfg-enable-sampling").checked || $("cfg-sample-at-first").checked) && currentPrompts.length === 0) {
@@ -5642,7 +5727,7 @@ $("btn-run").addEventListener("click", async () => {
       "Sampling is enabled but no prompts are defined.\n\nContinue training without generating samples...\n\n";
   }
   // Auto-save first
-  if (isDirty) await saveJob();
+  if (isDirty && !(await saveJob())) return;
   await runCurrentJobFromTopButton(warningMsg);
 });
 

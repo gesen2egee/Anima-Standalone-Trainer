@@ -162,7 +162,10 @@ function stripKrea2ShadowedAnimaArgs(animaArgs) {
         'discrete_flow_shift',
         'sigmoid_scale',
         'qwen3_max_token_length',
-        't5_max_token_length'
+        't5_max_token_length',
+        'cross_self_alternating',
+        'cross_self_train_cross',
+        'cross_self_train_self'
     ].forEach(key => delete animaArgs[key]);
 }
 

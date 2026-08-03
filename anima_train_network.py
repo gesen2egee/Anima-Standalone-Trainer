@@ -32,6 +32,93 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _cross_self_alternating_enabled(args) -> bool:
+    return bool(getattr(args, "cross_self_alternating", False))
+
+
+def _validate_cross_self_args(args) -> None:
+    if not _cross_self_alternating_enabled(args):
+        return
+
+    if not (getattr(args, "cross_self_train_cross", False) or getattr(args, "cross_self_train_self", False)):
+        raise ValueError("cross_self_alternating 已啟用，但至少要選擇 Cross 或 Self 訓練階段。")
+
+    if getattr(args, "cache_text_encoder_outputs", False) or getattr(args, "cache_text_encoder_outputs_to_disk", False):
+        raise ValueError(
+            "Cross/Self 交替訓練需要每個 batch 即時建立兩份 caption，不能使用 cache_text_encoder_outputs。"
+        )
+
+    if not getattr(args, "network_train_unet_only", True):
+        raise ValueError("Cross/Self 交替訓練目前只支援 Anima DiT LoRA，請停用 Text Encoder 訓練。")
+
+
+def _get_cross_self_phase(args, step: int) -> str:
+    phases = []
+    if getattr(args, "cross_self_train_cross", False):
+        phases.append("cross")
+    if getattr(args, "cross_self_train_self", False):
+        phases.append("self")
+    if not phases:
+        raise ValueError("Cross/Self 交替訓練沒有可用的訓練階段。")
+    return phases[int(step) % len(phases)]
+
+
+def _iter_cross_self_lora_modules(network):
+    """Yield each injected LoRA/adapter module once."""
+    seen = set()
+    found = False
+    for attribute in ("text_encoder_loras", "unet_loras"):
+        for module in getattr(network, attribute, []) or []:
+            identity = id(module)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            found = True
+            yield module
+
+    # Keep this compatible with network implementations that do not expose
+    # the standard lora lists but still attach original_name to each adapter.
+    if not found and hasattr(network, "modules"):
+        for module in network.modules():
+            if not getattr(module, "original_name", None):
+                continue
+            identity = id(module)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            yield module
+
+
+def _get_cross_self_module_kind(module):
+    original_name = str(getattr(module, "original_name", ""))
+    if ".self_attn" in original_name or original_name.startswith("self_attn"):
+        return "self"
+    if ".cross_attn" in original_name or original_name.startswith("cross_attn"):
+        return "cross"
+    return None
+
+
+def _set_cross_self_trainability(network, phase: str):
+    counts = {"cross": 0, "self": 0, "other": 0}
+    for module in _iter_cross_self_lora_modules(network):
+        kind = _get_cross_self_module_kind(module)
+        if kind is None:
+            counts["other"] += 1
+            enabled = False
+        else:
+            counts[kind] += 1
+            enabled = kind == phase
+        for parameter in module.parameters():
+            parameter.requires_grad_(enabled)
+
+    if counts[phase] == 0:
+        raise ValueError(
+            f"Cross/Self 交替訓練要求 {phase} LoRA 模組，但目前沒有找到對應模組；"
+            "請檢查 network_args 的 self_attn/cross_attn 目標。"
+        )
+    return counts
+
+
 class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_network.NetworkTrainer):
     cdc_architecture_name = "anima"
 
@@ -40,6 +127,8 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         self.sample_prompts_te_outputs = None
         self._dop_text_encoder_conds = None
         self._dop_loss = None
+        self._cross_self_phase = None
+        self._cross_self_phase_counts = None
 
     def assert_extra_args(
         self,
@@ -48,6 +137,10 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         val_dataset_group: Optional[train_util.DatasetGroup],
     ):
         self.validate_flow_training_args(args)
+        _validate_cross_self_args(args)
+        train_dataset_group.set_cross_self_caption_training(_cross_self_alternating_enabled(args))
+        if val_dataset_group is not None:
+            val_dataset_group.set_cross_self_caption_training(False)
         if getattr(args, "knn_noise_k", 0) < 0:
 
             raise ValueError("knn_noise_k must be greater than or equal to 0")
@@ -529,6 +622,15 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
     ) -> torch.Tensor:
         """Override base process_batch for caption dropout with cached text encoder outputs."""
 
+        if _cross_self_alternating_enabled(args) and is_train:
+            if self._cross_self_phase is None:
+                raise RuntimeError("Cross/Self 訓練階段尚未在 batch 前設定。")
+            if self._cross_self_phase == "self":
+                if "self_captions" not in batch or "self_input_ids_list" not in batch:
+                    raise RuntimeError("Self 訓練 batch 缺少 self caption；請確認資料集已正確初始化。")
+                batch["captions"] = batch["self_captions"]
+                batch["input_ids_list"] = batch["self_input_ids_list"]
+
         self._dop_text_encoder_conds = None
         if is_train and args.diff_output_preservation:
             caption_separators = batch.get("caption_separators")
@@ -561,23 +663,49 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             # Add the caption dropout rates back to the list for validation dataset (which is re-used batch items)
             batch["text_encoder_outputs_list"] = text_encoder_outputs_list + [caption_dropout_rates]
 
-        return super().process_batch(
-            batch,
-            text_encoders,
-            unet,
-            network,
-            vae,
-            noise_scheduler,
-            vae_dtype,
-            weight_dtype,
-            accelerator,
-            args,
-            text_encoding_strategy,
-            tokenize_strategy,
-            is_train,
-            train_text_encoder,
-            train_unet,
-        )
+        original_cep_noise = getattr(args, "cep_noise", 0.0)
+        if _cross_self_alternating_enabled(args) and is_train and self._cross_self_phase == "self":
+            args.cep_noise = 0.0
+        try:
+            return super().process_batch(
+                batch,
+                text_encoders,
+                unet,
+                network,
+                vae,
+                noise_scheduler,
+                vae_dtype,
+                weight_dtype,
+                accelerator,
+                args,
+                text_encoding_strategy,
+                tokenize_strategy,
+                is_train,
+                train_text_encoder,
+                train_unet,
+            )
+        finally:
+            args.cep_noise = original_cep_noise
+
+    def on_step_start(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype, is_train: bool = True):
+        if not _cross_self_alternating_enabled(args) or not is_train:
+            return
+
+        phase = _get_cross_self_phase(args, getattr(self, "current_training_step", 0))
+        unwrapped_network = accelerator.unwrap_model(network)
+        counts = _set_cross_self_trainability(unwrapped_network, phase)
+        if self._cross_self_phase is None:
+            logger.info(
+                "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, other_modules_frozen=%d",
+                phase,
+                counts["cross"],
+                counts["self"],
+                counts["other"],
+            )
+        elif phase != self._cross_self_phase:
+            logger.debug("Cross/Self alternating phase switched to %s", phase)
+        self._cross_self_phase = phase
+        self._cross_self_phase_counts = counts
 
     def post_process_loss(self, loss, args, timesteps, noise_scheduler):
         if self._dop_loss is not None:
@@ -630,6 +758,21 @@ def setup_parser() -> argparse.ArgumentParser:
     train_util.add_dit_training_arguments(parser)
     anima_train_utils.add_anima_training_arguments(parser)
     flow_network_trainer.add_flow_network_training_arguments(parser)
+    parser.add_argument(
+        "--cross_self_alternating",
+        action="store_true",
+        help="alternate Cross-attention and Self-attention LoRA training steps for Anima",
+    )
+    parser.add_argument(
+        "--cross_self_train_cross",
+        action="store_true",
+        help="enable the Cross-attention phase when cross_self_alternating is enabled",
+    )
+    parser.add_argument(
+        "--cross_self_train_self",
+        action="store_true",
+        help="enable the Self-attention phase when cross_self_alternating is enabled",
+    )
     # parser.add_argument("--fp8_scaled", action="store_true", help="Use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
     parser.add_argument(
         "--unsloth_offload_checkpointing",

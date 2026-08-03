@@ -518,6 +518,26 @@
                             </div>
                         </div>
 
+                        <div class="anima-training-only network-training-only" style="margin-top: 24px;">
+                            <h4>Cross / Self 交替訓練</h4>
+                            <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self，Self 階段保留 caption 洗牌但停用各種 caption dropout、FAD、token warmup 與 CEP。</small>
+                            <div class="form-row" style="margin-top: 12px;">
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
+                                    <small>至少勾選一個訓練階段；兩者都勾選時依 optimizer step 交替。</small>
+                                </div>
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-cross-self-train-cross" checked> 訓練 Cross Attention</label>
+                                    <small>Cross 階段使用原本的 caption 處理行為。</small>
+                                </div>
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-cross-self-train-self" checked> 訓練 Self Attention</label>
+                                    <small>Self 階段同時送入 tag 行與自然語言行，僅保留設定的 tag shuffle。</small>
+                                </div>
+                            </div>
+                            <small id="cfg-cross-self-hint"></small>
+                        </div>
+
                         <h4 style="margin-top: 24px;">Aesthetic Loss Weighting</h4>
                         <small>Score images while caching latents, then normalize sample weights so the full dataset mean is 1.0.</small>
                         <div class="form-row" style="margin-top: 12px;">

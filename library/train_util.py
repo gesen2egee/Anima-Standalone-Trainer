@@ -1064,6 +1064,11 @@ class BaseDataset(torch.utils.data.Dataset):
         self.current_step: int = 0
         self.max_train_steps: int = 0
         self.seed: int = 0
+        # When enabled, each training item carries both the normal caption
+        # variant and a self-attention variant.  The architecture trainer
+        # selects the appropriate one after the batch has been produced, so
+        # DataLoader prefetching cannot move the phase out of sync.
+        self.cross_self_caption_training: bool = False
 
         # inpainting
         self.train_inpainting = train_inpainting
@@ -1161,6 +1166,10 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_current_step(self, step):
         self.current_step = step
+
+    def set_cross_self_caption_training(self, enabled: bool):
+        """Prepare both normal and self-attention caption variants per item."""
+        self.cross_self_caption_training = bool(enabled)
 
     def set_max_train_steps(self, max_train_steps):
         self.max_train_steps = max_train_steps
@@ -1333,7 +1342,150 @@ class BaseDataset(torch.utils.data.Dataset):
 
         return flex_tokens
 
-    def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None):
+    def _replace_caption_wildcards(self, caption: str) -> str:
+        """Expand brace wildcards in one caption line using the normal RNG."""
+        replacer1 = "⦅"
+        replacer2 = "⦆"
+        while replacer1 in caption or replacer2 in caption:
+            replacer1 += "⦅"
+            replacer2 += "⦆"
+
+        caption = caption.replace("{{", replacer1).replace("}}", replacer2)
+
+        def replace_wildcard(match):
+            return random.choice(match.group(1).split("|"))
+
+        caption = re.sub(r"\{([^}]+)\}", replace_wildcard, caption)
+        return caption.replace(replacer1, "{").replace(replacer2, "}")
+
+    def _process_caption_tokens(
+        self,
+        subset: BaseSubset,
+        caption: str,
+        t_val: Optional[float],
+        *,
+        allow_tag_dropout: bool,
+        allow_fad: bool,
+        allow_token_warmup: bool,
+    ) -> str:
+        """Apply token-level caption transforms with explicit feature gates."""
+        tag_dropout_rate = subset.caption_tag_dropout_rate if allow_tag_dropout else 0.0
+        fad_enabled = allow_fad and getattr(subset, "enable_fad", False)
+        token_warmup_step = subset.token_warmup_step if allow_token_warmup else 0
+
+        if subset.shuffle_caption or token_warmup_step > 0 or tag_dropout_rate > 0 or fad_enabled:
+            fixed_tokens = []
+            flex_tokens = []
+            fixed_suffix_tokens = []
+            if (
+                hasattr(subset, "keep_tokens_separator")
+                and subset.keep_tokens_separator
+                and subset.keep_tokens_separator in caption
+            ):
+                fixed_part, flex_part = caption.split(subset.keep_tokens_separator, 1)
+                if subset.keep_tokens_separator in flex_part:
+                    flex_part, fixed_suffix_part = flex_part.split(subset.keep_tokens_separator, 1)
+                    fixed_suffix_tokens = [t.strip() for t in fixed_suffix_part.split(subset.caption_separator) if t.strip()]
+
+                fixed_tokens = [t.strip() for t in fixed_part.split(subset.caption_separator) if t.strip()]
+                flex_tokens = [t.strip() for t in flex_part.split(subset.caption_separator) if t.strip()]
+            else:
+                tokens = [t.strip() for t in caption.strip().split(subset.caption_separator)]
+                flex_tokens = tokens[:]
+                if subset.keep_tokens > 0:
+                    fixed_tokens = flex_tokens[: subset.keep_tokens]
+                    flex_tokens = tokens[subset.keep_tokens :]
+
+            if allow_token_warmup:
+                if subset.token_warmup_step < 1:  # 初回に上書きする
+                    subset.token_warmup_step = math.floor(subset.token_warmup_step * self.max_train_steps)
+                    token_warmup_step = subset.token_warmup_step
+                if token_warmup_step and self.current_step < token_warmup_step:
+                    tokens_len = (
+                        math.floor(
+                            (self.current_step) * ((len(flex_tokens) - subset.token_warmup_min) / token_warmup_step)
+                        )
+                        + subset.token_warmup_min
+                    )
+                    flex_tokens = flex_tokens[:tokens_len]
+
+            def dropout_tags(tokens):
+                if tag_dropout_rate <= 0:
+                    return tokens
+                kept = []
+                for token in tokens:
+                    if subset.is_keep_tag(token):
+                        kept.append(token)
+                        continue
+                    if random.random() >= tag_dropout_rate:
+                        kept.append(token)
+                return kept
+
+            if subset.shuffle_caption:
+                random.shuffle(flex_tokens)
+
+            if fad_enabled:
+                if getattr(self, "max_train_steps", 0) > 0:
+                    if subset.fad_curriculum:
+                        i = self.current_step
+                        N = self.max_train_steps
+                        iw = N * self.fad_curriculum_start
+                        if_ = N * self.fad_curriculum_end
+
+                        if i < iw:
+                            p_step = self.fad_step_start
+                        elif i >= if_:
+                            p_step = self.fad_step_end
+                        else:
+                            s = (i - iw) / (if_ - iw) if if_ != iw else 1.0
+                            p_step_normalized = 1.0 - math.exp(-self.fad_curriculum_beta * s)
+                            p_step = self.fad_step_start + (self.fad_step_end - self.fad_step_start) * p_step_normalized
+                    else:
+                        p_step = 1.0
+
+                    p_step = calculate_fad_step_scale(
+                        p_step,
+                        t_val=t_val,
+                        use_timestep=getattr(subset, "fad_timestep", False),
+                        use_curriculum=getattr(subset, "fad_curriculum", False),
+                    )
+
+                    kept = []
+                    for token in flex_tokens:
+                        if subset.is_keep_tag(token):
+                            kept.append(token)
+                            continue
+                        r_w = subset.fad_tag_frequencies.get(token, 0.0)
+                        delta_p = self.fad_p_max - self.fad_p_min
+                        val = self.fad_alpha * (r_w - self.fad_c)
+                        try:
+                            sigmoid_val = 1.0 / (1.0 + math.exp(-val))
+                        except OverflowError:
+                            sigmoid_val = 0.0 if val < 0 else 1.0
+
+                        p_drop = self.fad_p_min + delta_p * sigmoid_val
+                        p_drop_final = p_drop * p_step
+
+                        if random.random() >= p_drop_final:
+                            kept.append(token)
+                    flex_tokens = kept
+            flex_tokens = dropout_tags(flex_tokens)
+
+            caption = ", ".join(fixed_tokens + flex_tokens + fixed_suffix_tokens)
+
+        return caption
+
+    def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None, caption_mode: str = "normal"):
+        """Process a caption for the normal path or the self-attention path.
+
+        ``caption_mode="normal"`` preserves the existing dataset behavior.
+        The self path keeps only the configured tag shuffle.  It intentionally
+        disables caption dropout, tag dropout, FAD, and token warmup.  When a
+        caption has multiple lines, all lines are retained so a tag line and a
+        natural-language line can condition the same forward pass.
+        """
+        is_self_caption = caption_mode == "self"
+
         # caption に prefix/suffix を付ける
         if subset.caption_prefix:
             caption = subset.caption_prefix + " " + caption
@@ -1341,141 +1493,61 @@ class BaseDataset(torch.utils.data.Dataset):
             caption = caption + " " + subset.caption_suffix
 
         # dropoutの決定：tag dropがこのメソッド内にあるのでここで行うのが良い
-        is_drop_out = subset.caption_dropout_rate > 0 and random.random() < subset.caption_dropout_rate
-        is_drop_out = (
-            is_drop_out
-            or subset.caption_dropout_every_n_epochs > 0
-            and self.current_epoch % subset.caption_dropout_every_n_epochs == 0
-        )
+        is_drop_out = False if is_self_caption else subset.caption_dropout_rate > 0 and random.random() < subset.caption_dropout_rate
+        if not is_self_caption:
+            is_drop_out = (
+                is_drop_out
+                or subset.caption_dropout_every_n_epochs > 0
+                and self.current_epoch % subset.caption_dropout_every_n_epochs == 0
+            )
 
         if is_drop_out:
             caption = ""
         else:
             # process wildcards
             if subset.enable_wildcard:
-                # if caption is multiline, random choice one line
-                if "\n" in caption:
-                    caption = random.choice(caption.split("\n"))
-
-                # wildcard is like '{aaa|bbb|ccc...}'
-                # escape the curly braces like {{ or }}
-                replacer1 = "⦅"
-                replacer2 = "⦆"
-                while replacer1 in caption or replacer2 in caption:
-                    replacer1 += "⦅"
-                    replacer2 += "⦆"
-
-                caption = caption.replace("{{", replacer1).replace("}}", replacer2)
-
-                # replace the wildcard
-                def replace_wildcard(match):
-                    return random.choice(match.group(1).split("|"))
-
-                caption = re.sub(r"\{([^}]+)\}", replace_wildcard, caption)
-
-                # unescape the curly braces
-                caption = caption.replace(replacer1, "{").replace(replacer2, "}")
+                if is_self_caption and "\n" in caption:
+                    # Wildcard lines are alternatives in the normal path. For
+                    # Self we retain every line so tag + natural-language
+                    # captions are jointly available.
+                    caption = "\n".join(
+                        self._replace_caption_wildcards(line) for line in caption.splitlines() if line.strip()
+                    )
+                else:
+                    # if caption is multiline, random choice one line
+                    if "\n" in caption:
+                        caption = random.choice(caption.split("\n"))
+                    caption = self._replace_caption_wildcards(caption)
             else:
                 # if caption is multiline, use the first line
-                caption = caption.split("\n")[0]
+                if not is_self_caption:
+                    caption = caption.split("\n")[0]
 
-            if subset.shuffle_caption or subset.token_warmup_step > 0 or subset.caption_tag_dropout_rate > 0 or getattr(subset, "enable_fad", False):
-                fixed_tokens = []
-                flex_tokens = []
-                fixed_suffix_tokens = []
-                if (
-                    hasattr(subset, "keep_tokens_separator")
-                    and subset.keep_tokens_separator
-                    and subset.keep_tokens_separator in caption
-                ):
-                    fixed_part, flex_part = caption.split(subset.keep_tokens_separator, 1)
-                    if subset.keep_tokens_separator in flex_part:
-                        flex_part, fixed_suffix_part = flex_part.split(subset.keep_tokens_separator, 1)
-                        fixed_suffix_tokens = [t.strip() for t in fixed_suffix_part.split(subset.caption_separator) if t.strip()]
-
-                    fixed_tokens = [t.strip() for t in fixed_part.split(subset.caption_separator) if t.strip()]
-                    flex_tokens = [t.strip() for t in flex_part.split(subset.caption_separator) if t.strip()]
-                else:
-                    tokens = [t.strip() for t in caption.strip().split(subset.caption_separator)]
-                    flex_tokens = tokens[:]
-                    if subset.keep_tokens > 0:
-                        fixed_tokens = flex_tokens[: subset.keep_tokens]
-                        flex_tokens = tokens[subset.keep_tokens :]
-
-                if subset.token_warmup_step < 1:  # 初回に上書きする
-                    subset.token_warmup_step = math.floor(subset.token_warmup_step * self.max_train_steps)
-                if subset.token_warmup_step and self.current_step < subset.token_warmup_step:
-                    tokens_len = (
-                        math.floor(
-                            (self.current_step) * ((len(flex_tokens) - subset.token_warmup_min) / (subset.token_warmup_step))
-                        )
-                        + subset.token_warmup_min
-                    )
-                    flex_tokens = flex_tokens[:tokens_len]
-
-                def dropout_tags(tokens):
-                    if subset.caption_tag_dropout_rate <= 0:
-                        return tokens
-                    l = []
-                    for token in tokens:
-                        if subset.is_keep_tag(token):
-                            l.append(token)
-                            continue
-                        if random.random() >= subset.caption_tag_dropout_rate:
-                            l.append(token)
-                    return l
-
-                if subset.shuffle_caption:
-                    random.shuffle(flex_tokens)
-
-                if getattr(subset, "enable_fad", False):
-                    if getattr(self, "max_train_steps", 0) > 0:
-                        if subset.fad_curriculum:
-                            i = self.current_step
-                            N = self.max_train_steps
-                            iw = N * self.fad_curriculum_start
-                            if_ = N * self.fad_curriculum_end
-
-                            if i < iw:
-                                p_step = self.fad_step_start
-                            elif i >= if_:
-                                p_step = self.fad_step_end
-                            else:
-                                s = (i - iw) / (if_ - iw) if if_ != iw else 1.0
-                                p_step_normalized = 1.0 - math.exp(-self.fad_curriculum_beta * s)
-                                p_step = self.fad_step_start + (self.fad_step_end - self.fad_step_start) * p_step_normalized
-                        else:
-                            p_step = 1.0
-
-                        p_step = calculate_fad_step_scale(
-                            p_step,
-                            t_val=t_val,
-                            use_timestep=getattr(subset, "fad_timestep", False),
-                            use_curriculum=getattr(subset, "fad_curriculum", False),
-                        )
-
-                        l = []
-                        for token in flex_tokens:
-                            if subset.is_keep_tag(token):
-                                l.append(token)
-                                continue
-                            r_w = subset.fad_tag_frequencies.get(token, 0.0)
-                            delta_p = self.fad_p_max - self.fad_p_min
-                            val = self.fad_alpha * (r_w - self.fad_c)
-                            try:
-                                sigmoid_val = 1.0 / (1.0 + math.exp(-val))
-                            except OverflowError:
-                                sigmoid_val = 0.0 if val < 0 else 1.0
-
-                            p_drop = self.fad_p_min + delta_p * sigmoid_val
-                            p_drop_final = p_drop * p_step
-
-                            if random.random() >= p_drop_final:
-                                l.append(token)
-                        flex_tokens = l
-                flex_tokens = dropout_tags(flex_tokens)
-
-                caption = ", ".join(fixed_tokens + flex_tokens + fixed_suffix_tokens)
+            if is_self_caption and "\n" in caption:
+                # Treat the first line as the tag line and leave the remaining
+                # natural-language lines in their original order. This keeps
+                # tag shuffling useful without shuffling prose fragments.
+                lines = [line.strip() for line in caption.splitlines() if line.strip()]
+                tag_line = lines[0] if lines else ""
+                prose = " ".join(lines[1:])
+                tag_line = self._process_caption_tokens(
+                    subset,
+                    tag_line,
+                    t_val=None,
+                    allow_tag_dropout=False,
+                    allow_fad=False,
+                    allow_token_warmup=False,
+                )
+                caption = " ".join(part for part in (tag_line, prose) if part)
+            else:
+                caption = self._process_caption_tokens(
+                    subset,
+                    caption,
+                    t_val,
+                    allow_tag_dropout=not is_self_caption,
+                    allow_fad=not is_self_caption,
+                    allow_token_warmup=not is_self_caption,
+                )
 
             # process secondary separator
             if subset.secondary_separator:
@@ -2164,6 +2236,8 @@ class BaseDataset(torch.utils.data.Dataset):
         tqa_shift_values = []
         captions = []
         input_ids_list = []
+        self_captions = [] if self.cross_self_caption_training else None
+        self_input_ids_list = [] if self.cross_self_caption_training else None
         latents_list = []
         alpha_mask_list = []
         images = []
@@ -2343,6 +2417,8 @@ class BaseDataset(torch.utils.data.Dataset):
             )
             text_encoder_outputs = None
             input_ids = None
+            self_caption = None
+            self_input_ids = None
 
             if image_info.text_encoder_outputs is not None:
                 # cached
@@ -2359,6 +2435,17 @@ class BaseDataset(torch.utils.data.Dataset):
             if tokenization_required:
                 caption = self.process_caption(subset, image_info.caption, t_val=t_val)
                 input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(caption)]  # remove batch dimension
+                if self.cross_self_caption_training:
+                    # Generate the Self variant from the same source caption while
+                    # keeping the normal caption RNG stream unchanged.
+                    rng_state = random.getstate()
+                    try:
+                        self_caption = self.process_caption(
+                            subset, image_info.caption, t_val=None, caption_mode="self"
+                        )
+                        self_input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(self_caption)]
+                    finally:
+                        random.setstate(rng_state)
                 # if self.XTI_layers:
                 #     caption_layer = []
                 #     for layer in self.XTI_layers:
@@ -2385,8 +2472,17 @@ class BaseDataset(torch.utils.data.Dataset):
                 #             token_caption2 = self.get_input_ids(caption, self.tokenizers[1])
                 #         input_ids2_list.append(token_caption2)
 
+            elif self.cross_self_caption_training:
+                # Cached text-encoder outputs are rejected by Anima's validator,
+                # but keep the dataset contract valid for other callers.
+                self_caption = self.process_caption(subset, image_info.caption, t_val=None, caption_mode="self")
+                self_input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(self_caption)]
+
             input_ids_list.append(input_ids)
             captions.append(caption)
+            if self.cross_self_caption_training:
+                self_captions.append(self_caption)
+                self_input_ids_list.append(self_input_ids)
 
         def none_or_stack_elements(tensors_list, converter):
             # [[clip_l, clip_g, t5xxl], [clip_l, clip_g, t5xxl], ...] -> [torch.stack(clip_l), torch.stack(clip_g), torch.stack(t5xxl)]
@@ -2443,6 +2539,9 @@ class BaseDataset(torch.utils.data.Dataset):
             example["tqa_shift_values"] = torch.FloatTensor(tqa_shift_values)
         example["text_encoder_outputs_list"] = none_or_stack_elements(text_encoder_outputs_list, torch.FloatTensor)
         example["input_ids_list"] = none_or_stack_elements(input_ids_list, lambda x: x)
+        if self.cross_self_caption_training:
+            example["self_captions"] = self_captions
+            example["self_input_ids_list"] = none_or_stack_elements(self_input_ids_list, lambda x: x)
 
         # if one of alpha_masks is not None, we need to replace None with ones
         none_or_not = [x is None for x in alpha_mask_list]
@@ -3290,6 +3389,10 @@ class ControlNetDataset(BaseDataset):
         super().set_current_step(step)
         self.dreambooth_dataset_delegate.set_current_step(step)
 
+    def set_cross_self_caption_training(self, enabled: bool):
+        super().set_cross_self_caption_training(enabled)
+        self.dreambooth_dataset_delegate.set_cross_self_caption_training(enabled)
+
     def set_max_train_steps(self, max_train_steps):
         super().set_max_train_steps(max_train_steps)
         self.dreambooth_dataset_delegate.set_max_train_steps(max_train_steps)
@@ -3650,6 +3753,10 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
     def set_current_step(self, step):
         for dataset in self.datasets:
             dataset.set_current_step(step)
+
+    def set_cross_self_caption_training(self, enabled: bool):
+        for dataset in self.datasets:
+            dataset.set_cross_self_caption_training(enabled)
 
     def set_max_train_steps(self, max_train_steps):
         for dataset in self.datasets:
