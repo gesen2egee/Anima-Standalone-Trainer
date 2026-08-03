@@ -1169,7 +1169,15 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def set_cross_self_caption_training(self, enabled: bool):
         """Prepare both normal and self-attention caption variants per item."""
-        self.cross_self_caption_training = bool(enabled)
+        enabled = bool(enabled)
+        if enabled:
+            disabled_wildcard_subsets = [subset for subset in self.subsets if not subset.enable_wildcard]
+            if disabled_wildcard_subsets:
+                raise ValueError(
+                    "Cross/Self 交替訓練需要所有訓練 subset 開啟 enable_wildcard，"
+                    "才能讓 Cross 抽一行、Self 展開全部 wildcard 選項。"
+                )
+        self.cross_self_caption_training = enabled
 
     def set_max_train_steps(self, max_train_steps):
         self.max_train_steps = max_train_steps
@@ -1475,41 +1483,35 @@ class BaseDataset(torch.utils.data.Dataset):
 
         return caption
 
-    def _deduplicate_self_caption(self, subset: BaseSubset, tag_line: str, prose: str) -> Tuple[str, str]:
-        """Keep structured tags authoritative when merging them with prose."""
+    def _deduplicate_self_caption(self, subset: BaseSubset, captions: List[str]) -> str:
+        """Merge all Self wildcard captions without assuming a special tag line."""
         separator = subset.caption_separator or ","
-        tags = [token.strip() for token in tag_line.split(separator) if token.strip()]
-
-        unique_tags = []
-        seen_tags = set()
-        for tag in tags:
-            key = tag.casefold()
-            if key in seen_tags:
+        unique_tokens = []
+        seen_tokens = set()
+        for caption in captions:
+            caption = re.sub(r"\s+", " ", caption).strip()
+            if not caption:
                 continue
-            seen_tags.add(key)
-            unique_tags.append(tag)
-
-        prose = re.sub(r"\s+", " ", prose).strip()
-        for tag in unique_tags:
-            # Very short natural-language words are not safe to remove from
-            # prose just because they also appear as a tag.
-            if len(tag) < 3 and " " not in tag:
-                continue
-            pattern = re.compile(rf"(?<![\w-]){re.escape(tag)}(?![\w-])", re.IGNORECASE)
-            prose = pattern.sub("", prose)
-
-        prose = re.sub(r"\s+", " ", prose)
-        prose = re.sub(r"\s+([,.;:!?])", r"\1", prose).strip()
-        return separator.join(unique_tags), prose
+            for token in caption.split(separator):
+                token = token.strip()
+                if not token:
+                    continue
+                key = re.sub(r"[.,;:!?]+$", "", token.casefold()).strip()
+                if key in seen_tokens:
+                    continue
+                seen_tokens.add(key)
+                unique_tokens.append(token)
+        return separator.join(unique_tokens)
 
     def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None, caption_mode: str = "normal"):
         """Process a caption for the normal path or the self-attention path.
 
         ``caption_mode="normal"`` preserves the existing dataset behavior.
         The self path keeps only the configured tag shuffle.  It intentionally
-        disables caption dropout, tag dropout, FAD, and token warmup.  When a
-        caption has multiple lines, all lines are retained so a tag line and a
-        natural-language line can condition the same forward pass.
+        disables caption dropout, tag dropout, FAD, and token warmup.  When
+        ``enable_wildcard`` is active, Cross keeps the original one-line and
+        one-choice behavior while Self merges every line and every ``{|}``
+        choice with exact-token deduplication.
         """
         is_self_caption = caption_mode == "self"
 
@@ -1532,42 +1534,36 @@ class BaseDataset(torch.utils.data.Dataset):
             caption = ""
         else:
             # process wildcards
-            if subset.enable_wildcard:
-                if is_self_caption and "\n" in caption:
-                    # Wildcard lines are alternatives in the normal path. For
-                    # Self we retain every line so tag + natural-language
-                    # captions are jointly available.
-                    caption = "\n".join(
-                        self._replace_caption_wildcards(line) for line in caption.splitlines() if line.strip()
-                    )
-                else:
-                    # if caption is multiline, random choice one line
+            if is_self_caption and subset.enable_wildcard:
+                # Wildcard lines and brace choices are alternatives in the
+                # normal path. Self keeps every expanded alternative and then
+                # merges exact caption units without assigning a special role
+                # to the first line.
+                self_captions = []
+                for line in caption.splitlines():
+                    if not line.strip():
+                        continue
+                    for expanded_line, _ in self.expand_wildcards(line):
+                        self_captions.append(
+                            self._process_caption_tokens(
+                                subset,
+                                expanded_line,
+                                t_val=None,
+                                allow_tag_dropout=False,
+                                allow_fad=False,
+                                allow_token_warmup=False,
+                            )
+                        )
+                caption = self._deduplicate_self_caption(subset, self_captions)
+            else:
+                if subset.enable_wildcard:
+                    # Cross keeps the original one-line and one-choice path.
                     if "\n" in caption:
                         caption = random.choice(caption.split("\n"))
                     caption = self._replace_caption_wildcards(caption)
-            else:
-                # if caption is multiline, use the first line
-                if not is_self_caption:
+                else:
+                    # Without enable_wildcard, preserve the original first-line behavior.
                     caption = caption.split("\n")[0]
-
-            if is_self_caption and "\n" in caption:
-                # Treat the first line as the tag line and leave the remaining
-                # natural-language lines in their original order. This keeps
-                # tag shuffling useful without shuffling prose fragments.
-                lines = [line.strip() for line in caption.splitlines() if line.strip()]
-                tag_line = lines[0] if lines else ""
-                prose = " ".join(lines[1:])
-                tag_line = self._process_caption_tokens(
-                    subset,
-                    tag_line,
-                    t_val=None,
-                    allow_tag_dropout=False,
-                    allow_fad=False,
-                    allow_token_warmup=False,
-                )
-                tag_line, prose = self._deduplicate_self_caption(subset, tag_line, prose)
-                caption = " ".join(part for part in (tag_line, prose) if part)
-            else:
                 caption = self._process_caption_tokens(
                     subset,
                     caption,
