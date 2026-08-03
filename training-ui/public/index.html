@@ -520,7 +520,7 @@
 
                         <div class="anima-training-only network-training-only" style="margin-top: 24px;">
                             <h4>Cross / Self 交替訓練</h4>
-                            <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self，Self 階段保留 caption 洗牌但停用各種 caption dropout、FAD、token warmup 與 CEP。</small>
+                            <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self。Block 0–1 Cross 會移到 Self 階段使用完整 caption，作為底層語意 anchor；Self 階段保留 caption 洗牌但停用各種 caption dropout、FAD、token warmup 與 CEP。</small>
                             <div class="form-row" style="margin-top: 12px;">
                                 <div class="form-group">
                                     <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
@@ -532,7 +532,7 @@
                                 </div>
                                 <div class="form-group">
                                     <label><input type="checkbox" id="cfg-cross-self-train-self" checked> 訓練 Self Attention</label>
-                                    <small>Cross／Self 都沿用原本 wildcard：任意抽一行與一個 {a|b} 選項；Self 只停用 caption dropout、tag dropout、FAD 與 token warmup。</small>
+                                    <small>Cross／Self 都沿用原本 wildcard：任意抽一行與一個 {a|b} 選項；Self 只停用 caption dropout、tag dropout、FAD 與 token warmup，並一起更新 Block 0–1 Cross。</small>
                                 </div>
                             </div>
                             <small id="cfg-cross-self-hint"></small>
