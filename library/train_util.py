@@ -1475,6 +1475,33 @@ class BaseDataset(torch.utils.data.Dataset):
 
         return caption
 
+    def _deduplicate_self_caption(self, subset: BaseSubset, tag_line: str, prose: str) -> Tuple[str, str]:
+        """Keep structured tags authoritative when merging them with prose."""
+        separator = subset.caption_separator or ","
+        tags = [token.strip() for token in tag_line.split(separator) if token.strip()]
+
+        unique_tags = []
+        seen_tags = set()
+        for tag in tags:
+            key = tag.casefold()
+            if key in seen_tags:
+                continue
+            seen_tags.add(key)
+            unique_tags.append(tag)
+
+        prose = re.sub(r"\s+", " ", prose).strip()
+        for tag in unique_tags:
+            # Very short natural-language words are not safe to remove from
+            # prose just because they also appear as a tag.
+            if len(tag) < 3 and " " not in tag:
+                continue
+            pattern = re.compile(rf"(?<![\w-]){re.escape(tag)}(?![\w-])", re.IGNORECASE)
+            prose = pattern.sub("", prose)
+
+        prose = re.sub(r"\s+", " ", prose)
+        prose = re.sub(r"\s+([,.;:!?])", r"\1", prose).strip()
+        return separator.join(unique_tags), prose
+
     def process_caption(self, subset: BaseSubset, caption, t_val: Optional[float] = None, caption_mode: str = "normal"):
         """Process a caption for the normal path or the self-attention path.
 
@@ -1538,6 +1565,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     allow_fad=False,
                     allow_token_warmup=False,
                 )
+                tag_line, prose = self._deduplicate_self_caption(subset, tag_line, prose)
                 caption = " ".join(part for part in (tag_line, prose) if part)
             else:
                 caption = self._process_caption_tokens(
