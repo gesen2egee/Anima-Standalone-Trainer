@@ -12,7 +12,7 @@ function read(relPath) {
 test("LR scheduler UI exposes warmup stable decay fields", () => {
   const html = read("public/index.html");
 
-  assert.match(html, /<option value="warmup_stable_decay">Warmup Stable Decay<\/option>/);
+  assert.match(html, /<option value="warmup_stable_decay"(?: selected)?\s*>Warmup Stable Decay<\/option>/);
   assert.match(html, /id="group-lr-decay-steps"/);
   assert.match(html, /id="cfg-lr-decay-steps"/);
   assert.match(html, /id="cfg-lr-decay-steps" value="0\.1" min="0" step="0\.01"/);

@@ -40,16 +40,24 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
   anima: {
     label: "Anima",
     networkModule: "networks.cdka",
-    timestepSampling: "autoshift",
+    timestepSampling: "autoshift_tqa",
     flowShift: 1.0,
     resolution: 768,
     minBucket: 384,
     maxBucket: 1536,
+    fadCurriculumEnd: 0.5,
+    captionDropoutRate: 0,
+    fadTimestep: false,
+    enableWildcard: true,
+    tqaLossWeighting: true,
+    tqaLossWeightingMode: "geometric",
+    tqaLossWeightingSchedule: true,
+    maskedLoss: true,
+    crossSelfAlternating: true,
     blocksToSwap: 0,
     transformerDtype: "bfloat16",
     networkArgs: [
       'exclude_patterns=[".*"]',
-      "network_reg_lrs=.*self_attn.*=5e-5",
       'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
       "allora=True",
     ],
@@ -64,6 +72,15 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     resolution: 512,
     minBucket: 256,
     maxBucket: 768,
+    fadCurriculumEnd: 1.0,
+    captionDropoutRate: 0.1,
+    fadTimestep: false,
+    enableWildcard: true,
+    tqaLossWeighting: false,
+    tqaLossWeightingMode: "timestep",
+    tqaLossWeightingSchedule: false,
+    maskedLoss: false,
+    crossSelfAlternating: false,
     blocksToSwap: 20,
     transformerDtype: "fp8_scaled",
     networkArgs: [
@@ -82,6 +99,15 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     resolution: 512,
     minBucket: 256,
     maxBucket: 768,
+    fadCurriculumEnd: 1.0,
+    captionDropoutRate: 0.1,
+    fadTimestep: false,
+    enableWildcard: true,
+    tqaLossWeighting: false,
+    tqaLossWeightingMode: "timestep",
+    tqaLossWeightingSchedule: false,
+    maskedLoss: false,
+    crossSelfAlternating: false,
     blocksToSwap: 20,
     transformerDtype: "fp8_scaled",
     networkArgs: [
@@ -198,13 +224,27 @@ function applyArchitecturePresetToEditor(architecture) {
   $("cfg-resolution").value = defaults.resolution;
   $("cfg-min-bucket").value = defaults.minBucket;
   $("cfg-max-bucket").value = defaults.maxBucket;
+  $("cfg-fad-curriculum-end").value = defaults.fadCurriculumEnd;
   $("cfg-blocks-to-swap").value = defaults.blocksToSwap;
   $("cfg-transformer-dtype").value = defaults.transformerDtype;
-  currentSubsets.forEach((subset) => { subset.fad_timestep = !isKrea2Architecture(architecture); });
+  currentSubsets.forEach((subset) => {
+    subset.fad_timestep = defaults.fadTimestep;
+    subset.caption_dropout_rate = defaults.captionDropoutRate;
+    subset.enable_wildcard = defaults.enableWildcard;
+  });
   renderSubsets();
   $("cfg-cache-latents").checked = true;
   $("cfg-cache-latents-to-disk").checked = true;
   $("cfg-cache-te").checked = false;
+  $("cfg-aes-loss-weighting").checked = false;
+  $("cfg-aes-loss-weighting-schedule").checked = false;
+  $("cfg-tqa-loss-weighting").checked = defaults.tqaLossWeighting;
+  $("cfg-tqa-loss-weighting-mode").value = defaults.tqaLossWeightingMode;
+  $("cfg-tqa-loss-weighting-schedule").checked = defaults.tqaLossWeightingSchedule;
+  $("cfg-masked-loss").checked = defaults.maskedLoss;
+  $("cfg-cross-self-alternating").checked = defaults.crossSelfAlternating;
+  $("cfg-cross-self-train-cross").checked = true;
+  $("cfg-cross-self-train-self").checked = true;
   if (isKrea2Architecture(architecture)) {
     $("cfg-krea2-dynamic-text-encoder").checked = true;
     $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
@@ -2935,7 +2975,7 @@ function addSubset(shouldRender = true) {
     caption_prefix: "",
     tagger_include_ocr: true,
     tagger_include_nl: false,
-    caption_dropout_rate: 0.1,
+    caption_dropout_rate: 0,
     caption_tag_dropout_rate: 0.0,
     caption_dropout_every_n_epochs: 0,
     shuffle_caption: true,

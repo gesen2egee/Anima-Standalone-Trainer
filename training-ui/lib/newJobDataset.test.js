@@ -102,6 +102,24 @@ test("single folder keeps current folder when it has direct images", () => {
   assert.strictEqual(subsets[0].image_dir, root);
 });
 
+test("new dataset subsets preserve Anima default caption and wildcard settings", () => {
+  const root = makeTempDir();
+  writeImage(root, "image.png");
+
+  const subsets = buildNewJobSubsets({
+    imageDir: root,
+    triggerCaptionPrefix: "hero,",
+    baseSubset: {
+      caption_dropout_rate: 0,
+      enable_wildcard: true,
+    },
+  });
+
+  assert.strictEqual(subsets[0].caption_dropout_rate, 0);
+  assert.strictEqual(subsets[0].enable_wildcard, true);
+  assert.strictEqual(subsets[0].fad_timestep, false);
+});
+
 test("dataset UI updates preserve unsupported TOML fields", () => {
   const existing = {
     custom_root: "keep-root",

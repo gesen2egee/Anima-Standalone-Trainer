@@ -14,7 +14,7 @@ function parseTemplate(relPath) {
   return TOML.parse(read(relPath));
 }
 
-test("default config template follows my_job_v1 training and network defaults", () => {
+test("default config template follows the Anima v67-style training defaults", () => {
   const config = parseTemplate("templates/config_template.toml");
 
   assert.strictEqual(config.training_arguments.learning_rate, 0.0003);
@@ -27,6 +27,13 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.training_arguments.loss_type, "wavelet");
   assert.strictEqual(config.training_arguments.pnp_loss_weight, 0.000001);
   assert.strictEqual(config.training_arguments.cache_latents_to_disk, true);
+  assert.strictEqual(config.training_arguments.optimizer_args[0], "weight_decay=0.01");
+  assert.strictEqual(config.training_arguments.aes_loss_weighting, false);
+  assert.strictEqual(config.training_arguments.aes_loss_weighting_schedule, false);
+  assert.strictEqual(config.training_arguments.tqa_loss_weighting, true);
+  assert.strictEqual(config.training_arguments.tqa_loss_weighting_mode, "geometric");
+  assert.strictEqual(config.training_arguments.tqa_loss_weighting_schedule, true);
+  assert.strictEqual(config.training_arguments.masked_loss, true);
   assert.strictEqual(config.training_arguments.automask, true);
   assert.strictEqual(config.training_arguments.automask_alpha, 128);
   assert.strictEqual(config.training_arguments.automask_shrink, 1);
@@ -35,11 +42,13 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(config.network_arguments.network_module, "networks.cdka");
   assert.deepStrictEqual(config.network_arguments.network_args, [
     'exclude_patterns=[".*"]',
-    "network_reg_lrs=.*self_attn.*=5e-5",
     'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
     "allora=True",
   ]);
-  assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift");
+  assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift_tqa");
+  assert.strictEqual(config.anima_arguments.cross_self_alternating, true);
+  assert.strictEqual(config.anima_arguments.cross_self_train_cross, true);
+  assert.strictEqual(config.anima_arguments.cross_self_train_self, true);
   assert.strictEqual(config.training_arguments.sample_at_first, true);
   assert.strictEqual(config.training_arguments.sample_every_n_steps, 200);
   assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
@@ -52,7 +61,7 @@ test("default config template follows my_job_v1 training and network defaults", 
   assert.strictEqual(Object.hasOwn(config.training_arguments, "diff_output_preservation"), false);
 });
 
-test("default dataset template follows my_job_v1 dataset defaults", () => {
+test("default dataset template follows the Anima v67-style dataset defaults", () => {
   const dataset = parseTemplate("templates/dataset_template.toml");
   const firstDataset = dataset.datasets[0];
   const firstSubset = firstDataset.subsets[0];
@@ -62,13 +71,16 @@ test("default dataset template follows my_job_v1 dataset defaults", () => {
   assert.deepStrictEqual(firstDataset.resolution, [768, 768]);
   assert.strictEqual(firstDataset.batch_size, 1);
   assert.strictEqual(firstDataset.fad_curriculum_start, 0.1);
-  assert.strictEqual(firstDataset.fad_curriculum_end, 1);
+  assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
   assert.strictEqual(firstDataset.folder_shift_curriculum, true);
   assert.strictEqual(firstSubset.keep_tokens, 1);
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
-  assert.strictEqual(firstSubset.fad_timestep, true);
+  assert.strictEqual(firstSubset.caption_dropout_rate, 0);
+  assert.strictEqual(firstSubset.enable_wildcard, true);
+  assert.strictEqual(firstSubset.fad_timestep, false);
   assert.strictEqual(firstSubset.alpha_mask, true);
+  assert.strictEqual(firstSubset.is_reg, false);
   assert.strictEqual(firstSubset.caption_tag_dropout_rate, 0);
 });
 
@@ -85,7 +97,19 @@ test("architecture registry exposes Anima, Krea 2, and Krea 2 Bypass presets", (
   assert.deepStrictEqual(Object.keys(registry.architectures), ["anima", "krea2", "krea2_bypass"]);
 
   const anima = registry.architectures.anima;
-  assert.strictEqual(anima.job_defaults.anima_arguments.timestep_sampling, "autoshift");
+  assert.strictEqual(anima.job_defaults.anima_arguments.timestep_sampling, "autoshift_tqa");
+  assert.deepStrictEqual(anima.job_defaults.network_arguments.network_args, [
+    'exclude_patterns=[".*"]',
+    'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
+    "allora=True",
+  ]);
+  assert.strictEqual(anima.job_defaults.training_arguments.tqa_loss_weighting, true);
+  assert.strictEqual(anima.job_defaults.training_arguments.tqa_loss_weighting_mode, "geometric");
+  assert.strictEqual(anima.job_defaults.anima_arguments.cross_self_alternating, true);
+  assert.strictEqual(anima.dataset_defaults.fad_curriculum_end, 0.5);
+  assert.strictEqual(anima.dataset_defaults.caption_dropout_rate, 0);
+  assert.strictEqual(anima.dataset_defaults.enable_wildcard, true);
+  assert.strictEqual(anima.dataset_defaults.fad_timestep, false);
   assert.strictEqual(anima.dataset_defaults.resolution, 768);
   assert.strictEqual(anima.job_defaults.network_arguments.network_module, "networks.cdka");
 

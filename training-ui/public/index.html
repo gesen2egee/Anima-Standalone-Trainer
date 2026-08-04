@@ -139,7 +139,7 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Learning Rate</label>
-                                <input type="text" id="cfg-learning-rate" value="1e-4" placeholder="1e-4">
+                                <input type="text" id="cfg-learning-rate" value="3e-4" placeholder="3e-4">
                             </div>
                             <div class="form-group network-training-only">
                                 <label>Text Encoder LR</label>
@@ -163,7 +163,7 @@
                                     <option value="AdamWScheduleFree">AdamWScheduleFree</option>
                                     <option value="RAdamScheduleFree">RAdamScheduleFree</option>
                                     <option value="SGDScheduleFree">SGDScheduleFree</option>
-                                    <option value="library.came.CAME">library.came.CAME</option>
+                                    <option value="library.came.CAME" selected>library.came.CAME</option>
                                     <option value="library.emosens.EmoSens">library.emosens.EmoSens</option>
                                     <option value="pytorch_optimizer.CAME">pytorch_optimizer.CAME</option>
                                 </select>
@@ -177,7 +177,7 @@
                                     <option value="linear">Linear</option>
                                     <option value="cosine_with_restarts">Cosine w/ Restarts</option>
                                     <option value="cosine_with_min_lr">Cosine w/ Min LR</option>
-                                    <option value="warmup_stable_decay">Warmup Stable Decay</option>
+                                    <option value="warmup_stable_decay" selected>Warmup Stable Decay</option>
                                     <option value="polynomial">Polynomial</option>
                                 </select>
                             </div>
@@ -189,7 +189,7 @@
                             </div>
                             <div class="form-group">
                                 <label>Weight Decay</label>
-                                <input type="number" id="cfg-weight-decay" value="" step="0.01" min="0">
+                                <input type="number" id="cfg-weight-decay" value="0.01" step="0.01" min="0">
                             </div>
                             <div class="form-group">
                                 <label>Seed</label>
@@ -284,7 +284,7 @@
                                 <small>Also saves optimizer and scheduler state when a checkpoint is saved.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-save-state-end"> Save State at Train End</label>
+                                <label><input type="checkbox" id="cfg-save-state-end" checked> Save State at Train End</label>
                                 <small>Saves a final state folder when training finishes.</small>
                             </div>
                         </div>
@@ -427,7 +427,7 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label><input type="checkbox" id="cfg-cache-te" checked> Cache Text Encoder Outputs to
+                            <label><input type="checkbox" id="cfg-cache-te"> Cache Text Encoder Outputs to
                                 Disk</label>
                             <small>Pre-encode captions. Required if text encoder is frozen.</small>
                         </div>
@@ -459,7 +459,7 @@
                                     <option value="shift">Shift</option>
                                     <option value="autoshift">Autoshift (Mask Ratio)</option>
                                     <option value="autoshift_wavelet">Autoshift (Multiscale Wavelet)</option>
-                                    <option value="autoshift_tqa">Autoshift (TQA: DBAES − KonIQ)</option>
+                                    <option value="autoshift_tqa" selected>Autoshift (TQA: DBAES − KonIQ)</option>
                                     <option value="krea2_shift">Krea 2 Resolution Shift</option>
                                     <option value="flux_shift">Flux Shift</option>
                                     <option value="plora">P-LoRA</option>
@@ -509,12 +509,12 @@
                         <div class="form-row network-training-only" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>KNN Noise K</label>
-                                <input type="number" id="cfg-knn-noise-k" value="2" min="0" step="1">
+                                <input type="number" id="cfg-knn-noise-k" value="64" min="0" step="1">
                                 <small>保留原始設定值；只在 KNN、比例切換或 combined 模式中生效。</small>
                             </div>
                             <div class="form-group">
                                 <label>CEP Noise</label>
-                                <input type="number" id="cfg-cep-noise" value="0.05" min="0" step="0.01">
+                                <input type="number" id="cfg-cep-noise" value="0.01" min="0" step="0.01">
                             </div>
                         </div>
 
@@ -523,7 +523,7 @@
                             <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self。Block 0–1 的 Self 與 Cross 在兩個階段都會更新，並跟隨當前階段使用 Cross/FAD caption 或完整 caption；Block 2+ 維持 Cross／Self 分工。</small>
                             <div class="form-row" style="margin-top: 12px;">
                                 <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
+                                    <label><input type="checkbox" id="cfg-cross-self-alternating" checked> 啟用 Cross / Self 交替訓練</label>
                                     <small>至少勾選一個訓練階段；兩者都勾選時依 optimizer step 交替。</small>
                                 </div>
                                 <div class="form-group">
@@ -550,19 +550,19 @@
                                 <small>Linearly transition each sample from 1.0 to its dataset-normalized AES weight over training.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-tqa-loss-weighting"> TQA Loss Weighting</label>
+                                <label><input type="checkbox" id="cfg-tqa-loss-weighting" checked> TQA Loss Weighting</label>
                                 <small>Round robust scores upward to 0.1 steps within 0.1-1.0, then multiply by 2 for the final loss weight.</small>
                             </div>
                             <div class="form-group">
                                 <label for="cfg-tqa-loss-weighting-mode">TQA Loss Formula</label>
                                 <select id="cfg-tqa-loss-weighting-mode">
                                     <option value="timestep">Timestep Interpolation</option>
-                                    <option value="geometric">Geometric Mean</option>
+                                    <option value="geometric" selected>Geometric Mean</option>
                                 </select>
                                 <small>Interpolate KonIQ quality toward DBAES aesthetic by timestep, or combine both robust scores using their geometric mean.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-tqa-loss-weighting-schedule"> Progressive TQA Weighting</label>
+                                <label><input type="checkbox" id="cfg-tqa-loss-weighting-schedule" checked> Progressive TQA Weighting</label>
                                 <small>Linearly transition each sample from 1.0 to its timestep-aware TQA weight over training.</small>
                             </div>
                         </div>
@@ -575,15 +575,15 @@
                                 <small>Use image alpha channel as loss mask. Images without alpha train normally.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-automask"> Automask</label>
+                                <label><input type="checkbox" id="cfg-automask" checked> Automask</label>
                                 <small>Generate an alpha mask during latent caching with remove background. Source images are not changed.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-masked-loss-random"> Random Mask Strength</label>
+                                <label><input type="checkbox" id="cfg-masked-loss-random" checked> Random Mask Strength</label>
                                 <small>Randomize loss weight for masked-out areas between 0.0 and 1.0.</small>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="cfg-masked-loss"> Masked Loss</label>
+                                <label><input type="checkbox" id="cfg-masked-loss" checked> Masked Loss</label>
                                 <small>Apply the Alpha/Automask map to the training loss. Krea 2 uses this without inpainting inputs.</small>
                             </div>
                         </div>
@@ -617,14 +617,14 @@
                                     <option value="huber">Huber</option>
                                     <option value="smooth_l1">Smooth L1</option>
                                     <option value="cwmi" id="loss-option-cwmi">CWMI</option>
-                                    <option value="wavelet">AIT Wavelet</option>
+                                    <option value="wavelet" selected>AIT Wavelet</option>
                                     <option value="snr_aware_huber_wavelet">SNR-Aware Huber Wavelet</option>
                                     <option value="wavelet_l2">Wavelet L2</option>
                                 </select>
                             </div>
                             <div class="form-group network-training-only">
                                 <label>P&P Loss Weight</label>
-                                <input type="number" id="cfg-pnp-loss-weight" value="" placeholder="e.g. 0.0001 (LoRA) or 500 (DreamBooth)" min="0" step="0.0001">
+                                <input type="number" id="cfg-pnp-loss-weight" value="0.000001" placeholder="e.g. 0.0001 (LoRA) or 500 (DreamBooth)" min="0" step="0.000001">
                                 <small>Preserve-and-Personalize L2 weight. Leave blank or 0 to disable.</small>
                             </div>
                         </div>
@@ -706,7 +706,7 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Resolution(s)</label>
-                                <input type="text" id="cfg-resolution" value="1024" placeholder="e.g. 512, 1024, 2048">
+                                <input type="text" id="cfg-resolution" value="768" placeholder="e.g. 512, 768, 1024">
                                 <small>Max resolution(s) for bucketing. Comma-separate for multi-resolution caching (e.g. 512, 1024).</small>
                             </div>
                             <div class="form-group">
@@ -728,7 +728,7 @@
                         </div>
 
                         <div class="form-group">
-                            <label><input type="checkbox" id="cfg-folder-shift-curriculum"> Shift Curriculum（HIGH/LOW 偏移隨訓練收斂）</label>
+                            <label><input type="checkbox" id="cfg-folder-shift-curriculum" checked> Shift Curriculum（HIGH/LOW 偏移隨訓練收斂）</label>
                             <small>啟用後，資料夾 HIGH 從 1.5 線性降至 1.0、LOW 從 0.5 線性升至 1.0；AUTOMASK 的像素／頻率偏移也同步回歸至 1.0，MID、UNIFORM 與 global 不變。</small>
                         </div>
 
@@ -756,11 +756,11 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>sFAD Start Ratio</label>
-                                <input type="number" id="cfg-fad-curriculum-start" value="0.0" step="0.01" min="0" max="1">
+                                <input type="number" id="cfg-fad-curriculum-start" value="0.1" step="0.01" min="0" max="1">
                             </div>
                             <div class="form-group">
                                 <label>sFAD End Ratio</label>
-                                <input type="number" id="cfg-fad-curriculum-end" value="1.0" step="0.01" min="0" max="1">
+                                <input type="number" id="cfg-fad-curriculum-end" value="0.5" step="0.01" min="0" max="1">
                             </div>
                         </div>
                         <div class="form-row">
@@ -792,11 +792,11 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Min Bucket Resolution</label>
-                                <input type="number" id="cfg-min-bucket" value="512" min="64" step="64">
+                                <input type="number" id="cfg-min-bucket" value="384" min="64" step="64">
                             </div>
                             <div class="form-group">
                                 <label>Max Bucket Resolution</label>
-                                <input type="number" id="cfg-max-bucket" value="2048" min="256" step="64">
+                                <input type="number" id="cfg-max-bucket" value="1536" min="256" step="64">
                             </div>
                         </div>
                         <div class="form-group">
@@ -902,7 +902,7 @@
                                     <label><input type="checkbox" id="cfg-enable-sampling" checked> Enable Sampling</label>
                                 </div>
                                 <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-sample-at-first"> Sample at First</label>
+                                    <label><input type="checkbox" id="cfg-sample-at-first" checked> Sample at First</label>
                                 </div>
                             </div>
                             <div id="group-sample-every">
@@ -912,7 +912,7 @@
                                 </div>
                                 <div class="form-group hidden" id="container-sample-every-steps">
                                     <label>Sample Every N Steps</label>
-                                    <input type="number" id="cfg-sample-every-steps" value="100" min="1">
+                                    <input type="number" id="cfg-sample-every-steps" value="200" min="1">
                                 </div>
                             </div>
                         </div>

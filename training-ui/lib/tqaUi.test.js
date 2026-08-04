@@ -8,10 +8,10 @@ const html = fs.readFileSync(path.join(root, "public", "index.html"), "utf8");
 const appJs = fs.readFileSync(path.join(root, "public", "js", "app.js"), "utf8");
 
 test("TQA controls and Autoshift option are exposed", () => {
-  assert.match(html, /<option value="autoshift_tqa">Autoshift \(TQA: DBAES − KonIQ\)<\/option>/);
+  assert.match(html, /<option value="autoshift_tqa"(?: selected)?\s*>Autoshift \(TQA: DBAES − KonIQ\)<\/option>/);
   assert.match(html, /id="cfg-tqa-loss-weighting"/);
   assert.match(html, /id="cfg-tqa-loss-weighting-mode"/);
-  assert.match(html, /<option value="geometric">Geometric Mean<\/option>/);
+  assert.match(html, /<option value="geometric"(?: selected)?\s*>Geometric Mean<\/option>/);
   assert.match(html, /id="cfg-tqa-loss-weighting-schedule"/);
 });
 

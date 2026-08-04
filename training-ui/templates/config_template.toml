@@ -20,7 +20,7 @@ log_with = "tensorboard"
 learning_rate = 0.0003
 text_encoder_lr = 0
 optimizer_type = "library.came.CAME"
-optimizer_args = [ "weight_decay=0.1" ]
+optimizer_args = [ "weight_decay=0.01" ]
 lr_scheduler = "warmup_stable_decay"
 lr_scheduler_min_lr_ratio = 0.1
 lr_decay_steps = 0.1
@@ -56,13 +56,16 @@ persistent_data_loader_workers = true
 seed = 42
 cache_latents = true
 cache_latents_to_disk = true
-tqa_loss_weighting = false
-tqa_loss_weighting_mode = "timestep"
-tqa_loss_weighting_schedule = false
+aes_loss_weighting = false
+aes_loss_weighting_schedule = false
+tqa_loss_weighting = true
+tqa_loss_weighting_mode = "geometric"
+tqa_loss_weighting_schedule = true
 vae_batch_size = 1
 vae_chunk_size = 64
 vae_disable_cache = false
 cache_text_encoder_outputs_to_disk = false
+masked_loss = true
 automask = true
 automask_alpha = 128
 automask_shrink = 1
@@ -104,7 +107,6 @@ network_alpha = 16
 network_train_unet_only = true
 network_args = [
   "exclude_patterns=[\".*\"]",
-  "network_reg_lrs=.*self_attn.*=5e-5",
   "include_patterns=[\".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)\"]",
   "allora=True"
 ]
@@ -112,9 +114,12 @@ auto_resume_last_state = true
 auto_resume_last_state_user_set = true
 
 [anima_arguments]
-timestep_sampling = "autoshift"
+timestep_sampling = "autoshift_tqa"
 discrete_flow_shift = 1
 sigmoid_scale = 1
 qwen3_max_token_length = 512
 t5_max_token_length = 512
 weighting_scheme = "uniform"
+cross_self_alternating = true
+cross_self_train_cross = true
+cross_self_train_self = true

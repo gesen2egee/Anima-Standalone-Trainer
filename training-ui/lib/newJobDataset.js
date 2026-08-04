@@ -39,7 +39,6 @@ function buildNewJobSubsets({
         num_repeats: folder.repeats,
         caption_prefix: normalizeCaptionPrefix(folder.triggerWords),
         keep_tokens: hasTrigger ? 1 : 0,
-        caption_dropout_rate: 0.1,
         caption_tag_dropout_rate: 0,
         enable_fad: true,
         fad_curriculum: true,
@@ -61,7 +60,6 @@ function buildNewJobSubsets({
   } else {
     subset.keep_tokens = 0;
   }
-  subset.caption_dropout_rate = 0.1;
   subset.caption_tag_dropout_rate = 0;
   subset.enable_fad = true;
   subset.fad_curriculum = true;

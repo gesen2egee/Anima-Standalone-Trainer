@@ -373,10 +373,21 @@ function applyArchitectureDatasetDefaults(datasetConfig, architectureId) {
         : datasetConfig.datasets ? [datasetConfig.datasets] : [{}];
     const firstDataset = datasets[0] || {};
     firstDataset.resolution = [defaults.resolution, defaults.resolution];
+    if (defaults.fad_curriculum_end !== undefined) {
+        firstDataset.fad_curriculum_end = defaults.fad_curriculum_end;
+    }
     const subsets = Array.isArray(firstDataset.subsets)
         ? firstDataset.subsets
         : firstDataset.subsets ? [firstDataset.subsets] : [];
-    subsets.forEach(subset => { subset.fad_timestep = defaults.fad_timestep; });
+    subsets.forEach(subset => {
+        subset.fad_timestep = defaults.fad_timestep;
+        if (defaults.caption_dropout_rate !== undefined) {
+            subset.caption_dropout_rate = defaults.caption_dropout_rate;
+        }
+        if (defaults.enable_wildcard !== undefined) {
+            subset.enable_wildcard = defaults.enable_wildcard;
+        }
+    });
     firstDataset.subsets = subsets;
     datasets[0] = firstDataset;
     datasetConfig.datasets = datasets;
