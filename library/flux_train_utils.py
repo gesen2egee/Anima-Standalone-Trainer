@@ -598,17 +598,13 @@ def compute_spectrally_guided_sigmas(latents: torch.Tensor, device, kappa_min: f
     return sigmas.squeeze(1).to(dtype=latents.dtype)
 
 
-def clamp_timestep_range(
-    sigmas: torch.Tensor,
+def get_timestep_range(
     args,
     num_timesteps: int,
-) -> torch.Tensor:
-    """Limit sampled flow sigmas to the configured final timestep range."""
+) -> Tuple[float, float]:
+    """Return the normalized timestep support selected in the UI."""
     raw_min = getattr(args, "min_timestep", None)
     raw_max = getattr(args, "max_timestep", None)
-    if raw_min is None and raw_max is None:
-        return sigmas
-
     # Older callers may provide an args-like object without these fields.
     # Treat non-numeric placeholders as omitted so the historical full range
     # remains the default.
@@ -627,9 +623,21 @@ def clamp_timestep_range(
             f"min_timestep ({min_timestep}) must be less than or equal to max_timestep ({max_timestep})"
         )
 
-    lower = min_timestep / num_timesteps
-    upper = max_timestep / num_timesteps
-    return sigmas.clamp(min=lower, max=upper)
+    return min_timestep / num_timesteps, max_timestep / num_timesteps
+
+
+def map_timestep_range(
+    sigmas: torch.Tensor,
+    lower: float,
+    upper: float,
+) -> torch.Tensor:
+    """Map a complete normalized sigma distribution into the selected support.
+
+    This is deliberately an affine remap instead of a clamp: samples keep the
+    distribution's relative shape and no probability mass piles up at either
+    endpoint.
+    """
+    return lower + sigmas * (upper - lower)
 
 
 def get_noisy_model_input_and_timesteps(
@@ -649,6 +657,7 @@ def get_noisy_model_input_and_timesteps(
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
+    timestep_lower, timestep_upper = get_timestep_range(args, num_timesteps)
     override_timesteps, override_mask = train_util.prepare_batch_timestep_overrides(
         batch_timesteps, bsz, device, dtype
     )
@@ -792,7 +801,7 @@ def get_noisy_model_input_and_timesteps(
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
 
     if not full_override:
-        sigmas = clamp_timestep_range(sigmas, args, num_timesteps)
+        sigmas = map_timestep_range(sigmas, timestep_lower, timestep_upper)
         # Keep the public timestep tensor one value per sample.  The scheduler
         # branch may carry sigmas with broadcast dimensions for latent noise.
         timesteps = sigmas.reshape(bsz, -1)[:, 0] * num_timesteps

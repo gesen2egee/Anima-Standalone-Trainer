@@ -497,7 +497,7 @@
                                 <label>Max Timestep</label>
                                 <input type="number" id="cfg-max-timestep" value="1000" min="0" max="1000" step="1">
                                 <small>最終訓練 timestep 上限（0–1000）；Min = Max 可固定單一 timestep。</small>
-                                <small>套用順序：取樣方法與 Flow/Folder Shift → Min/Max 限制；資料夾或批次明確 timestep 覆寫優先。Weighting Scheme 仍可影響取樣密度或 loss 權重，但不會改邊界。</small>
+                                <small>各分佈先在 0–1 取樣，再將完整分佈映射到 Min/Max，不會把機率堆在端點；資料夾或批次明確 timestep 覆寫優先。Weighting Scheme 仍可影響取樣密度或 loss 權重。</small>
                             </div>
                         </div>
                         <div class="form-row">
