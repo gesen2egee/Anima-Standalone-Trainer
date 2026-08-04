@@ -32,7 +32,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CROSS_SELF_CROSS_CAPTION_SELF_BLOCKS = frozenset({0, 1})
+CROSS_SELF_BOTH_PHASE_BLOCKS = frozenset({0, 1})
 
 
 def _cross_self_alternating_enabled(args) -> bool:
@@ -96,16 +96,19 @@ def _get_cross_self_module_kind(module):
     original_name = str(getattr(module, "original_name", ""))
     if ".self_attn" in original_name or original_name.startswith("self_attn"):
         block_match = re.search(r"(?:^|\.)blocks\.(\d+)\.self_attn(?:\.|$)", original_name)
-        if block_match is not None and int(block_match.group(1)) in CROSS_SELF_CROSS_CAPTION_SELF_BLOCKS:
-            return "cross_caption_self"
+        if block_match is not None and int(block_match.group(1)) in CROSS_SELF_BOTH_PHASE_BLOCKS:
+            return "both_phases"
         return "self"
     if ".cross_attn" in original_name or original_name.startswith("cross_attn"):
+        block_match = re.search(r"(?:^|\.)blocks\.(\d+)\.cross_attn(?:\.|$)", original_name)
+        if block_match is not None and int(block_match.group(1)) in CROSS_SELF_BOTH_PHASE_BLOCKS:
+            return "both_phases"
         return "cross"
     return None
 
 
 def _set_cross_self_trainability(network, phase: str):
-    counts = {"cross": 0, "self": 0, "cross_caption_self": 0, "other": 0}
+    counts = {"cross": 0, "self": 0, "both_phases": 0, "other": 0}
     for module in _iter_cross_self_lora_modules(network):
         kind = _get_cross_self_module_kind(module)
         if kind is None:
@@ -113,14 +116,11 @@ def _set_cross_self_trainability(network, phase: str):
             enabled = False
         else:
             counts[kind] += 1
-            target_phase = "cross" if kind == "cross_caption_self" else kind
-            enabled = target_phase == phase
+            enabled = kind == "both_phases" or kind == phase
         for parameter in module.parameters():
             parameter.requires_grad_(enabled)
 
-    phase_module_count = counts[phase]
-    if phase == "cross":
-        phase_module_count += counts["cross_caption_self"]
+    phase_module_count = counts[phase] + counts["both_phases"]
     if phase_module_count == 0:
         raise ValueError(
             f"Cross/Self 交替訓練要求 {phase} LoRA 模組，但目前沒有找到對應模組；"
@@ -707,11 +707,11 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if self._cross_self_phase is None:
             logger.info(
                 "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, "
-                "cross_caption_self_modules=%d (blocks 0-1), other_modules_frozen=%d",
+                "both_phase_modules=%d (blocks 0-1 self/cross), other_modules_frozen=%d",
                 phase,
                 counts["cross"],
                 counts["self"],
-                counts["cross_caption_self"],
+                counts["both_phases"],
                 counts["other"],
             )
         elif phase != self._cross_self_phase:
