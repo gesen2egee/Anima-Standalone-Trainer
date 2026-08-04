@@ -489,6 +489,19 @@
                         </div>
                         <div class="form-row">
                             <div class="form-group">
+                                <label>Min Timestep</label>
+                                <input type="number" id="cfg-min-timestep" value="0" min="0" max="1000" step="1">
+                                <small>最終訓練 timestep 下限（0–1000）；會在取樣分佈與 Flow Shift 套用後限制。</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Timestep</label>
+                                <input type="number" id="cfg-max-timestep" value="1000" min="0" max="1000" step="1">
+                                <small>最終訓練 timestep 上限（0–1000）；Min = Max 可固定單一 timestep。</small>
+                                <small>套用順序：取樣方法與 Flow/Folder Shift → Min/Max 限制；資料夾或批次明確 timestep 覆寫優先。Weighting Scheme 仍可影響取樣密度或 loss 權重，但不會改邊界。</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
                                 <label>Sigmoid Scale</label>
                                 <input type="number" id="cfg-sigmoid-scale" value="1.0" step="0.1" min="0">
                             </div>

@@ -598,6 +598,40 @@ def compute_spectrally_guided_sigmas(latents: torch.Tensor, device, kappa_min: f
     return sigmas.squeeze(1).to(dtype=latents.dtype)
 
 
+def clamp_timestep_range(
+    sigmas: torch.Tensor,
+    args,
+    num_timesteps: int,
+) -> torch.Tensor:
+    """Limit sampled flow sigmas to the configured final timestep range."""
+    raw_min = getattr(args, "min_timestep", None)
+    raw_max = getattr(args, "max_timestep", None)
+    if raw_min is None and raw_max is None:
+        return sigmas
+
+    # Older callers may provide an args-like object without these fields.
+    # Treat non-numeric placeholders as omitted so the historical full range
+    # remains the default.
+    min_timestep = 0 if raw_min is None or not isinstance(raw_min, (int, np.integer)) else int(raw_min)
+    max_timestep = (
+        num_timesteps
+        if raw_max is None or not isinstance(raw_max, (int, np.integer))
+        else int(raw_max)
+    )
+    if not 0 <= min_timestep <= num_timesteps:
+        raise ValueError(f"min_timestep must be between 0 and {num_timesteps}, got {min_timestep}")
+    if not 0 <= max_timestep <= num_timesteps:
+        raise ValueError(f"max_timestep must be between 0 and {num_timesteps}, got {max_timestep}")
+    if min_timestep > max_timestep:
+        raise ValueError(
+            f"min_timestep ({min_timestep}) must be less than or equal to max_timestep ({max_timestep})"
+        )
+
+    lower = min_timestep / num_timesteps
+    upper = max_timestep / num_timesteps
+    return sigmas.clamp(min=lower, max=upper)
+
+
 def get_noisy_model_input_and_timesteps(
     args,
     noise_scheduler,
@@ -619,7 +653,8 @@ def get_noisy_model_input_and_timesteps(
         batch_timesteps, bsz, device, dtype
     )
 
-    if override_mask is not None and bool(torch.all(override_mask)):
+    full_override = override_mask is not None and bool(torch.all(override_mask).item())
+    if full_override:
         timesteps = override_timesteps
         sigmas = timesteps / num_timesteps
     elif args.timestep_sampling == "spectrally_guided":
@@ -755,6 +790,12 @@ def get_noisy_model_input_and_timesteps(
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
+
+    if not full_override:
+        sigmas = clamp_timestep_range(sigmas, args, num_timesteps)
+        # Keep the public timestep tensor one value per sample.  The scheduler
+        # branch may carry sigmas with broadcast dimensions for latent noise.
+        timesteps = sigmas.reshape(bsz, -1)[:, 0] * num_timesteps
 
     timesteps, sigmas = train_util.apply_batch_timestep_overrides(
         timesteps, sigmas, override_timesteps, override_mask, num_timesteps

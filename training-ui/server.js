@@ -1082,6 +1082,8 @@ function getDefaultConfig() {
                 output_name: 'my_anima_lora',
                 learning_rate: 5e-4,
                 max_train_epochs: 20,
+                min_timestep: 0,
+                max_timestep: 1000,
                 mixed_precision: 'bf16'
             },
             network_arguments: {

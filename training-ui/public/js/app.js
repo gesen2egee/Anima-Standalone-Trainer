@@ -35,6 +35,8 @@ let currentCliBaseCommand = "";
 let currentCliToml = "";
 let currentCliDatasetToml = "";
 let currentCliSampleText = "";
+const DEFAULT_MIN_TIMESTEP = 0;
+const DEFAULT_MAX_TIMESTEP = 1000;
 
 const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
   anima: {
@@ -220,6 +222,8 @@ function applyArchitecturePresetToEditor(architecture) {
   $("cfg-network-module").value = defaults.networkModule;
   $("cfg-network-args").value = defaults.networkArgs.join(" ");
   $("cfg-timestep-method").value = defaults.timestepSampling;
+  $("cfg-min-timestep").value = DEFAULT_MIN_TIMESTEP;
+  $("cfg-max-timestep").value = DEFAULT_MAX_TIMESTEP;
   $("cfg-flow-shift").value = defaults.flowShift;
   $("cfg-resolution").value = defaults.resolution;
   $("cfg-min-bucket").value = defaults.minBucket;
@@ -554,6 +558,8 @@ const UI_TRANSLATIONS = {
   "Disk": { "zh-TW": "硬碟", "zh-CN": "硬盘" },
   "Disable VAE Cache": { "zh-TW": "停用 VAE Cache", "zh-CN": "禁用 VAE Cache" },
   "Timestep Sample Method": { "zh-TW": "Timestep 取樣方式", "zh-CN": "Timestep 采样方式" },
+  "Min Timestep": { "zh-TW": "最小 Timestep", "zh-CN": "最小 Timestep" },
+  "Max Timestep": { "zh-TW": "最大 Timestep", "zh-CN": "最大 Timestep" },
   "Flow Shift": { "zh-TW": "Flow Shift", "zh-CN": "Flow Shift" },
   "Weighting Scheme": { "zh-TW": "權重方案", "zh-CN": "权重方案" },
   "Sigmoid Scale": { "zh-TW": "Sigmoid Scale", "zh-CN": "Sigmoid Scale" },
@@ -2381,6 +2387,8 @@ function populateConfig(config) {
     a.timestep_sampling ||
     (a.timestep_sample_method === "logit_normal" ? "sigmoid" : a.timestep_sample_method) ||
     "autoshift";
+  $("cfg-min-timestep").value = t.min_timestep ?? DEFAULT_MIN_TIMESTEP;
+  $("cfg-max-timestep").value = t.max_timestep ?? DEFAULT_MAX_TIMESTEP;
   $("cfg-flow-shift").value = a.discrete_flow_shift ?? 1.0;
   updateAutomaskUI();
   $("cfg-weighting-scheme").value = a.weighting_scheme || "uniform";
@@ -2553,6 +2561,20 @@ function safeFloat(val, fallback = 0.0) {
   const p = parseFloat(val);
   return isNaN(p) ? fallback : p;
 }
+function getTimestepRangeUI() {
+  return {
+    min: safeInt($("cfg-min-timestep")?.value, DEFAULT_MIN_TIMESTEP),
+    max: safeInt($("cfg-max-timestep")?.value, DEFAULT_MAX_TIMESTEP),
+  };
+}
+function validateTimestepRangeUI() {
+  const { min, max } = getTimestepRangeUI();
+  if (min < 0 || max < 0 || min > 1000 || max > 1000 || min > max) {
+    showToast("Min/Max Timestep 必須介於 0–1000，且 Min 不得大於 Max。", "danger");
+    return false;
+  }
+  return true;
+}
 function escapeTomlString(value) {
   return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
@@ -2699,6 +2721,12 @@ function gatherConfig() {
       gradient_accumulation_steps: safeInt($("cfg-grad-acc").value),
       max_grad_norm: 1.0,
       train_batch_size: safeInt(($("cfg-batch-size").value || "1").split(",")[0].trim(), 1),
+      min_timestep: $("cfg-min-timestep").value === ""
+        ? undefined
+        : safeInt($("cfg-min-timestep").value, DEFAULT_MIN_TIMESTEP),
+      max_timestep: $("cfg-max-timestep").value === ""
+        ? undefined
+        : safeInt($("cfg-max-timestep").value, DEFAULT_MAX_TIMESTEP),
       knn_noise_k: safeInt($("cfg-knn-noise-k").value),
       cep_noise: safeFloat($("cfg-cep-noise").value),
       loss_type: $("cfg-loss-type").value,
@@ -3352,6 +3380,7 @@ async function runSubsetTagger(card, idx) {
 // ==========================================
 async function saveJob() {
   if (!currentJob) return false;
+  if (!validateTimestepRangeUI()) return false;
   if (!validateCrossSelfUI()) return false;
   const config = gatherConfig();
   const dataset = gatherDataset();
