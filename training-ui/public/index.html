@@ -234,7 +234,7 @@
                             </div>
                             <div class="form-group">
                                 <label>Weight Decay</label>
-                                <input type="number" id="cfg-weight-decay" value="0.01" step="0.01" min="0">
+                                <input type="number" id="cfg-weight-decay" value="0.1" step="0.01" min="0">
                             </div>
                             <div class="form-group">
                                 <label>Seed</label>
@@ -495,7 +495,7 @@
                             </div>
                             <div class="form-group">
                                 <label>Max Timestep</label>
-                                <input type="number" id="cfg-max-timestep" value="1000" min="0" max="1000" step="1">
+                                <input type="number" id="cfg-max-timestep" value="950" min="0" max="1000" step="1">
                                 <small>最終訓練 timestep 上限（0–1000）；Min = Max 可固定單一 timestep。</small>
                                 <small>各分佈先在 0–1 取樣，再將完整分佈映射到 Min/Max，不會把機率堆在端點；資料夾或批次明確 timestep 覆寫優先。Weighting Scheme 仍可影響取樣密度或 loss 權重。</small>
                             </div>
@@ -538,15 +538,15 @@
                             <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self。Block 0–1 的 Self 與 Cross 在兩個階段都會更新，並跟隨當前階段使用 Cross/FAD caption 或完整 caption；Block 2+ 維持 Cross／Self 分工。</small>
                             <div class="form-row" style="margin-top: 12px;">
                                 <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-alternating" checked> 啟用 Cross / Self 交替訓練</label>
+                                    <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
                                     <small>至少勾選一個訓練階段；兩者都勾選時依 optimizer step 交替。</small>
                                 </div>
                                 <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-train-cross" checked> 訓練 Cross Attention</label>
+                                    <label><input type="checkbox" id="cfg-cross-self-train-cross"> 訓練 Cross Attention</label>
                                     <small>Cross 階段使用原本的 caption 處理行為。</small>
                                 </div>
                                 <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-train-self" checked> 訓練 Self Attention</label>
+                                    <label><input type="checkbox" id="cfg-cross-self-train-self"> 訓練 Self Attention</label>
                                     <small>Cross／Self 都沿用原本 wildcard：任意抽一行與一個 {a|b} 選項；Self 停用 caption dropout、tag dropout、FAD 與 token warmup。Block 0–1 會跟隨目前階段的 caption 更新。</small>
                                 </div>
                             </div>

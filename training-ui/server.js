@@ -1083,7 +1083,8 @@ function getDefaultConfig() {
                 learning_rate: 5e-4,
                 max_train_epochs: 20,
                 min_timestep: 0,
-                max_timestep: 1000,
+                max_timestep: 950,
+                optimizer_args: ['weight_decay=0.1'],
                 mixed_precision: 'bf16'
             },
             network_arguments: {

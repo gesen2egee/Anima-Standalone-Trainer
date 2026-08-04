@@ -36,7 +36,7 @@ let currentCliToml = "";
 let currentCliDatasetToml = "";
 let currentCliSampleText = "";
 const DEFAULT_MIN_TIMESTEP = 0;
-const DEFAULT_MAX_TIMESTEP = 1000;
+const DEFAULT_MAX_TIMESTEP = 950;
 
 const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
   anima: {
@@ -55,12 +55,14 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     tqaLossWeightingMode: "geometric",
     tqaLossWeightingSchedule: true,
     maskedLoss: true,
-    crossSelfAlternating: true,
+    crossSelfAlternating: false,
+    crossSelfTrainCross: false,
+    crossSelfTrainSelf: false,
     blocksToSwap: 0,
     transformerDtype: "bfloat16",
     networkArgs: [
       'exclude_patterns=[".*"]',
-      'include_patterns=[".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)"]',
+      'include_patterns=[".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)"]',
       "allora=True",
     ],
     supportsFullFinetune: true,
@@ -247,8 +249,8 @@ function applyArchitecturePresetToEditor(architecture) {
   $("cfg-tqa-loss-weighting-schedule").checked = defaults.tqaLossWeightingSchedule;
   $("cfg-masked-loss").checked = defaults.maskedLoss;
   $("cfg-cross-self-alternating").checked = defaults.crossSelfAlternating;
-  $("cfg-cross-self-train-cross").checked = true;
-  $("cfg-cross-self-train-self").checked = true;
+  $("cfg-cross-self-train-cross").checked = defaults.crossSelfTrainCross ?? false;
+  $("cfg-cross-self-train-self").checked = defaults.crossSelfTrainSelf ?? false;
   if (isKrea2Architecture(architecture)) {
     $("cfg-krea2-dynamic-text-encoder").checked = true;
     $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
@@ -2398,8 +2400,8 @@ function populateConfig(config) {
     : (a.qwen3_max_token_length ?? 512);
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
   $("cfg-cross-self-alternating").checked = !isKrea2Architecture(modelArchitecture) && a.cross_self_alternating === true;
-  $("cfg-cross-self-train-cross").checked = a.cross_self_train_cross ?? true;
-  $("cfg-cross-self-train-self").checked = a.cross_self_train_self ?? true;
+  $("cfg-cross-self-train-cross").checked = a.cross_self_train_cross ?? false;
+  $("cfg-cross-self-train-self").checked = a.cross_self_train_self ?? false;
   updateCrossSelfUI();
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";

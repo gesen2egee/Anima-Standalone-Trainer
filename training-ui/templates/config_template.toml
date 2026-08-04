@@ -20,7 +20,7 @@ log_with = "tensorboard"
 learning_rate = 0.0003
 text_encoder_lr = 0
 optimizer_type = "library.came.CAME"
-optimizer_args = [ "weight_decay=0.01" ]
+optimizer_args = [ "weight_decay=0.1" ]
 lr_scheduler = "warmup_stable_decay"
 lr_scheduler_min_lr_ratio = 0.1
 lr_decay_steps = 0.1
@@ -33,7 +33,7 @@ gradient_accumulation_steps = 1
 max_grad_norm = 1
 train_batch_size = 1
 min_timestep = 0
-max_timestep = 1000
+max_timestep = 950
 knn_noise_k = 64
 cep_noise = 0.01
 loss_type = "wavelet"
@@ -109,7 +109,7 @@ network_alpha = 16
 network_train_unet_only = true
 network_args = [
   "exclude_patterns=[\".*\"]",
-  "include_patterns=[\".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)\"]",
+  "include_patterns=[\".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)\"]",
   "allora=True"
 ]
 auto_resume_last_state = true
@@ -122,6 +122,6 @@ sigmoid_scale = 1
 qwen3_max_token_length = 512
 t5_max_token_length = 512
 weighting_scheme = "uniform"
-cross_self_alternating = true
-cross_self_train_cross = true
-cross_self_train_self = true
+cross_self_alternating = false
+cross_self_train_cross = false
+cross_self_train_self = false

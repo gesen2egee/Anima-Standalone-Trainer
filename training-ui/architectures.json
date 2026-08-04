@@ -47,7 +47,9 @@
           "cache_latents": true,
           "cache_latents_to_disk": true,
           "cache_text_encoder_outputs_to_disk": false,
-          "optimizer_args": ["weight_decay=0.01"],
+          "optimizer_args": ["weight_decay=0.1"],
+          "min_timestep": 0,
+          "max_timestep": 950,
           "aes_loss_weighting": false,
           "aes_loss_weighting_schedule": false,
           "tqa_loss_weighting": true,
@@ -60,16 +62,16 @@
           "network_train_unet_only": true,
           "network_args": [
             "exclude_patterns=[\".*\"]",
-            "include_patterns=[\".*(self_attn|cross_attn)\\\\.(v_proj|output_proj)\"]",
+            "include_patterns=[\".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)\"]",
             "allora=True"
           ]
         },
         "anima_arguments": {
           "timestep_sampling": "autoshift_tqa",
           "discrete_flow_shift": 1.0,
-          "cross_self_alternating": true,
-          "cross_self_train_cross": true,
-          "cross_self_train_self": true
+          "cross_self_alternating": false,
+          "cross_self_train_cross": false,
+          "cross_self_train_self": false
         }
       },
       "dataset_defaults": {
