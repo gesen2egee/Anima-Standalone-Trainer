@@ -113,7 +113,10 @@ def _set_cross_self_trainability(network, phase: str):
         kind = _get_cross_self_module_kind(module)
         if kind is None:
             counts["other"] += 1
-            enabled = False
+            # Modules outside the Cross/Self split (for example MLP or Mod)
+            # remain trainable when the user injected them.  User exclusions
+            # happen before this point by omitting the LoRA module entirely.
+            enabled = True
         else:
             counts[kind] += 1
             enabled = kind == "both_phases" or kind == phase
@@ -707,7 +710,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if self._cross_self_phase is None:
             logger.info(
                 "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, "
-                "both_phase_modules=%d (blocks 0-1 self/cross), other_modules_frozen=%d",
+                "both_phase_modules=%d (blocks 0-1 self/cross), other_modules_trainable=%d",
                 phase,
                 counts["cross"],
                 counts["self"],
