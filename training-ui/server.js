@@ -2158,22 +2158,52 @@ app.post('/api/jobs/:name/clone', (req, res) => {
         fs.mkdirSync(path.join(targetPath, 'logs'), { recursive: true });
         fs.mkdirSync(path.join(targetPath, 'samples'), { recursive: true });
 
-        // Copy config files
-        ['dataset.toml', 'sample_prompts.txt'].forEach(file => {
-            const src = path.join(sourcePath, file);
-            if (fs.existsSync(src)) {
-                fs.copyFileSync(src, path.join(targetPath, file));
-            }
-        });
+        const configOverride = req.body.config && typeof req.body.config === 'object'
+            ? req.body.config
+            : null;
+        const datasetOverride = req.body.dataset && typeof req.body.dataset === 'object'
+            ? req.body.dataset
+            : null;
+        const promptsOverride = Array.isArray(req.body.prompts) ? req.body.prompts : null;
+
+        // Copy dataset.toml unless the UI supplied unsaved dataset values.
+        const datasetPath = path.join(targetPath, 'dataset.toml');
+        if (datasetOverride) {
+            const datasetConfig = mergeDatasetConfigPreservingUnknown({}, datasetOverride);
+            stripTaggerUiFields(datasetConfig);
+            fs.writeFileSync(datasetPath, TOML.stringify(datasetConfig), 'utf8');
+        } else {
+            const src = path.join(sourcePath, 'dataset.toml');
+            if (fs.existsSync(src)) fs.copyFileSync(src, datasetPath);
+        }
+
+        // Copy sample prompts unless the UI supplied unsaved prompt values.
+        const promptsPath = path.join(targetPath, 'sample_prompts.txt');
+        if (promptsOverride) {
+            fs.writeFileSync(
+                promptsPath,
+                promptsOverride.join('\n') + (promptsOverride.length ? '\n' : ''),
+                'utf8',
+            );
+        } else {
+            const src = path.join(sourcePath, 'sample_prompts.txt');
+            if (fs.existsSync(src)) fs.copyFileSync(src, promptsPath);
+        }
 
         // Handle config.toml special case: update output_name
         const configSrc = path.join(sourcePath, 'config.toml');
-        if (fs.existsSync(configSrc)) {
-            let config = TOML.parse(fs.readFileSync(configSrc, 'utf8'));
+        if (configOverride || fs.existsSync(configSrc)) {
+            const config = configOverride || TOML.parse(fs.readFileSync(configSrc, 'utf8'));
 
             // Sync output_name with new job name
             if (!config.training_arguments) config.training_arguments = {};
             config.training_arguments.output_name = targetName;
+
+            const na = config.network_arguments;
+            if (na) {
+                if (na.resume) na.resume = stripQuotes(na.resume);
+                if (na.network_weights) na.network_weights = stripQuotes(na.network_weights);
+            }
 
             fs.writeFileSync(path.join(targetPath, 'config.toml'), TOML.stringify(config), 'utf8');
         }

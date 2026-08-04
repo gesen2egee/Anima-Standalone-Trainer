@@ -5718,10 +5718,21 @@ $("btn-clone").addEventListener("click", () => {
 // Confirm Clone
 $("btn-confirm-clone").addEventListener("click", async () => {
   const newName = $("clone-job-name").value.trim();
-  if (!newName) return;
+  if (!newName) {
+    $("clone-job-name").focus();
+    return;
+  }
+  const cloneBody = { newName };
+  if (isDirty) {
+    cloneBody.config = gatherConfig();
+    cloneBody.dataset = gatherDataset();
+    cloneBody.prompts = currentPrompts
+      .filter((prompt) => prompt.text && prompt.text.trim().length > 0)
+      .map(serializePrompt);
+  }
   const result = await api(`/api/jobs/${currentJob}/clone`, {
     method: "POST",
-    body: { newName: newName },
+    body: cloneBody,
   });
   if (result.error) {
     alert(result.error);
@@ -5729,6 +5740,9 @@ $("btn-confirm-clone").addEventListener("click", async () => {
   }
   closeModal("modal-clone-job");
   await loadJobs();
+  // The new job already contains the current editor state, so do not ask
+  // whether to discard it when switching to the clone.
+  isDirty = false;
   selectJob(result.name);
   showToast("Job cloned");
 });
