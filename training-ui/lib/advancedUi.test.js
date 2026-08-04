@@ -89,6 +89,25 @@ test("resume training is shown in training tab below checkpoint management", () 
   assert.strictEqual(network.includes("Resume Training"), false);
 });
 
+test("training tab puts schedule before optimization and model name beside training model", () => {
+  const html = read("public/index.html");
+  const training = extractElementById(html, "tab-training");
+  const scheduleIndex = training.indexOf("Training Schedule");
+  const optimizationIndex = training.indexOf("Optimization");
+  const modelNameIndex = training.indexOf('id="cfg-output-name"');
+  const trainingModelIndex = training.indexOf('id="cfg-model-architecture"');
+  const architecture = training.slice(
+    training.indexOf("<h4>Model Architecture</h4>"),
+    scheduleIndex,
+  );
+
+  assert.ok(scheduleIndex >= 0, "missing Training Schedule section");
+  assert.ok(optimizationIndex >= 0, "missing Optimization section");
+  assert.ok(scheduleIndex < optimizationIndex, "Training Schedule should precede Optimization");
+  assert.ok(modelNameIndex < trainingModelIndex, "model name should be left of Training Model");
+  assert.match(architecture, /class="form-row"[\s\S]*id="cfg-output-name"[\s\S]*id="cfg-model-architecture"/);
+});
+
 test("HTML ids are unique", () => {
   const html = read("public/index.html");
   const counts = new Map();

@@ -13,9 +13,12 @@ test("CLI tab exposes command and TOML sub-tabs plus custom args editor", () => 
   const html = read("public/index.html");
   const consoleTabIndex = html.indexOf('data-tab="console"');
   const cliTabIndex = html.indexOf('data-tab="cli"');
+  const generateTabIndex = html.indexOf('data-tab="generate"');
 
   assert.match(html, /data-tab="console">Console<\/button>[\s\S]*data-tab="cli">CLI<\/button>/);
   assert.ok(cliTabIndex > consoleTabIndex, "CLI tab should be to the right of Console");
+  assert.match(html, /data-tab="cli">CLI<\/button>\s*<button class="tab" data-tab="generate">產生圖片<\/button>/);
+  assert.ok(generateTabIndex > cliTabIndex, "Generate tab should be to the right of CLI");
   assert.match(html, /id="tab-cli"/);
   assert.match(html, /data-cli-subtab="command"/);
   assert.match(html, /data-cli-subtab="config-toml"/);

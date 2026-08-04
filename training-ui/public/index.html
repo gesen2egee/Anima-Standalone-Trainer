@@ -113,10 +113,10 @@
                     <button class="tab" data-tab="network">Network</button>
                     <button class="tab hidden" data-tab="multigpu">Multi-GPUs</button>
                     <button class="tab" data-tab="prompts">Prompts</button>
-                    <button class="tab" data-tab="generate">產生圖片</button>
                     <button class="tab" data-tab="samples">Samples</button>
                     <button class="tab" data-tab="console">Console</button>
                     <button class="tab" data-tab="cli">CLI</button>
+                    <button class="tab" data-tab="generate">產生圖片</button>
                     <button class="tab" data-tab="tensorboard">📊 TensorBoard</button>
                     <button class="tab" data-tab="settings">⚙️</button>
                 </div>
@@ -126,15 +126,60 @@
                     <!-- Training Tab -->
                     <div id="tab-training" class="tab-pane active">
                         <h4>Model Architecture</h4>
-                        <div class="form-group">
-                            <label>Training Model</label>
-                            <select id="cfg-model-architecture">
-                                <option value="anima">Anima</option>
-                                <option value="krea2">Krea 2</option>
-                                <option value="krea2_bypass">Krea 2 Bypass</option>
-                            </select>
-                            <small id="cfg-model-architecture-hint">模型路徑、訓練腳本與架構專用設定會依此選擇。</small>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Output Name</label>
+                                <input type="text" id="cfg-output-name" value="my_anima_lora"
+                                    placeholder="my_anima_lora">
+                            </div>
+                            <div class="form-group">
+                                <label>Training Model</label>
+                                <select id="cfg-model-architecture">
+                                    <option value="anima">Anima</option>
+                                    <option value="krea2">Krea 2</option>
+                                    <option value="krea2_bypass">Krea 2 Bypass</option>
+                                </select>
+                                <small id="cfg-model-architecture-hint">模型路徑、訓練腳本與架構專用設定會依此選擇。</small>
+                            </div>
                         </div>
+
+                        <h4>Training Schedule</h4>
+                        <div class="form-group">
+                            <label>Duration Unit</label>
+                            <div class="checkbox-group">
+                                <label><input type="radio" name="duration-unit" value="epochs" checked> Epochs</label>
+                                <label><input type="radio" name="duration-unit" value="steps"> Steps</label>
+                            </div>
+                        </div>
+
+                        <!-- Epochs -->
+                        <div id="schedule-epochs">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Max Epochs</label>
+                                    <input type="number" id="cfg-max-epochs" value="20" min="1">
+                                </div>
+                                <div class="form-group">
+                                    <label>Save Every N Epochs</label>
+                                    <input type="number" id="cfg-save-every" value="1" min="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Steps -->
+                        <div id="schedule-steps" class="hidden">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Max Steps</label>
+                                    <input type="number" id="cfg-max-steps" value="3000" min="1">
+                                </div>
+                                <div class="form-group">
+                                    <label>Save Every N Steps</label>
+                                    <input type="number" id="cfg-save-every-steps" value="200" min="1">
+                                </div>
+                            </div>
+                        </div>
+
                         <h4>Optimization</h4>
                         <div class="form-row">
                             <div class="form-group">
@@ -225,44 +270,6 @@
                             </div>
                         </div>
 
-                        <h4>Training Schedule</h4>
-                        <div class="form-group">
-                            <label>Duration Unit</label>
-                            <div class="checkbox-group">
-                                <label><input type="radio" name="duration-unit" value="epochs" checked> Epochs</label>
-                                <label><input type="radio" name="duration-unit" value="steps"> Steps</label>
-                            </div>
-                        </div>
-
-                        <!-- Epochs -->
-                        <div id="schedule-epochs">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Max Epochs</label>
-                                    <input type="number" id="cfg-max-epochs" value="20" min="1">
-                                </div>
-                                <div class="form-group">
-                                    <label>Save Every N Epochs</label>
-                                    <input type="number" id="cfg-save-every" value="1" min="1">
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Steps -->
-                        <div id="schedule-steps" class="hidden">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Max Steps</label>
-                                    <input type="number" id="cfg-max-steps" value="3000" min="1">
-                                </div>
-                                <div class="form-group">
-                                    <label>Save Every N Steps</label>
-                                    <input type="number" id="cfg-save-every-steps" value="200" min="1">
-                                </div>
-                            </div>
-                        </div>
-
-
                         <h4>Checkpoint Management</h4>
                         <div class="form-row">
                             <div class="form-group">
@@ -318,11 +325,6 @@
 
 
                         <div class="form-row">
-                            <div class="form-group">
-                                <label>Output Name</label>
-                                <input type="text" id="cfg-output-name" value="my_anima_lora"
-                                    placeholder="my_anima_lora">
-                            </div>
                             <div class="form-group">
                                 <label>Save Format</label>
                                 <select id="cfg-save-format">
