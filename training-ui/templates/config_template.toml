@@ -123,5 +123,9 @@ qwen3_max_token_length = 512
 t5_max_token_length = 512
 weighting_scheme = "uniform"
 cross_self_alternating = false
-cross_self_train_cross = false
-cross_self_train_self = false
+cross_self_odd_network_args = [
+  "exclude_patterns=[\".*self_attn.*\"]"
+]
+cross_self_even_network_args = [
+  "exclude_patterns=[\".*cross_attn.*\"]"
+]

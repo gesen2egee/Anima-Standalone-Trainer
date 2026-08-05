@@ -48,8 +48,12 @@ test("default config template follows the Anima v68-style training defaults", ()
   ]);
   assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift_tqa");
   assert.strictEqual(config.anima_arguments.cross_self_alternating, false);
-  assert.strictEqual(config.anima_arguments.cross_self_train_cross, false);
-  assert.strictEqual(config.anima_arguments.cross_self_train_self, false);
+  assert.deepStrictEqual(config.anima_arguments.cross_self_odd_network_args, [
+    'exclude_patterns=[".*self_attn.*"]',
+  ]);
+  assert.deepStrictEqual(config.anima_arguments.cross_self_even_network_args, [
+    'exclude_patterns=[".*cross_attn.*"]',
+  ]);
   assert.strictEqual(config.training_arguments.sample_at_first, true);
   assert.strictEqual(config.training_arguments.sample_every_n_steps, 200);
   assert.strictEqual(config.training_arguments.cache_text_encoder_outputs_to_disk, false);
@@ -109,6 +113,8 @@ test("architecture registry exposes Anima, Krea 2, and Krea 2 Bypass presets", (
   assert.strictEqual(anima.job_defaults.training_arguments.optimizer_args[0], "weight_decay=0.1");
   assert.strictEqual(anima.job_defaults.training_arguments.max_timestep, 950);
   assert.strictEqual(anima.job_defaults.anima_arguments.cross_self_alternating, false);
+  assert.ok(Array.isArray(anima.job_defaults.anima_arguments.cross_self_odd_network_args));
+  assert.ok(Array.isArray(anima.job_defaults.anima_arguments.cross_self_even_network_args));
   assert.strictEqual(anima.dataset_defaults.fad_curriculum_end, 0.5);
   assert.strictEqual(anima.dataset_defaults.caption_dropout_rate, 0);
   assert.strictEqual(anima.dataset_defaults.enable_wildcard, true);

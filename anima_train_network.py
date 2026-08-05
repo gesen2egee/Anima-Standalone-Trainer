@@ -1,6 +1,8 @@
 # Anima LoRA training script
 
 import argparse
+import ast
+import re
 from typing import Optional, Union
 
 import torch
@@ -35,12 +37,122 @@ def _cross_self_alternating_enabled(args) -> bool:
     return bool(getattr(args, "cross_self_alternating", False))
 
 
+def _normalize_cross_self_network_args(raw_args) -> list[str]:
+    """Normalize a phase's free-form network argument list.
+
+    Config TOML can provide either a list (the normal UI output) or one string
+    (convenient for hand-written configs).  Unknown network arguments are
+    intentionally ignored by the phase selector; the regular network still
+    receives the normal ``network_args`` list at creation time.
+    """
+
+    if raw_args is None:
+        return []
+    if isinstance(raw_args, str):
+        raw_args = [raw_args]
+    if not isinstance(raw_args, (list, tuple)):
+        return []
+    return [str(value).strip() for value in raw_args if str(value).strip()]
+
+
+def _get_cross_self_phase_network_args(args, phase: str) -> list[str]:
+    key = "cross_self_odd_network_args" if phase == "cross" else "cross_self_even_network_args"
+    return _normalize_cross_self_network_args(getattr(args, key, None))
+
+
+def _parse_cross_self_patterns(raw_value, key: str) -> list[str]:
+    """Parse a network selector value without failing the whole training run."""
+
+    try:
+        value = ast.literal_eval(raw_value)
+    except (SyntaxError, ValueError, TypeError):
+        # Also accept a single bare regex for hand-written config files.
+        value = raw_value
+
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item).strip()]
+
+    logger.warning("Cross/Self %s 必須是字串或清單，已略過。", key)
+    return []
+
+
+def _parse_cross_self_reg_lrs(raw_value) -> list[tuple[str, float]]:
+    """Read ``network_reg_lrs`` entries and use their regex keys as selectors.
+
+    The base network applies the actual optimizer learning rates when it is
+    created.  During alternation the regex keys are also useful as a compact
+    module selector, so a phase may provide only ``network_reg_lrs``.
+    """
+
+    if isinstance(raw_value, (list, tuple)):
+        raw_value = ",".join(str(item) for item in raw_value)
+    if raw_value is None:
+        return []
+
+    entries = []
+    for item in str(raw_value).split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        pattern, value = item.rsplit("=", 1)
+        pattern = pattern.strip()
+        try:
+            float(value.strip())
+            re.compile(pattern)
+        except (TypeError, ValueError, re.error) as error:
+            logger.warning("Cross/Self network_reg_lrs 項目無效 '%s'：%s，已略過。", item, error)
+            continue
+        entries.append((pattern, float(value.strip())))
+    return entries
+
+
+def _parse_cross_self_phase_rules(raw_args: list[str]) -> dict:
+    """Parse phase-local ``exclude/include/network_reg_lrs`` selectors."""
+
+    rules = {
+        "exclude_patterns": [],
+        "include_patterns": [],
+        "network_reg_lrs": [],
+        "has_custom_rules": False,
+    }
+    for argument in raw_args:
+        if "=" not in argument:
+            continue
+        key, raw_value = argument.split("=", 1)
+        key = key.strip()
+        if key == "exclude_patterns":
+            rules["exclude_patterns"].extend(_parse_cross_self_patterns(raw_value, key))
+            rules["has_custom_rules"] = True
+        elif key == "include_patterns":
+            rules["include_patterns"].extend(_parse_cross_self_patterns(raw_value, key))
+            rules["has_custom_rules"] = True
+        elif key in ("network_reg_lrs", "reg_lrs"):
+            rules["network_reg_lrs"].extend(_parse_cross_self_reg_lrs(raw_value))
+            rules["has_custom_rules"] = True
+
+    compiled = {}
+    for key in ("exclude_patterns", "include_patterns"):
+        compiled[key] = []
+        for pattern in rules[key]:
+            try:
+                compiled[key].append(re.compile(pattern))
+            except re.error as error:
+                logger.warning("Cross/Self %s pattern 無效 '%s'：%s，已略過。", key, pattern, error)
+    compiled["network_reg_lrs"] = []
+    for pattern, lr in rules["network_reg_lrs"]:
+        try:
+            compiled["network_reg_lrs"].append((re.compile(pattern), lr))
+        except re.error as error:
+            logger.warning("Cross/Self network_reg_lrs pattern 無效 '%s'：%s，已略過。", pattern, error)
+    compiled["has_custom_rules"] = rules["has_custom_rules"]
+    return compiled
+
+
 def _validate_cross_self_args(args) -> None:
     if not _cross_self_alternating_enabled(args):
         return
-
-    if not (getattr(args, "cross_self_train_cross", False) or getattr(args, "cross_self_train_self", False)):
-        raise ValueError("cross_self_alternating 已啟用，但至少要選擇 Cross 或 Self 訓練階段。")
 
     if getattr(args, "cache_text_encoder_outputs", False) or getattr(args, "cache_text_encoder_outputs_to_disk", False):
         raise ValueError(
@@ -52,14 +164,20 @@ def _validate_cross_self_args(args) -> None:
 
 
 def _get_cross_self_phase(args, step: int) -> str:
-    phases = []
-    if getattr(args, "cross_self_train_cross", False):
-        phases.append("cross")
-    if getattr(args, "cross_self_train_self", False):
-        phases.append("self")
-    if not phases:
-        raise ValueError("Cross/Self 交替訓練沒有可用的訓練階段。")
-    return phases[int(step) % len(phases)]
+    # ``current_training_step`` is zero-based internally.  Treat step 0 as
+    # the user's first (odd) optimizer step so the default remains Cross →
+    # Self while the UI can describe the two inputs as odd/even steps.
+    has_legacy_selection = getattr(args, "cross_self_train_cross", False) or getattr(
+        args, "cross_self_train_self", False
+    )
+    if has_legacy_selection:
+        cross_enabled = getattr(args, "cross_self_train_cross", False)
+        self_enabled = getattr(args, "cross_self_train_self", False)
+        if cross_enabled and not self_enabled:
+            return "cross"
+        if self_enabled and not cross_enabled:
+            return "self"
+    return "cross" if int(step) % 2 == 0 else "self"
 
 
 def _iter_cross_self_lora_modules(network):
@@ -97,28 +215,60 @@ def _get_cross_self_module_kind(module):
     return None
 
 
-def _set_cross_self_trainability(network, phase: str):
-    counts = {"cross": 0, "self": 0, "both_phases": 0, "other": 0}
-    for module in _iter_cross_self_lora_modules(network):
+def _set_cross_self_trainability(network, phase: str, phase_network_args: Optional[list[str]] = None):
+    counts = {
+        "cross": 0,
+        "self": 0,
+        "both_phases": 0,
+        "other": 0,
+        "enabled": 0,
+        "matched": 0,
+        "rule_empty": False,
+    }
+    modules = list(_iter_cross_self_lora_modules(network))
+    rules = _parse_cross_self_phase_rules(_normalize_cross_self_network_args(phase_network_args))
+    decisions = []
+
+    for module in modules:
         kind = _get_cross_self_module_kind(module)
         if kind is None:
             counts["other"] += 1
-            # Modules outside the Cross/Self split (for example MLP or Mod)
-            # remain trainable when the user injected them.  User exclusions
-            # happen before this point by omitting the LoRA module entirely.
-            enabled = True
         else:
             counts[kind] += 1
-            enabled = kind == "both_phases" or kind == phase
+
+        original_name = str(getattr(module, "original_name", ""))
+        if rules["has_custom_rules"]:
+            include_match = any(pattern.fullmatch(original_name) for pattern in rules["include_patterns"])
+            reg_match = any(pattern.fullmatch(original_name) for pattern, _ in rules["network_reg_lrs"])
+            exclude_match = any(pattern.fullmatch(original_name) for pattern in rules["exclude_patterns"])
+            has_positive_selector = bool(rules["include_patterns"] or rules["network_reg_lrs"])
+            selected = include_match or reg_match if has_positive_selector else True
+            # Keep the network's established include-overrides-exclude
+            # semantics, so users can paste the same pattern pair used at
+            # network creation time.
+            enabled = bool(selected and (not exclude_match or include_match or reg_match))
+            if include_match or reg_match:
+                counts["matched"] += 1
+        else:
+            # Built-in fallback for old configs without phase-local rules.
+            enabled = kind is None or kind == "both_phases" or kind == phase
+        decisions.append((module, enabled))
+
+    enabled_count = sum(1 for _, enabled in decisions if enabled)
+    if rules["has_custom_rules"] and enabled_count == 0:
+        # An include target that was not created by the initial network filter
+        # is a valid no-op.  Keep the previous trainability state so an empty
+        # phase cannot make backward() fail or accidentally halt the run.
+        counts["rule_empty"] = True
+        counts["enabled"] = sum(
+            1 for module in modules if any(parameter.requires_grad for parameter in module.parameters())
+        )
+        return counts
+
+    for module, enabled in decisions:
         for parameter in module.parameters():
             parameter.requires_grad_(enabled)
-
-    phase_module_count = counts[phase] + counts["both_phases"]
-    if phase_module_count == 0:
-        raise ValueError(
-            f"Cross/Self 交替訓練要求 {phase} LoRA 模組，但目前沒有找到對應模組；"
-            "請檢查 network_args 的 self_attn/cross_attn 目標。"
-        )
+    counts["enabled"] = enabled_count
     return counts
 
 
@@ -132,6 +282,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         self._dop_loss = None
         self._cross_self_phase = None
         self._cross_self_phase_counts = None
+        self._cross_self_missing_rule_warned = set()
 
     def assert_extra_args(
         self,
@@ -696,16 +847,24 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
         phase = _get_cross_self_phase(args, getattr(self, "current_training_step", 0))
         unwrapped_network = accelerator.unwrap_model(network)
-        counts = _set_cross_self_trainability(unwrapped_network, phase)
+        phase_network_args = _get_cross_self_phase_network_args(args, phase)
+        counts = _set_cross_self_trainability(unwrapped_network, phase, phase_network_args)
+        if counts.get("rule_empty") and phase not in self._cross_self_missing_rule_warned:
+            logger.warning(
+                "Cross/Self %s 規則沒有匹配到已建立的 LoRA module，已自動略過本次規則。",
+                phase,
+            )
+            self._cross_self_missing_rule_warned.add(phase)
         if self._cross_self_phase is None:
             logger.info(
                 "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, "
-                "both_phase_modules=%d (MLP/Mod/other), other_modules_trainable=%d",
+                "other_modules=%d, matched=%d, enabled=%d",
                 phase,
                 counts["cross"],
                 counts["self"],
-                counts["both_phases"],
                 counts["other"],
+                counts["matched"],
+                counts["enabled"],
             )
         elif phase != self._cross_self_phase:
             logger.debug("Cross/Self alternating phase switched to %s", phase)
@@ -769,14 +928,30 @@ def setup_parser() -> argparse.ArgumentParser:
         help="alternate Cross-attention and Self-attention LoRA training steps for Anima",
     )
     parser.add_argument(
+        "--cross_self_odd_network_args",
+        type=str,
+        nargs="*",
+        default=None,
+        help="network selector arguments for odd optimizer steps (Cross caption): exclude_patterns/include_patterns/network_reg_lrs",
+    )
+    parser.add_argument(
+        "--cross_self_even_network_args",
+        type=str,
+        nargs="*",
+        default=None,
+        help="network selector arguments for even optimizer steps (Self caption): exclude_patterns/include_patterns/network_reg_lrs",
+    )
+    # Keep the old switches readable for existing config files.  The UI no
+    # longer exposes them; when supplied they select one phase on every step.
+    parser.add_argument(
         "--cross_self_train_cross",
         action="store_true",
-        help="enable the Cross-attention phase when cross_self_alternating is enabled",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--cross_self_train_self",
         action="store_true",
-        help="enable the Self-attention phase when cross_self_alternating is enabled",
+        help=argparse.SUPPRESS,
     )
     # parser.add_argument("--fp8_scaled", action="store_true", help="Use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
     parser.add_argument(

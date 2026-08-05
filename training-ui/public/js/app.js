@@ -56,8 +56,12 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     tqaLossWeightingSchedule: true,
     maskedLoss: true,
     crossSelfAlternating: false,
-    crossSelfTrainCross: false,
-    crossSelfTrainSelf: false,
+    crossSelfOddNetworkArgs: [
+      'exclude_patterns=[".*self_attn.*"]',
+    ],
+    crossSelfEvenNetworkArgs: [
+      'exclude_patterns=[".*cross_attn.*"]',
+    ],
     blocksToSwap: 0,
     transformerDtype: "bfloat16",
     networkArgs: [
@@ -130,16 +134,16 @@ function isKrea2Architecture(architecture) {
 
 function updateCrossSelfUI() {
   const master = $("cfg-cross-self-alternating");
-  const cross = $("cfg-cross-self-train-cross");
-  const self = $("cfg-cross-self-train-self");
+  const odd = $("cfg-cross-self-odd-network-args");
+  const even = $("cfg-cross-self-even-network-args");
   const hint = $("cfg-cross-self-hint");
-  if (!master || !cross || !self) return;
+  if (!master || !odd || !even) return;
 
   const architecture = $("cfg-model-architecture")?.value || "anima";
   const isNetworkTraining = $("cfg-training-type")?.value !== "full_finetune";
   const enabled = master.checked && !isKrea2Architecture(architecture) && isNetworkTraining;
-  cross.disabled = !enabled;
-  self.disabled = !enabled;
+  odd.disabled = !enabled;
+  even.disabled = !enabled;
   const cache = $("cfg-cache-te");
   if (cache && !isKrea2Architecture(architecture)) {
     if (enabled) {
@@ -154,14 +158,8 @@ function updateCrossSelfUI() {
   }
   if (!hint) return;
 
-  if (enabled && !cross.checked && !self.checked) {
-    hint.textContent = "錯誤：至少要選擇 Cross 或 Self 訓練階段。";
-    hint.style.color = "var(--danger, #e05d5d)";
-  } else if (enabled && cross.checked && self.checked) {
-    hint.textContent = "目前設定：Cross → Self → Cross → Self，依 optimizer step 交替。";
-    hint.style.color = "";
-  } else if (enabled) {
-    hint.textContent = "目前只更新已勾選的階段，不會切換到未勾選的階段。";
+  if (enabled) {
+    hint.textContent = "目前設定：奇數 step 使用 Cross caption，偶數 step 使用 Self caption；空白欄位會使用內建 Cross/Self 分流。";
     hint.style.color = "";
   } else {
     hint.textContent = "功能關閉，不會改變原本訓練流程。";
@@ -173,14 +171,49 @@ function validateCrossSelfUI() {
   const architecture = $("cfg-model-architecture")?.value || "anima";
   const master = $("cfg-cross-self-alternating");
   if (isKrea2Architecture(architecture) || $("cfg-training-type")?.value === "full_finetune" || !master?.checked) return true;
-  const cross = $("cfg-cross-self-train-cross");
-  const self = $("cfg-cross-self-train-self");
-  if (!(cross?.checked || self?.checked)) {
-    updateCrossSelfUI();
-    showToast("Cross / Self 交替訓練至少要選擇 Cross 或 Self。", "danger");
-    return false;
-  }
   return true;
+}
+
+function splitCrossSelfNetworkArgs(value) {
+  const tokens = [];
+  let token = "";
+  let quote = "";
+  let depth = 0;
+  let escaped = false;
+  for (const char of String(value || "")) {
+    if (escaped) {
+      token += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote) {
+      token += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      token += char;
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      token += char;
+      continue;
+    }
+    if (char === "[" || char === "(" || char === "{") depth += 1;
+    if (char === "]" || char === ")" || char === "}") depth = Math.max(0, depth - 1);
+    if (/\s/.test(char) && depth === 0) {
+      if (token) {
+        tokens.push(token);
+        token = "";
+      }
+      continue;
+    }
+    token += char;
+  }
+  if (token) tokens.push(token);
+  return tokens;
 }
 
 function inferModelArchitecture(config = {}) {
@@ -249,8 +282,8 @@ function applyArchitecturePresetToEditor(architecture) {
   $("cfg-tqa-loss-weighting-schedule").checked = defaults.tqaLossWeightingSchedule;
   $("cfg-masked-loss").checked = defaults.maskedLoss;
   $("cfg-cross-self-alternating").checked = defaults.crossSelfAlternating;
-  $("cfg-cross-self-train-cross").checked = defaults.crossSelfTrainCross ?? false;
-  $("cfg-cross-self-train-self").checked = defaults.crossSelfTrainSelf ?? false;
+  $("cfg-cross-self-odd-network-args").value = (defaults.crossSelfOddNetworkArgs || []).join(" ");
+  $("cfg-cross-self-even-network-args").value = (defaults.crossSelfEvenNetworkArgs || []).join(" ");
   if (isKrea2Architecture(architecture)) {
     $("cfg-krea2-dynamic-text-encoder").checked = true;
     $("cfg-krea2-dynamic-text-encoder-cpu").checked = false;
@@ -2400,8 +2433,15 @@ function populateConfig(config) {
     : (a.qwen3_max_token_length ?? 512);
   $("cfg-t5-max-token-length").value = a.t5_max_token_length ?? 512;
   $("cfg-cross-self-alternating").checked = !isKrea2Architecture(modelArchitecture) && a.cross_self_alternating === true;
-  $("cfg-cross-self-train-cross").checked = a.cross_self_train_cross ?? false;
-  $("cfg-cross-self-train-self").checked = a.cross_self_train_self ?? false;
+  const crossSelfDefaults = MODEL_ARCHITECTURE_DEFAULTS.anima;
+  const oddNetworkArgs = Array.isArray(a.cross_self_odd_network_args)
+    ? a.cross_self_odd_network_args
+    : crossSelfDefaults.crossSelfOddNetworkArgs;
+  const evenNetworkArgs = Array.isArray(a.cross_self_even_network_args)
+    ? a.cross_self_even_network_args
+    : crossSelfDefaults.crossSelfEvenNetworkArgs;
+  $("cfg-cross-self-odd-network-args").value = oddNetworkArgs.join(" ");
+  $("cfg-cross-self-even-network-args").value = evenNetworkArgs.join(" ");
   updateCrossSelfUI();
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
@@ -2895,8 +2935,8 @@ function gatherConfig() {
       ...(!isKrea2 && $("cfg-training-type").value !== "full_finetune" && $("cfg-cross-self-alternating").checked
         ? {
             cross_self_alternating: true,
-            cross_self_train_cross: $("cfg-cross-self-train-cross").checked,
-            cross_self_train_self: $("cfg-cross-self-train-self").checked,
+            cross_self_odd_network_args: splitCrossSelfNetworkArgs($("cfg-cross-self-odd-network-args").value),
+            cross_self_even_network_args: splitCrossSelfNetworkArgs($("cfg-cross-self-even-network-args").value),
           }
         : {}),
     },
@@ -3508,11 +3548,11 @@ $("cfg-cross-self-alternating")?.addEventListener("change", () => {
   updateCrossSelfUI();
   checkDirty();
 });
-$("cfg-cross-self-train-cross")?.addEventListener("change", () => {
+$("cfg-cross-self-odd-network-args")?.addEventListener("input", () => {
   updateCrossSelfUI();
   checkDirty();
 });
-$("cfg-cross-self-train-self")?.addEventListener("change", () => {
+$("cfg-cross-self-even-network-args")?.addEventListener("input", () => {
   updateCrossSelfUI();
   checkDirty();
 });

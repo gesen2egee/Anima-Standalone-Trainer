@@ -535,20 +535,20 @@
 
                         <div class="anima-training-only network-training-only" style="margin-top: 24px;">
                             <h4>Cross / Self 交替訓練</h4>
-                            <small>僅 Anima LoRA。關閉時完全沿用原流程；啟用後以 optimizer step 交替更新 Cross 與 Self。所有 Cross Attention 只在 Cross 階段更新，所有 Self Attention 只在 Self 階段更新；Block 1–2 若有注入就會照此分工訓練，MLP/Mod/其他模組則持續訓練。</small>
-                            <div class="form-row" style="margin-top: 12px;">
-                                <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
-                                    <small>至少勾選一個訓練階段；兩者都勾選時依 optimizer step 交替。</small>
-                                </div>
-                                <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-train-cross"> 訓練 Cross Attention</label>
-                                    <small>Cross 階段使用原本的 caption 處理行為。</small>
-                                </div>
-                                <div class="form-group">
-                                    <label><input type="checkbox" id="cfg-cross-self-train-self"> 訓練 Self Attention</label>
-                                    <small>Cross／Self 都沿用原本 wildcard：任意抽一行與一個 {a|b} 選項；Self 停用 caption dropout、tag dropout、FAD 與 token warmup。Self 階段只更新 Self 與其他非 Cross/Self 模組。</small>
-                                </div>
+                            <small>僅 Anima LoRA。啟用後第 1、3、5… 個 optimizer step 使用奇數規則（Cross caption），第 2、4、6… 個使用偶數規則（Self caption）。規則只會套用到建立好的 LoRA module；不存在的 include 目標會自動略過，未被 exclude 的其他 module 會照常訓練。</small>
+                            <div class="form-group" style="margin-top: 12px;">
+                                <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
+                                <small>關閉時完全沿用原本訓練流程；啟用時會停用 Text Encoder cache。</small>
+                            </div>
+                            <div class="form-group" style="margin-top: 12px;">
+                                <label for="cfg-cross-self-odd-network-args">奇數 step 規則（Cross caption）</label>
+                                <input type="text" id="cfg-cross-self-odd-network-args" placeholder='exclude_patterns=[".*"] include_patterns=[".*cross_attn.*"]'>
+                                <small>可填 <code>exclude_patterns</code>、<code>include_patterns</code> 或 <code>network_reg_lrs</code>，多個項目用空白分隔；規則以已建立的 module 名稱比對。</small>
+                            </div>
+                            <div class="form-group" style="margin-top: 12px;">
+                                <label for="cfg-cross-self-even-network-args">偶數 step 規則（Self caption）</label>
+                                <input type="text" id="cfg-cross-self-even-network-args" placeholder='exclude_patterns=[".*"] include_patterns=[".*self_attn.*"]'>
+                                <small>可以貼上和 <code>network_args</code> 相同的 regex；找不到目標時只跳過該規則，不會讓訓練中斷。</small>
                             </div>
                             <small id="cfg-cross-self-hint"></small>
                         </div>
