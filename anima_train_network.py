@@ -1,7 +1,6 @@
 # Anima LoRA training script
 
 import argparse
-import re
 from typing import Optional, Union
 
 import torch
@@ -31,9 +30,6 @@ setup_logging()
 import logging
 
 logger = logging.getLogger(__name__)
-
-CROSS_SELF_BOTH_PHASE_BLOCKS = frozenset({0, 1})
-
 
 def _cross_self_alternating_enabled(args) -> bool:
     return bool(getattr(args, "cross_self_alternating", False))
@@ -95,14 +91,9 @@ def _iter_cross_self_lora_modules(network):
 def _get_cross_self_module_kind(module):
     original_name = str(getattr(module, "original_name", ""))
     if ".self_attn" in original_name or original_name.startswith("self_attn"):
-        block_match = re.search(r"(?:^|\.)blocks\.(\d+)\.self_attn(?:\.|$)", original_name)
-        if block_match is not None and int(block_match.group(1)) in CROSS_SELF_BOTH_PHASE_BLOCKS:
-            return "both_phases"
         return "self"
     if ".cross_attn" in original_name or original_name.startswith("cross_attn"):
-        # Cross Attention sees the active phase's caption in both phases:
-        # Cross/FAD caption during Cross, full caption during Self.
-        return "both_phases"
+        return "cross"
     return None
 
 
@@ -709,7 +700,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if self._cross_self_phase is None:
             logger.info(
                 "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, "
-                "both_phase_modules=%d (all Cross + blocks 0-1 Self), other_modules_trainable=%d",
+                "both_phase_modules=%d (MLP/Mod/other), other_modules_trainable=%d",
                 phase,
                 counts["cross"],
                 counts["self"],
