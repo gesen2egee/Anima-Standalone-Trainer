@@ -100,10 +100,9 @@ def _get_cross_self_module_kind(module):
             return "both_phases"
         return "self"
     if ".cross_attn" in original_name or original_name.startswith("cross_attn"):
-        block_match = re.search(r"(?:^|\.)blocks\.(\d+)\.cross_attn(?:\.|$)", original_name)
-        if block_match is not None and int(block_match.group(1)) in CROSS_SELF_BOTH_PHASE_BLOCKS:
-            return "both_phases"
-        return "cross"
+        # Cross Attention sees the active phase's caption in both phases:
+        # Cross/FAD caption during Cross, full caption during Self.
+        return "both_phases"
     return None
 
 
@@ -710,7 +709,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         if self._cross_self_phase is None:
             logger.info(
                 "Cross/Self alternating training enabled: first_phase=%s, cross_modules=%d, self_modules=%d, "
-                "both_phase_modules=%d (blocks 0-1 self/cross), other_modules_trainable=%d",
+                "both_phase_modules=%d (all Cross + blocks 0-1 Self), other_modules_trainable=%d",
                 phase,
                 counts["cross"],
                 counts["self"],
