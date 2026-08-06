@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 set "VENV_DIR=%ROOT%venv"
@@ -74,7 +74,7 @@ if not exist "%VENV_PY%" (
         echo [ERROR] 找不到可用的 Python 3.10-3.12。README 以 Python 3.10.x 為基準，請先安裝 Python。
         goto :fail
     )
-    %PYTHON_CMD% -m venv "%VENV_DIR%"
+    !PYTHON_CMD! -m venv "%VENV_DIR%"
     if errorlevel 1 goto :fail
 ) else (
     echo [2/8] 已找到現有 venv，略過建立。
