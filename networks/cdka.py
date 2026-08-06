@@ -23,6 +23,8 @@ from library.utils import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+CDKA_DEFAULT_ALPHA = 16.0
+
 
 def factorization_in(dimension: int, pref_val: int = 8) -> tuple:
     """Return a tuple of two values whose product equals dimension.
@@ -72,7 +74,7 @@ class CdkaModule(torch.nn.Module):
         org_module: torch.nn.Module,
         multiplier=1.0,
         lora_dim=4,           # Standard LoKr lora_dim (used for scale_lokr in degradation)
-        alpha=1.0,            # Standard LoKr alpha (used for scale_lokr in degradation)
+        alpha=CDKA_DEFAULT_ALPHA,  # CDKA default alpha
         dropout=None,
         rank_dropout=None,
         module_dropout=None,
@@ -95,7 +97,7 @@ class CdkaModule(torch.nn.Module):
         w2_init = kwargs.get("w2_init", "kaiming_uniform")
         if w2_init is not None:
             w2_init = str(w2_init).strip("'\"").lower()
-        cdka_alpha = kwargs.get("cdka_alpha", 16.0)
+        cdka_alpha = kwargs.get("cdka_alpha", CDKA_DEFAULT_ALPHA)
         if cdka_alpha is not None and str(cdka_alpha).lower() in ("none", "null", ""):
             cdka_alpha = None
         cdka_alpha = float(cdka_alpha) if cdka_alpha is not None else None
@@ -363,7 +365,7 @@ class CdkaInfModule(CdkaModule):
         org_module: torch.nn.Module,
         multiplier=1.0,
         lora_dim=4,
-        alpha=1,
+        alpha=CDKA_DEFAULT_ALPHA,
         **kwargs,
     ):
         super().__init__(lora_name, org_module, multiplier, lora_dim, alpha, **kwargs)
@@ -458,7 +460,7 @@ def create_network(
     if network_dim is None:
         network_dim = 4
     if network_alpha is None:
-        network_alpha = 1.0
+        network_alpha = CDKA_DEFAULT_ALPHA
 
     text_encoders = text_encoder if isinstance(text_encoder, list) else [text_encoder]
     arch_config = detect_arch_config(unet, text_encoders)
@@ -500,7 +502,7 @@ def create_network(
     cdka_alpha = kwargs.get("cdka_alpha", None)
     if cdka_alpha is not None and str(cdka_alpha).lower() in ("none", "null", ""):
         cdka_alpha = None
-    cdka_alpha = float(cdka_alpha) if cdka_alpha is not None else 16.0
+    cdka_alpha = float(cdka_alpha) if cdka_alpha is not None else CDKA_DEFAULT_ALPHA
 
 
 
