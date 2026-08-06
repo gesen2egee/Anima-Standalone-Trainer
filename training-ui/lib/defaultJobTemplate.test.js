@@ -79,7 +79,7 @@ test("default dataset template follows the Anima dataset defaults", () => {
   assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
   assert.strictEqual(firstDataset.folder_shift_curriculum, true);
   assert.strictEqual(firstSubset.keep_tokens, 1);
-  assert.strictEqual(firstSubset.keep_tags, "");
+  assert.match(firstSubset.keep_tags, /^1girl, 1boy, 1other,/);
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
   assert.strictEqual(firstSubset.caption_dropout_rate, 0);
@@ -127,7 +127,6 @@ test("architecture registry exposes Anima, Krea 2, and Krea 2 Bypass presets", (
   assert.strictEqual(anima.dataset_defaults.fad_curriculum_end, 0.5);
   assert.strictEqual(anima.dataset_defaults.caption_dropout_rate, 0);
   assert.strictEqual(anima.dataset_defaults.enable_wildcard, true);
-  assert.strictEqual(anima.dataset_defaults.keep_tags, "");
   assert.strictEqual(anima.dataset_defaults.fad_timestep, false);
   assert.strictEqual(anima.dataset_defaults.resolution, 768);
   assert.strictEqual(anima.job_defaults.network_arguments.network_module, "networks.cdka");

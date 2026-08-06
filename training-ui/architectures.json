@@ -87,8 +87,7 @@
         "fad_curriculum_end": 0.5,
         "fad_timestep": false,
         "caption_dropout_rate": 0,
-        "enable_wildcard": true,
-        "keep_tags": ""
+        "enable_wildcard": true
       },
       "all_in_one": false,
       "fsdp_transformer_cls": "Block"

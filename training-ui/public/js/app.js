@@ -1,7 +1,21 @@
 // === Anima Training UI — Client ===
 const DEFAULT_NEGATIVE_PROMPT =
   "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, low quality, worst quality, blurry, bad anatomy, extra limbs, deformed, watermark, text, signature, bareness, artifacts, hands, copyrights name, jpeg_artifacts, scan_artifacts, bad hands, missing fingers, extra digit, fewer digits, artistic error, ye-pop, deviantart, logo, patreon logo";
-const DEFAULT_KEEP_TAGS = "";
+const DEFAULT_KEEP_TAGS = [
+  "1girl", "1boy", "1other", ".*girls", ".*boys", ".*others", ".*out_of_frame",
+  "cropped_.*", "disembodied_.*", "letterboxed", "pillarboxed", ".*_border",
+  "round_image", "circle_cut", "split_screen", "variations", "comparison",
+  ".*koma", ".*comic", "column_lineup", "nengajou", ".*chart", "zoom_layer",
+  ".*_inset", ".*_background", ".*watermark", "copyright_notice", "signature",
+  "qr_code", "artist_logo", "pixiv_logo", "twitter_logo", "instagram_logo",
+  ".*_logo", ".*_name", "pixiv_id", ".*_username", "window_(computing)",
+  "fake_screenshot", "fake_phone_screenshot", "battery_indicator", "timestamp",
+  "cursor", "art_program_in_frame", "d-pad", "gameplay_mechanics", "ranguage",
+  ".*text", "profanity", ".*speech_bubble", "thought_bubble", "lyrics",
+  "page_number", "subtitled", ".*censor.*", "chromatic_aberration", "film_grain",
+  "blending", ".*blur.*", ".*_profile", ".*cover", "multiple_.*", "ranguage",
+  ".*_(medium)", "monochrome", "greyscale", "sketch",
+].join(", ");
 const LAST_IMAGE_FOLDER_KEY = "anima_last_image_folder";
 let currentJob = null;
 let ws = null;
