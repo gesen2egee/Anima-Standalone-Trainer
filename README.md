@@ -150,10 +150,11 @@ This approach ensures that you have full control over the instructions given to 
 
 ### Windows Required Dependencies
 
-Python 3.10.x and Git:
+Python 3.10.x:
 
 - Python 3.10.x: Download Windows installer (64-bit) from https://www.python.org/downloads/windows/
-- git: Download latest installer from https://git-scm.com/download/win
+
+Git is optional for ZIP installs. It is only required when using a Git checkout or when upgrading source code with `git pull`.
 
 Python 3.11.x, and 3.12.x will work but not tested.
 
@@ -200,6 +201,8 @@ Answers to accelerate config:
 
 If you'd like to use bf16, please answer `bf16` to the last question.
 
+For a ZIP download, extract the project and run `setup.bat` from the project root. The setup script installs the optimizer dependencies from PyPI, so Git is not required for this path. Internet access is still required to download Python and Node dependencies.
+
 Note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is occurred in training. In this case, answer `0` for the 6th question: 
 ``What GPU(s) (by id) should be used for training on this machine as a comma-separated list? [all]:`` 
 
@@ -239,7 +242,7 @@ pip install deepspeed==0.16.7
 
 ## Upgrade
 
-When a new release comes out you can upgrade your repo with the following command:
+When a new release comes out, a Git checkout can be upgraded with the following command:
 
 ```powershell
 cd sd-scripts
@@ -250,6 +253,8 @@ pip install --use-pep517 --upgrade -r requirements.txt
 ```
 
 Once the commands have completed successfully you should be ready to use the new version.
+
+For a ZIP installation, download and extract the newer ZIP first, then run `upgrade.bat` from the new project root. Without a `.git` directory, the script skips source-code pulling and updates the Python and Node dependencies only; replacing the project files with the newer ZIP is the source-code upgrade step.
 
 ### Upgrade PyTorch
 

@@ -50,12 +50,6 @@ if not exist "%PPOCR_REQ_FILE%" (
     goto :fail
 )
 
-where git >nul 2>nul
-if errorlevel 1 (
-    echo [ERROR] 找不到 Git。requirements.txt 包含 Git 依賴，請先安裝 Git。
-    goto :fail
-)
-
 if not exist "%VENV_PY%" (
     echo [2/8] 建立 Python venv...
     set "VENV_CREATED=1"
