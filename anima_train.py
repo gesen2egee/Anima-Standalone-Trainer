@@ -598,11 +598,9 @@ def train(args):
                         if torch.rand(1).item() > args.model_guidance_prob:
                             apply_model_guidance = False
 
-                if apply_model_guidance:
-                    current_mg_weight = args.model_guidance_weight
-                    if getattr(args, "model_guidance_warmup_steps", 0) > 0 and global_step < args.model_guidance_warmup_steps:
-                        current_mg_weight = args.model_guidance_weight * (global_step / args.model_guidance_warmup_steps)
-
+                apply_contrastive_guidance = getattr(args, "do_guidance_loss", False)
+                model_pred_uncond = None
+                if apply_model_guidance or apply_contrastive_guidance:
                     prompt_embeds_uncond = torch.zeros_like(prompt_embeds)
                     attn_mask_uncond = torch.zeros_like(attn_mask)
                     attn_mask_uncond[:, 0] = 1
@@ -623,6 +621,21 @@ def train(args):
                         )
                     model_pred_uncond = model_pred_uncond.squeeze(2)
 
+                target = noise - latents
+                if apply_contrastive_guidance:
+                    target = anima_train_utils.apply_contrastive_guidance_target(
+                        target,
+                        model_pred_uncond,
+                        args.guidance_loss_target,
+                        args.guidance_loss_schedule,
+                        timesteps,
+                    )
+
+                if apply_model_guidance:
+                    current_mg_weight = args.model_guidance_weight
+                    if getattr(args, "model_guidance_warmup_steps", 0) > 0 and global_step < args.model_guidance_warmup_steps:
+                        current_mg_weight = args.model_guidance_weight * (global_step / args.model_guidance_warmup_steps)
+
                     if getattr(args, "model_guidance_cfg_zero", False):
                         dot_product = torch.sum(model_pred * model_pred_uncond, dim=[1, 2, 3], keepdim=True)
                         squared_norm = torch.sum(model_pred_uncond ** 2, dim=[1, 2, 3], keepdim=True) + 1e-8
@@ -641,19 +654,18 @@ def train(args):
                     else:
                         w_t = current_mg_weight
 
-                    target = (noise - latents) + w_t * (model_pred - model_pred_uncond).detach()
-                else:
-                    target = noise - latents
+                    target = target + w_t * (model_pred - model_pred_uncond).detach()
 
                 # Apply CIOP output perturbation to target
                 if apply_ciop:
                     target = target + eps_out
 
-                target = anima_train_utils.apply_differential_guidance_target(
-                    target,
-                    model_pred,
-                    getattr(args, "differential_guidance_scale", 1.0),
-                )
+                if getattr(args, "do_differential_guidance", False):
+                    target = anima_train_utils.apply_differential_guidance_target(
+                        target,
+                        model_pred,
+                        args.differential_guidance_scale,
+                    )
 
                 # Weighting
                 weighting = anima_train_utils.compute_loss_weighting_for_anima(

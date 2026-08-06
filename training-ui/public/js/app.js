@@ -2443,6 +2443,16 @@ function populateConfig(config) {
   $("cfg-cross-self-odd-network-args").value = oddNetworkArgs.join(" ");
   $("cfg-cross-self-even-network-args").value = evenNetworkArgs.join(" ");
   updateCrossSelfUI();
+  const legacyDifferentialScale = a.differential_guidance_scale;
+  const differentialEnabled = a.do_differential_guidance ?? (
+    legacyDifferentialScale !== undefined && Number(legacyDifferentialScale) !== 1
+  );
+  $("cfg-contrastive-guidance").checked = a.do_guidance_loss === true;
+  $("cfg-guidance-loss-target").value = a.guidance_loss_target ?? 3.0;
+  $("cfg-guidance-loss-schedule").value = a.guidance_loss_schedule || "sigma";
+  $("cfg-differential-guidance").checked = differentialEnabled === true;
+  $("cfg-differential-guidance-scale").value = legacyDifferentialScale ?? 3.0;
+  updateGuidanceUI();
   // Network / Training type
   const trainingType = n.network_module ? "lora" : "full_finetune";
   $("cfg-training-type").value = trainingType;
@@ -2567,6 +2577,17 @@ function updateLossTypeUI() {
   document.querySelectorAll(".wavelet-huber-field").forEach((el) => {
     el.classList.toggle("hidden", !isSnrWavelet);
   });
+}
+function updateGuidanceUI() {
+  const contrastiveEnabled = $("cfg-contrastive-guidance")?.checked === true;
+  const differentialEnabled = $("cfg-differential-guidance")?.checked === true;
+  const contrastiveFields = $("group-contrastive-guidance-fields");
+  const differentialFields = $("group-differential-guidance-fields");
+  if (contrastiveFields) contrastiveFields.classList.toggle("hidden", !contrastiveEnabled);
+  if (differentialFields) differentialFields.classList.toggle("hidden", !differentialEnabled);
+  $("cfg-guidance-loss-target")?.toggleAttribute("disabled", !contrastiveEnabled);
+  $("cfg-guidance-loss-schedule")?.toggleAttribute("disabled", !contrastiveEnabled);
+  $("cfg-differential-guidance-scale")?.toggleAttribute("disabled", !differentialEnabled);
 }
 function updateActivationOffloadUI() {
   const offload = $("cfg-activation-offload").value;
@@ -2937,6 +2958,19 @@ function gatherConfig() {
             cross_self_alternating: true,
             cross_self_odd_network_args: splitCrossSelfNetworkArgs($("cfg-cross-self-odd-network-args").value),
             cross_self_even_network_args: splitCrossSelfNetworkArgs($("cfg-cross-self-even-network-args").value),
+          }
+        : {}),
+      ...($("cfg-contrastive-guidance").checked
+        ? {
+            do_guidance_loss: true,
+            guidance_loss_target: safeFloat($("cfg-guidance-loss-target").value, 3.0),
+            guidance_loss_schedule: $("cfg-guidance-loss-schedule").value,
+          }
+        : {}),
+      ...($("cfg-differential-guidance").checked
+        ? {
+            do_differential_guidance: true,
+            differential_guidance_scale: safeFloat($("cfg-differential-guidance-scale").value, 3.0),
           }
         : {}),
     },
@@ -6151,6 +6185,8 @@ async function init() {
     updateActivationOffloadUI,
   );
   $("cfg-loss-type").addEventListener("change", updateLossTypeUI);
+  $("cfg-contrastive-guidance")?.addEventListener("change", updateGuidanceUI);
+  $("cfg-differential-guidance")?.addEventListener("change", updateGuidanceUI);
   // Discard Button
   $("btn-discard").addEventListener("click", discardChanges);
   // Mutual exclusivity for Flash/Sage Attention

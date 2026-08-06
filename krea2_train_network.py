@@ -267,13 +267,16 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
 
     @staticmethod
     def _needs_unconditional_conditioning(args) -> bool:
-        return float(getattr(args, "model_guidance_weight", 0.0) or 0.0) > 0.0
+        return (
+            float(getattr(args, "model_guidance_weight", 0.0) or 0.0) > 0.0
+            or bool(getattr(args, "do_guidance_loss", False))
+        )
 
     def _encode_empty_prompt_conditioning(self, args, text_encoder, accelerator, refresh=False):
         if (self._unconditional_text_encoder_conds is not None and not refresh) or not self._needs_unconditional_conditioning(args):
             return
 
-        logger.info("Encoding Krea 2 empty-prompt conditioning for Model Guidance")
+        logger.info("Encoding Krea 2 empty-prompt conditioning for Guidance")
         with torch.no_grad():
             empty_hidden, empty_mask = krea2_utils.get_krea2_prompt_embeds(text_encoder, [""])
             empty_hidden, empty_mask = krea2_sampling.gather_valid_text(empty_hidden, empty_mask.bool())
@@ -551,7 +554,9 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
         pred = self._unpatchify_prediction(pred, noisy, unet.config.patch, unet.config.channels)
 
         pred_uncond = None
-        if self.should_apply_model_guidance(args, latents.device):
+        apply_model_guidance = self.should_apply_model_guidance(args, latents.device)
+        needs_unconditional_prediction = apply_model_guidance or getattr(args, "do_guidance_loss", False)
+        if needs_unconditional_prediction:
             if self._unconditional_text_encoder_conds is None:
                 # This only occurs for direct unit calls that bypass trainer setup.
                 # The normal training path initializes the real empty-prompt condition above.
@@ -586,6 +591,7 @@ class Krea2NetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             t.view(-1, 1, 1, 1),
             t,
             model_pred_uncond=pred_uncond,
+            model_guidance_active=apply_model_guidance,
             ciop_output=ciop[1] if ciop is not None else None,
             folder_shifts=batch.get("folder_shifts"),
             folder_shift_progress=batch.get("folder_shift_progress"),

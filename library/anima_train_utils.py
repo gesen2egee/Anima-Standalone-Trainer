@@ -172,10 +172,33 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Probability of applying model guidance weight (0.0 to 1.0). Defaults to 1.0 (always applied).",
     )
     parser.add_argument(
+        "--do_guidance_loss",
+        action="store_true",
+        help="Enable AI Toolkit-style Contrastive Guidance target shaping.",
+    )
+    parser.add_argument(
+        "--guidance_loss_target",
+        type=float,
+        default=3.0,
+        help="Contrastive Guidance target scale (default: 3.0).",
+    )
+    parser.add_argument(
+        "--guidance_loss_schedule",
+        type=str,
+        choices=["constant", "sigma"],
+        default="sigma",
+        help="Contrastive Guidance schedule: constant or sigma-decayed (default: sigma).",
+    )
+    parser.add_argument(
+        "--do_differential_guidance",
+        action="store_true",
+        help="Enable Differential Guidance target extrapolation.",
+    )
+    parser.add_argument(
         "--differential_guidance_scale",
         type=float,
-        default=1.0,
-        help="Scale target away from the current model prediction after guidance shaping. 1.0 disables extrapolation.",
+        default=3.0,
+        help="Scale target away from the current model prediction after guidance shaping (default: 3.0).",
     )
     parser.add_argument(
         "--ciop_prob",
@@ -199,6 +222,45 @@ def apply_differential_guidance_target(
         return target
     model_anchor = model_pred.detach()
     return model_anchor + scale * (target - model_anchor)
+
+
+def apply_contrastive_guidance_target(
+    target: torch.Tensor,
+    unconditional_pred: torch.Tensor,
+    guidance_scale: float,
+    schedule: str,
+    timestep_fractions: torch.Tensor,
+) -> torch.Tensor:
+    """Apply AI Toolkit's Contrastive Guidance transform to a flow target.
+
+    Contrastive Guidance moves the normal training target away from the
+    unconditional prediction.  The sigma schedule reduces that extrapolation
+    toward a neutral scale of 1.0 as the flow sigma approaches zero.
+    """
+    if guidance_scale < 0.0:
+        raise ValueError("guidance_loss_target must be greater than or equal to 0.0")
+    if schedule not in ("constant", "sigma"):
+        raise ValueError("guidance_loss_schedule must be either 'constant' or 'sigma'")
+
+    batch_size = target.shape[0]
+    fractions = timestep_fractions.to(device=target.device, dtype=target.dtype)
+    if fractions.numel() == 1:
+        fractions = fractions.reshape(1).expand(batch_size)
+    else:
+        fractions = fractions.reshape(batch_size, -1).mean(dim=1)
+    fractions = fractions.clamp(0.0, 1.0)
+
+    scale = torch.as_tensor(guidance_scale, device=target.device, dtype=target.dtype)
+    if scale.numel() == 1:
+        scale = scale.reshape(1).expand(batch_size)
+    else:
+        scale = scale.reshape(batch_size)
+    if schedule == "sigma":
+        scale = 1.0 + (scale - 1.0) * fractions
+    scale = scale.reshape(batch_size, *([1] * (target.ndim - 1)))
+
+    unconditional_pred = unconditional_pred.detach()
+    return unconditional_pred + scale * (target - unconditional_pred)
 
 
 def compute_plora_proposal_density(

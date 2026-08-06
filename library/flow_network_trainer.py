@@ -93,6 +93,12 @@ class FlowNetworkTrainerMixin:
     def validate_flow_training_args(args) -> None:
         if not 0.0 <= args.model_guidance_prob <= 1.0:
             raise ValueError("model_guidance_prob must be between 0.0 and 1.0")
+        if getattr(args, "guidance_loss_target", 0.0) < 0.0:
+            raise ValueError("guidance_loss_target must be greater than or equal to 0.0")
+        if getattr(args, "guidance_loss_schedule", "sigma") not in ("constant", "sigma"):
+            raise ValueError("guidance_loss_schedule must be either 'constant' or 'sigma'")
+        if getattr(args, "differential_guidance_scale", 1.0) < 0.0:
+            raise ValueError("differential_guidance_scale must be greater than or equal to 0.0")
         if not 0.0 <= args.ciop_prob <= 1.0:
             raise ValueError("ciop_prob must be between 0.0 and 1.0")
         if args.ciop_noise_magnitude < 0.0:
@@ -399,20 +405,39 @@ class FlowNetworkTrainerMixin:
         sigmas: torch.Tensor,
         timestep_fractions: torch.Tensor,
         model_pred_uncond: Optional[torch.Tensor] = None,
+        model_guidance_active: Optional[bool] = None,
         ciop_output: Optional[torch.Tensor] = None,
         folder_shifts: Optional[Sequence[str]] = None,
         folder_shift_progress: Optional[float] = None,
         proposal_flow_shift: Optional[Union[float, torch.Tensor]] = None,
         base_target: Optional[torch.Tensor] = None,
     ):
-        target = self.apply_model_guidance_target(
-            args, noise - latents if base_target is None else base_target, model_pred, model_pred_uncond, timestep_fractions
-        )
+        target = noise - latents if base_target is None else base_target
+        if getattr(args, "do_guidance_loss", False):
+            if model_pred_uncond is None:
+                raise RuntimeError("Contrastive Guidance requires an unconditional model prediction")
+            target = anima_train_utils.apply_contrastive_guidance_target(
+                target,
+                model_pred_uncond,
+                args.guidance_loss_target,
+                args.guidance_loss_schedule,
+                timestep_fractions,
+            )
+        if model_guidance_active is None:
+            model_guidance_active = (
+                model_pred_uncond is not None
+                and getattr(args, "model_guidance_weight", 0.0) > 0.0
+            )
+        if model_guidance_active:
+            target = self.apply_model_guidance_target(
+                args, target, model_pred, model_pred_uncond, timestep_fractions
+            )
         if ciop_output is not None:
             target = target + ciop_output
-        target = anima_train_utils.apply_differential_guidance_target(
-            target, model_pred, args.differential_guidance_scale
-        )
+        if getattr(args, "do_differential_guidance", False):
+            target = anima_train_utils.apply_differential_guidance_target(
+                target, model_pred, args.differential_guidance_scale
+            )
         weighting = anima_train_utils.compute_loss_weighting_for_anima(
             weighting_scheme=args.weighting_scheme,
             sigmas=sigmas,
@@ -434,6 +459,10 @@ class FlowNetworkTrainerMixin:
         metadata["ss_discrete_flow_shift"] = args.discrete_flow_shift
         metadata["ss_model_guidance_prob"] = args.model_guidance_prob
         metadata["ss_model_guidance_weight"] = args.model_guidance_weight
+        metadata["ss_do_guidance_loss"] = getattr(args, "do_guidance_loss", False)
+        metadata["ss_guidance_loss_target"] = getattr(args, "guidance_loss_target", 3.0)
+        metadata["ss_guidance_loss_schedule"] = getattr(args, "guidance_loss_schedule", "sigma")
+        metadata["ss_do_differential_guidance"] = getattr(args, "do_differential_guidance", False)
         metadata["ss_differential_guidance_scale"] = args.differential_guidance_scale
         metadata["ss_ciop_prob"] = args.ciop_prob
         metadata["ss_ciop_noise_magnitude"] = args.ciop_noise_magnitude

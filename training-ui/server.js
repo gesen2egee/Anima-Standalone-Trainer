@@ -231,6 +231,13 @@ function normalizeAnimaArgs(merged) {
         animaArgs.timestep_sampling = legacyMethod === 'logit_normal' ? 'sigmoid' : legacyMethod;
     }
     delete animaArgs.timestep_sample_method;
+
+    // Older jobs only stored the scale. Preserve their intent when upgrading
+    // to the explicit Differential Guidance toggle.
+    if (animaArgs.do_differential_guidance === undefined && animaArgs.differential_guidance_scale !== undefined) {
+        const scale = Number(animaArgs.differential_guidance_scale);
+        if (Number.isFinite(scale) && scale !== 1) animaArgs.do_differential_guidance = true;
+    }
 }
 
 // Middleware
@@ -314,7 +321,6 @@ function stripRemovedExperimentalArgs(merged) {
             'model_guidance_zero_init_threshold',
             'model_guidance_end_step',
             'model_guidance_prob',
-            'differential_guidance_scale',
             'ciop_prob',
             'ciop_noise_magnitude',
             'ciop_noise_type'

@@ -14,7 +14,6 @@ test("removed experimental controls are absent from the UI", () => {
     "cfg-use-cdc-fm",
     "cfg-use-self-flow",
     "cfg-model-guidance-weight",
-    "cfg-differential-guidance-scale",
     "cfg-ciop-prob",
     "cfg-progressive-reso",
     "cfg-disable-bucket-shuffle",
@@ -33,7 +32,6 @@ test("stale hidden experimental settings are stripped before training", () => {
     "resolution_schedule",
     "disable_bucket_shuffle",
     "model_guidance_weight",
-    "differential_guidance_scale",
     "ciop_prob",
   ].forEach((key) => assert.match(serverJs, new RegExp(`'${key}'`)));
   assert.match(serverJs, /stripRemovedExperimentalArgs\(merged\)/);

@@ -716,7 +716,9 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             ) * float(args.diff_output_preservation_multiplier)
 
         model_pred_uncond = None
-        if self.should_apply_model_guidance(args, latents.device):
+        apply_model_guidance = self.should_apply_model_guidance(args, latents.device)
+        needs_unconditional_prediction = apply_model_guidance or getattr(args, "do_guidance_loss", False)
+        if needs_unconditional_prediction:
             prompt_embeds_uncond = torch.zeros_like(prompt_embeds)
             attn_mask_uncond = torch.zeros_like(attn_mask)
             attn_mask_uncond[:, 0] = 1
@@ -748,6 +750,7 @@ class AnimaNetworkTrainer(flow_network_trainer.FlowNetworkTrainerMixin, train_ne
             sigmas,
             timesteps,
             model_pred_uncond=model_pred_uncond,
+            model_guidance_active=apply_model_guidance,
             ciop_output=ciop[1] if ciop is not None else None,
             folder_shifts=batch.get("folder_shifts", None),
             folder_shift_progress=batch.get("folder_shift_progress", None),

@@ -553,6 +553,41 @@
                             <small id="cfg-cross-self-hint"></small>
                         </div>
 
+                        <div class="network-training-only" style="margin-top: 24px;">
+                            <h4>Guidance Target Shaping</h4>
+                            <small>移植自 AI Toolkit。兩種 Guidance 都作用在訓練 target；可以單獨使用，也可以依序一起使用。</small>
+                            <div class="form-row" style="margin-top: 12px;">
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-contrastive-guidance"> Contrastive Guidance</label>
+                                    <small>以空白 prompt 的 prediction 作為基準，放大條件 target 與基準之間的差異。</small>
+                                    <div id="group-contrastive-guidance-fields" class="form-row" style="margin-top: 8px;">
+                                        <div class="form-group">
+                                            <label>Guidance Target</label>
+                                            <input type="number" id="cfg-guidance-loss-target" value="3.0" min="0" step="0.1">
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Schedule</label>
+                                            <select id="cfg-guidance-loss-schedule">
+                                                <option value="sigma" selected>σ-schedule</option>
+                                                <option value="constant">Constant</option>
+                                            </select>
+                                            <small>σ-schedule：有效倍率 = 1 + (target − 1) × σ。</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label><input type="checkbox" id="cfg-differential-guidance"> Differential Guidance</label>
+                                    <small>將 target 從目前 model prediction 的方向繼續外推，讓模型更快逼近或超過 target。</small>
+                                    <div id="group-differential-guidance-fields" style="margin-top: 8px;">
+                                        <label>Guidance Scale</label>
+                                        <input type="number" id="cfg-differential-guidance-scale" value="3.0" min="0" step="0.1">
+                                        <small>1.0 等同不外推；建議先從 2.0–3.0 測試。</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <small>同時啟用時，先套用 Contrastive Guidance（含 σ-schedule），再套用 Differential Guidance。</small>
+                        </div>
+
                         <h4 style="margin-top: 24px;">Aesthetic Loss Weighting</h4>
                         <small>Score images while caching latents, then normalize sample weights so the full dataset mean is 1.0.</small>
                         <div class="form-row" style="margin-top: 12px;">
