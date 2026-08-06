@@ -150,13 +150,13 @@ This approach ensures that you have full control over the instructions given to 
 
 ### Windows Required Dependencies
 
-Python 3.10.x:
+Python 3.10 或更新版本：
 
-- Python 3.10.x: Download Windows installer (64-bit) from https://www.python.org/downloads/windows/
+- Download a 64-bit Windows installer from https://www.python.org/downloads/windows/
 
 Git is optional for ZIP installs. It is only required when using a Git checkout or when upgrading source code with `git pull`.
 
-Python 3.11.x, and 3.12.x will work but not tested.
+`setup.bat` and `upgrade.bat` use an available Python 3 interpreter without imposing an upper version limit. Python 3.10 is the tested baseline; newer Python versions still depend on whether all pinned dependencies provide compatible wheels.
 
 Give unrestricted script access to powershell so venv can work:
 

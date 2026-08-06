@@ -41,22 +41,18 @@ if not exist "%VENV_PY%" (
     set "PYTHON_CMD="
     where py >nul 2>nul
     if not errorlevel 1 (
-        py -3.10 -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
-        if not errorlevel 1 set "PYTHON_CMD=py -3.10"
-        if not defined PYTHON_CMD (
-            py -3 -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
-            if not errorlevel 1 set "PYTHON_CMD=py -3"
-        )
+        py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+        if not errorlevel 1 set "PYTHON_CMD=py -3"
     )
     if not defined PYTHON_CMD (
         where python >nul 2>nul
         if not errorlevel 1 (
-            python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
+            python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
             if not errorlevel 1 set "PYTHON_CMD=python"
         )
     )
     if not defined PYTHON_CMD (
-        echo [ERROR] 找不到可用的 Python 3.10-3.12。README 以 Python 3.10.x 為基準，請先安裝 Python。
+        echo [ERROR] 找不到可用的 Python 3.10 或更新版本，請先安裝 Python。
         goto :fail
     )
     !PYTHON_CMD! -m venv "%VENV_DIR%"
@@ -65,9 +61,9 @@ if not exist "%VENV_PY%" (
     echo [1/7] 已找到現有 venv，略過建立。
 )
 
-"%VENV_PY%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
+"%VENV_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] 現有 venv 無法使用，或 Python 版本不在 3.10-3.12。請刪除 venv 後重新執行 setup.bat。
+    echo [ERROR] 現有 venv 無法使用，或 Python 版本低於 3.10。請刪除 venv 後重新執行 setup.bat。
     goto :fail
 )
 
