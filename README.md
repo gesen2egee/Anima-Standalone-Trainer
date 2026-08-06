@@ -150,13 +150,13 @@ This approach ensures that you have full control over the instructions given to 
 
 ### Windows Required Dependencies
 
-Python 3.10 或更新版本：
+Python 3.10：
 
 - Download a 64-bit Windows installer from https://www.python.org/downloads/windows/
 
 Git is optional for ZIP installs. It is only required when using a Git checkout or when upgrading source code with `git pull`.
 
-`setup.bat` and `upgrade.bat` use an available Python 3 interpreter without imposing an upper version limit. Python 3.10 is the tested baseline; newer Python versions still depend on whether all pinned dependencies provide compatible wheels.
+`setup.bat` and `upgrade.bat` explicitly use Python 3.10. The current CUDA 12.8 baseline is pinned to PyTorch 2.7.1 and is verified with Python 3.10.
 
 Give unrestricted script access to powershell so venv can work:
 
@@ -172,7 +172,7 @@ Open a regular Powershell terminal and type the following inside:
 git clone https://github.com/gesen2egee/Anima-Standalone-Trainer.git
 cd Anima-Standalone-Trainer
 
-python -m venv venv
+py -3.10 -m venv venv
 .\venv\Scripts\activate
 
 pip install --upgrade -r requirements-cu128.txt
@@ -181,7 +181,7 @@ pip install --upgrade -r requirements.txt
 accelerate config
 ```
 
-If `python -m venv` shows only `python`, change `python` to `py`.
+If `py -3.10` cannot be found, install Python 3.10 (64-bit) and run the setup script again.
 
 Note: `bitsandbytes`, `prodigyopt` and `lion-pytorch` are included in the requirements.txt. If you'd like to use another version, please install it manually.
 
