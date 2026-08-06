@@ -14,20 +14,20 @@ function parseTemplate(relPath) {
   return TOML.parse(read(relPath));
 }
 
-test("default config template follows the Anima v68-style training defaults", () => {
+test("default config template follows the Anima v88-style training defaults", () => {
   const config = parseTemplate("templates/config_template.toml");
 
   assert.strictEqual(config.training_arguments.learning_rate, 0.0003);
   assert.strictEqual(config.training_arguments.lr_scheduler, "warmup_stable_decay");
-  assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0.1);
+  assert.strictEqual(config.training_arguments.lr_scheduler_min_lr_ratio, 0);
   assert.strictEqual(config.training_arguments.lr_decay_steps, 0.1);
   assert.strictEqual(config.training_arguments.train_batch_size, 1);
   assert.strictEqual(config.training_arguments.knn_noise_k, 64);
-  assert.strictEqual(config.training_arguments.cep_noise, 0.01);
+  assert.strictEqual(config.training_arguments.cep_noise, 0);
   assert.strictEqual(config.training_arguments.loss_type, "wavelet");
   assert.strictEqual(config.training_arguments.pnp_loss_weight, 0.000001);
   assert.strictEqual(config.training_arguments.cache_latents_to_disk, true);
-  assert.strictEqual(config.training_arguments.optimizer_args[0], "weight_decay=0.1");
+  assert.strictEqual(config.training_arguments.optimizer_args[0], "weight_decay=0");
   assert.strictEqual(config.training_arguments.max_timestep, 950);
   assert.strictEqual(config.training_arguments.aes_loss_weighting, false);
   assert.strictEqual(config.training_arguments.aes_loss_weighting_schedule, false);
@@ -43,16 +43,16 @@ test("default config template follows the Anima v68-style training defaults", ()
   assert.strictEqual(config.network_arguments.network_module, "networks.cdka");
   assert.deepStrictEqual(config.network_arguments.network_args, [
     'exclude_patterns=[".*"]',
-    'include_patterns=[".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)"]',
+    'include_patterns=[".*(self_attn|cross_attn)\\\\.(k_proj|v_proj|output_proj)"]',
     "allora=True",
   ]);
   assert.strictEqual(config.anima_arguments.timestep_sampling, "autoshift_tqa");
-  assert.strictEqual(config.anima_arguments.cross_self_alternating, false);
+  assert.strictEqual(config.anima_arguments.cross_self_alternating, true);
   assert.deepStrictEqual(config.anima_arguments.cross_self_odd_network_args, [
-    'exclude_patterns=[".*self_attn.*"]',
+    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.self_attn\\\\..*"]',
   ]);
   assert.deepStrictEqual(config.anima_arguments.cross_self_even_network_args, [
-    'exclude_patterns=[".*cross_attn.*"]',
+    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.cross_attn\\\\..*"]',
   ]);
   assert.strictEqual(config.training_arguments.sample_at_first, true);
   assert.strictEqual(config.training_arguments.sample_every_n_steps, 200);
@@ -79,6 +79,7 @@ test("default dataset template follows the Anima dataset defaults", () => {
   assert.strictEqual(firstDataset.fad_curriculum_end, 0.5);
   assert.strictEqual(firstDataset.folder_shift_curriculum, true);
   assert.strictEqual(firstSubset.keep_tokens, 1);
+  assert.strictEqual(firstSubset.keep_tags, "");
   assert.strictEqual(firstSubset.enable_fad, true);
   assert.strictEqual(firstSubset.fad_curriculum, true);
   assert.strictEqual(firstSubset.caption_dropout_rate, 0);
@@ -105,19 +106,28 @@ test("architecture registry exposes Anima, Krea 2, and Krea 2 Bypass presets", (
   assert.strictEqual(anima.job_defaults.anima_arguments.timestep_sampling, "autoshift_tqa");
   assert.deepStrictEqual(anima.job_defaults.network_arguments.network_args, [
     'exclude_patterns=[".*"]',
-    'include_patterns=[".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)"]',
+    'include_patterns=[".*(self_attn|cross_attn)\\\\.(k_proj|v_proj|output_proj)"]',
     "allora=True",
   ]);
   assert.strictEqual(anima.job_defaults.training_arguments.tqa_loss_weighting, true);
   assert.strictEqual(anima.job_defaults.training_arguments.tqa_loss_weighting_mode, "geometric");
-  assert.strictEqual(anima.job_defaults.training_arguments.optimizer_args[0], "weight_decay=0.1");
+  assert.strictEqual(anima.job_defaults.training_arguments.optimizer_args[0], "weight_decay=0");
+  assert.strictEqual(anima.job_defaults.training_arguments.lr_scheduler_min_lr_ratio, 0);
+  assert.strictEqual(anima.job_defaults.training_arguments.cep_noise, 0);
   assert.strictEqual(anima.job_defaults.training_arguments.max_timestep, 950);
-  assert.strictEqual(anima.job_defaults.anima_arguments.cross_self_alternating, false);
+  assert.strictEqual(anima.job_defaults.anima_arguments.cross_self_alternating, true);
+  assert.deepStrictEqual(anima.job_defaults.anima_arguments.cross_self_odd_network_args, [
+    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.self_attn\\\\..*"]',
+  ]);
+  assert.deepStrictEqual(anima.job_defaults.anima_arguments.cross_self_even_network_args, [
+    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.cross_attn\\\\..*"]',
+  ]);
   assert.ok(Array.isArray(anima.job_defaults.anima_arguments.cross_self_odd_network_args));
   assert.ok(Array.isArray(anima.job_defaults.anima_arguments.cross_self_even_network_args));
   assert.strictEqual(anima.dataset_defaults.fad_curriculum_end, 0.5);
   assert.strictEqual(anima.dataset_defaults.caption_dropout_rate, 0);
   assert.strictEqual(anima.dataset_defaults.enable_wildcard, true);
+  assert.strictEqual(anima.dataset_defaults.keep_tags, "");
   assert.strictEqual(anima.dataset_defaults.fad_timestep, false);
   assert.strictEqual(anima.dataset_defaults.resolution, 768);
   assert.strictEqual(anima.job_defaults.network_arguments.network_module, "networks.cdka");

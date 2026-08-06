@@ -1,21 +1,7 @@
 // === Anima Training UI — Client ===
 const DEFAULT_NEGATIVE_PROMPT =
   "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, low quality, worst quality, blurry, bad anatomy, extra limbs, deformed, watermark, text, signature, bareness, artifacts, hands, copyrights name, jpeg_artifacts, scan_artifacts, bad hands, missing fingers, extra digit, fewer digits, artistic error, ye-pop, deviantart, logo, patreon logo";
-const DEFAULT_KEEP_TAGS = [
-  "1girl", "1boy", "1other", ".*girls", ".*boys", ".*others", ".*out_of_frame",
-  "cropped_.*", "disembodied_.*", "letterboxed", "pillarboxed", ".*_border",
-  "round_image", "circle_cut", "split_screen", "variations", "comparison",
-  ".*koma", ".*comic", "column_lineup", "nengajou", ".*chart", "zoom_layer",
-  ".*_inset", ".*_background", ".*watermark", "copyright_notice", "signature",
-  "qr_code", "artist_logo", "pixiv_logo", "twitter_logo", "instagram_logo",
-  ".*_logo", ".*_name", "pixiv_id", ".*_username", "window_(computing)",
-  "fake_screenshot", "fake_phone_screenshot", "battery_indicator", "timestamp",
-  "cursor", "art_program_in_frame", "d-pad", "gameplay_mechanics", "ranguage",
-  ".*text", "profanity", ".*speech_bubble", "thought_bubble", "lyrics",
-  "page_number", "subtitled", ".*censor.*", "chromatic_aberration", "film_grain",
-  "blending", ".*blur.*", ".*_profile", ".*cover", "multiple_.*", "ranguage",
-  ".*_(medium)", "monochrome", "greyscale", "sketch",
-].join(", ");
+const DEFAULT_KEEP_TAGS = "";
 const LAST_IMAGE_FOLDER_KEY = "anima_last_image_folder";
 let currentJob = null;
 let ws = null;
@@ -55,18 +41,21 @@ const MODEL_ARCHITECTURE_DEFAULTS = Object.freeze({
     tqaLossWeightingMode: "geometric",
     tqaLossWeightingSchedule: true,
     maskedLoss: true,
-    crossSelfAlternating: false,
+    weightDecay: 0,
+    lrMinRatio: 0,
+    cepNoise: 0,
+    crossSelfAlternating: true,
     crossSelfOddNetworkArgs: [
-      'exclude_patterns=[".*self_attn.*"]',
+      'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.self_attn\\\\..*"]',
     ],
     crossSelfEvenNetworkArgs: [
-      'exclude_patterns=[".*cross_attn.*"]',
+      'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.cross_attn\\\\..*"]',
     ],
     blocksToSwap: 0,
     transformerDtype: "bfloat16",
     networkArgs: [
       'exclude_patterns=[".*"]',
-      'include_patterns=[".*blocks\\\\.(?:[3-9]|[1-9][0-9]+)\\\\.(?:self_attn|cross_attn)\\\\.(?:v_proj|output_proj)"]',
+      'include_patterns=[".*(self_attn|cross_attn)\\\\.(k_proj|v_proj|output_proj)"]',
       "allora=True",
     ],
     supportsFullFinetune: true,
@@ -256,6 +245,9 @@ function applyArchitecturePresetToEditor(architecture) {
   const defaults = MODEL_ARCHITECTURE_DEFAULTS[architecture] || MODEL_ARCHITECTURE_DEFAULTS.anima;
   $("cfg-network-module").value = defaults.networkModule;
   $("cfg-network-args").value = defaults.networkArgs.join(" ");
+  if (defaults.weightDecay !== undefined) $("cfg-weight-decay").value = defaults.weightDecay;
+  if (defaults.lrMinRatio !== undefined) $("cfg-lr-min-ratio").value = defaults.lrMinRatio;
+  if (defaults.cepNoise !== undefined) $("cfg-cep-noise").value = defaults.cepNoise;
   $("cfg-timestep-method").value = defaults.timestepSampling;
   $("cfg-min-timestep").value = DEFAULT_MIN_TIMESTEP;
   $("cfg-max-timestep").value = DEFAULT_MAX_TIMESTEP;
@@ -290,6 +282,7 @@ function applyArchitecturePresetToEditor(architecture) {
     $("cfg-krea2-text-encoder-layer-offload").checked = true;
     $("cfg-krea2-text-encoder-offload-percent").value = 100;
   }
+  updateCrossSelfUI();
 }
 
 function updateModelArchitectureUI({ applyDefaults = false } = {}) {
@@ -2212,7 +2205,7 @@ function populateConfig(config) {
   $("cfg-lr-decay-steps").value = t.lr_decay_steps ?? 0.1;
   $("cfg-seed").value = t.seed ?? 42;
   // Extract weight decay
-  let wdValue = "";
+  let wdValue = "0";
   let decoupleValue = true;
   if (t.optimizer_args && Array.isArray(t.optimizer_args)) {
     const wdArg = t.optimizer_args.find((arg) =>
@@ -2265,7 +2258,7 @@ function populateConfig(config) {
   $("cfg-lowram").checked = t.lowram ?? false;
   $("cfg-blocks-to-swap").value = t.blocks_to_swap ?? 0;
   $("cfg-knn-noise-k").value = t.knn_noise_k ?? 2;
-  $("cfg-cep-noise").value = t.cep_noise ?? 0.05;
+  $("cfg-cep-noise").value = t.cep_noise ?? 0;
   $("cfg-loss-type").value = t.loss_type || "l2";
   $("cfg-pnp-loss-weight").value = t.pnp_loss_weight ?? "";
   $("cfg-cwmi-lambda").value = t.cwmi_lambda ?? 0.1;

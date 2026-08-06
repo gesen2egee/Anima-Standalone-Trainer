@@ -395,6 +395,9 @@ function applyArchitectureDatasetDefaults(datasetConfig, architectureId) {
         if (defaults.enable_wildcard !== undefined) {
             subset.enable_wildcard = defaults.enable_wildcard;
         }
+        if (defaults.keep_tags !== undefined) {
+            subset.keep_tags = defaults.keep_tags;
+        }
     });
     firstDataset.subsets = subsets;
     datasets[0] = firstDataset;
@@ -1088,17 +1091,35 @@ function getDefaultConfig() {
         config: {
             training_arguments: {
                 output_name: 'my_anima_lora',
-                learning_rate: 5e-4,
+                learning_rate: 3e-4,
                 max_train_epochs: 20,
                 min_timestep: 0,
                 max_timestep: 950,
-                optimizer_args: ['weight_decay=0.1'],
+                optimizer_args: ['weight_decay=0'],
+                lr_scheduler_min_lr_ratio: 0,
+                cep_noise: 0,
                 mixed_precision: 'bf16'
             },
             network_arguments: {
-                network_module: 'networks.krona',
+                network_module: 'networks.cdka',
                 network_dim: 16,
-                network_alpha: 16
+                network_alpha: 16,
+                network_args: [
+                    'exclude_patterns=[".*"]',
+                    'include_patterns=[".*(self_attn|cross_attn)\\\\.(k_proj|v_proj|output_proj)"]',
+                    'allora=True'
+                ]
+            },
+            anima_arguments: {
+                timestep_sampling: 'autoshift_tqa',
+                discrete_flow_shift: 1,
+                cross_self_alternating: true,
+                cross_self_odd_network_args: [
+                    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.self_attn\\\\..*"]'
+                ],
+                cross_self_even_network_args: [
+                    'exclude_patterns=[".*blocks\\\\.(?:[2-9]|[1-9][0-9]+)\\\\.cross_attn\\\\..*"]'
+                ]
             }
         },
         useFallback: true
@@ -1119,8 +1140,48 @@ function getDefaultDataset() {
         }
     }
     return {
-        general: { enable_bucket: true },
-        datasets: [{ resolution: [1536, 1536], batch_size: 4, caption_extension: '.txt', subsets: [{ image_dir: '', num_repeats: 1 }] }]
+        general: {
+            enable_bucket: true,
+            bucket_no_upscale: true,
+            min_bucket_reso: 384,
+            max_bucket_reso: 1536,
+            bucket_reso_steps: 64
+        },
+        datasets: [{
+            resolution: [768, 768],
+            batch_size: 1,
+            caption_extension: '.txt',
+            folder_shift_curriculum: true,
+            fad_p_min: 0.35,
+            fad_p_max: 1,
+            fad_alpha: 10,
+            fad_c: 0.5,
+            fad_curriculum_start: 0.1,
+            fad_curriculum_end: 0.5,
+            fad_curriculum_beta: 3,
+            fad_step_start: 0,
+            fad_step_end: 1,
+            subsets: [{
+                image_dir: '',
+                num_repeats: 1,
+                keep_tokens: 1,
+                class_tokens: '',
+                keep_tags: '',
+                flip_aug: false,
+                caption_prefix: '',
+                caption_dropout_rate: 0,
+                caption_tag_dropout_rate: 0,
+                caption_dropout_every_n_epochs: 0,
+                shuffle_caption: true,
+                enable_wildcard: true,
+                enable_fad: true,
+                fad_curriculum: true,
+                fad_timestep: false,
+                folder_shift: 'global',
+                is_reg: false,
+                alpha_mask: true
+            }]
+        }]
     };
 }
 

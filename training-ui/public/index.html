@@ -234,7 +234,7 @@
                             </div>
                             <div class="form-group">
                                 <label>Weight Decay</label>
-                                <input type="number" id="cfg-weight-decay" value="0.1" step="0.01" min="0">
+                                <input type="number" id="cfg-weight-decay" value="0" step="0.01" min="0">
                             </div>
                             <div class="form-group">
                                 <label>Seed</label>
@@ -529,7 +529,7 @@
                             </div>
                             <div class="form-group">
                                 <label>CEP Noise</label>
-                                <input type="number" id="cfg-cep-noise" value="0.01" min="0" step="0.01">
+                                <input type="number" id="cfg-cep-noise" value="0" min="0" step="0.01">
                             </div>
                         </div>
 
@@ -537,17 +537,17 @@
                             <h4>Cross / Self 交替訓練</h4>
                             <small>僅 Anima LoRA。啟用後第 1、3、5… 個 optimizer step 使用奇數規則（Cross caption），第 2、4、6… 個使用偶數規則（Self caption）。規則只會套用到建立好的 LoRA module；不存在的 include 目標會自動略過，未被 exclude 的其他 module 會照常訓練。</small>
                             <div class="form-group" style="margin-top: 12px;">
-                                <label><input type="checkbox" id="cfg-cross-self-alternating"> 啟用 Cross / Self 交替訓練</label>
+                                <label><input type="checkbox" id="cfg-cross-self-alternating" checked> 啟用 Cross / Self 交替訓練</label>
                                 <small>關閉時完全沿用原本訓練流程；啟用時會停用 Text Encoder cache。</small>
                             </div>
                             <div class="form-group" style="margin-top: 12px;">
                                 <label for="cfg-cross-self-odd-network-args">奇數 step 規則（Cross caption）</label>
-                                <input type="text" id="cfg-cross-self-odd-network-args" placeholder='exclude_patterns=[".*"] include_patterns=[".*cross_attn.*"]'>
+                                <input type="text" id="cfg-cross-self-odd-network-args" value='exclude_patterns=[".*blocks\\.(?:[2-9]|[1-9][0-9]+)\\.self_attn\\..*"]' placeholder='exclude_patterns=[".*"] include_patterns=[".*cross_attn.*"]'>
                                 <small>可填 <code>exclude_patterns</code>、<code>include_patterns</code> 或 <code>network_reg_lrs</code>，多個項目用空白分隔；規則以已建立的 module 名稱比對。</small>
                             </div>
                             <div class="form-group" style="margin-top: 12px;">
                                 <label for="cfg-cross-self-even-network-args">偶數 step 規則（Self caption）</label>
-                                <input type="text" id="cfg-cross-self-even-network-args" placeholder='exclude_patterns=[".*"] include_patterns=[".*self_attn.*"]'>
+                                <input type="text" id="cfg-cross-self-even-network-args" value='exclude_patterns=[".*blocks\\.(?:[2-9]|[1-9][0-9]+)\\.cross_attn\\..*"]' placeholder='exclude_patterns=[".*"] include_patterns=[".*self_attn.*"]'>
                                 <small>可以貼上和 <code>network_args</code> 相同的 regex；找不到目標時只跳過該規則，不會讓訓練中斷。</small>
                             </div>
                             <small id="cfg-cross-self-hint"></small>
